@@ -2,6 +2,7 @@
 
 #include "MathUtils.hpp"
 #include <array>
+#include <cstddef>
 
 namespace optirad {
 

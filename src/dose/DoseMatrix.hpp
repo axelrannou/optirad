@@ -2,6 +2,7 @@
 
 #include "Grid.hpp"
 #include <vector>
+#include <cstddef>
 
 namespace optirad {
 
