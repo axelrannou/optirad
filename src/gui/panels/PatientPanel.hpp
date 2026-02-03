@@ -1,8 +1,8 @@
 #pragma once
 
 #include "IPanel.hpp"
-#include "Patient.hpp"
-#include "StructureSet.hpp"
+#include "core/Patient.hpp"
+#include "geometry/StructureSet.hpp"
 
 namespace optirad {
 
@@ -12,12 +12,12 @@ public:
     void update() override;
     void render() override;
 
-    void setPatient(const Patient& patient);
-    void setStructureSet(const StructureSet& structureSet);
+    void setPatient(const Patient* patient) { m_patient = patient; }
+    void setStructureSet(const StructureSet* structureSet) { m_structureSet = structureSet; }
 
 private:
-    Patient m_patient;
-    StructureSet m_structureSet;
+    const Patient* m_patient = nullptr;
+    const StructureSet* m_structureSet = nullptr;
 };
 
 } // namespace optirad
