@@ -1,13 +1,16 @@
 #pragma once
 
-#include "IDataExporter.hpp"
+#include <string>
 
 namespace optirad {
 
-class DicomExporter : public IDataExporter {
+class Plan;
+class DoseMatrix;
+
+class DicomExporter {
 public:
-    bool exportDose(const DoseVolume& dose, const std::string& path) override;
-    bool exportPlan(const Plan& plan, const std::string& path) override;
+    bool exportRTPlan(const Plan& plan, const std::string& outputPath);
+    bool exportRTDose(const DoseMatrix& dose, const std::string& outputPath);
 };
 
 } // namespace optirad

@@ -2,21 +2,25 @@
 
 namespace optirad {
 
-void StructureSet::addStructure(const Structure& structure) {
-    m_structures.push_back(structure);
+void StructureSet::addStructure(std::unique_ptr<Structure> structure) {
+    m_structures.push_back(std::move(structure));
 }
 
-size_t StructureSet::getNumStructures() const { return m_structures.size(); }
-
-const Structure& StructureSet::getStructure(size_t index) const {
-    return m_structures[index];
+const Structure* StructureSet::getStructure(size_t index) const {
+    if (index >= m_structures.size()) return nullptr;
+    return m_structures[index].get();
 }
 
-std::optional<const Structure*> StructureSet::findByName(const std::string& name) const {
+Structure* StructureSet::getStructure(size_t index) {
+    if (index >= m_structures.size()) return nullptr;
+    return m_structures[index].get();
+}
+
+const Structure* StructureSet::getStructureByName(const std::string& name) const {
     for (const auto& s : m_structures) {
-        if (s.getName() == name) return &s;
+        if (s->getName() == name) return s.get();
     }
-    return std::nullopt;
+    return nullptr;
 }
 
 } // namespace optirad

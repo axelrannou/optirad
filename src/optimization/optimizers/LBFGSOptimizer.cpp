@@ -1,5 +1,5 @@
 #include "LBFGSOptimizer.hpp"
-#include "Logger.hpp"
+#include "utils/Logger.hpp"
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -220,16 +220,8 @@ double LBFGSOptimizer::computeObjectiveAndGradient(
         }
     }
     
-    // Compute gradient: grad = Dij^T * gVox
-    // This is the chain rule: dL/dw = dL/dd * dd/dw = gVox^T * Dij
-    #pragma omp parallel for
-    for (int j = 0; j < n; ++j) {
-        double sum = 0.0;
-        for (int i = 0; i < numVoxels; ++i) {
-            sum += gVox[i] * dij.getValue(i, j);
-        }
-        grad[j] = sum;
-    }
+    // Compute gradient using optimized transpose product: grad = Dij^T * gVox
+    dij.accumulateTransposeProduct(gVox, grad);
     
     return objVal;
 }
