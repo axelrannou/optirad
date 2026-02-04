@@ -24,6 +24,7 @@
 #include "geometry/Structure.hpp"
 #include "geometry/Grid.hpp"
 #include "utils/Logger.hpp"
+#include <memory>
 
 #include <iostream>
 #include <vector>
