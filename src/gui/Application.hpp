@@ -5,8 +5,12 @@
 #include "panels/IPanel.hpp"
 #include <vector>
 #include <memory>
+#include <GLFW/glfw3.h>
 
 namespace optirad {
+
+class PatientPanel;
+class SliceView;
 
 class Application {
 public:
@@ -20,11 +24,17 @@ public:
 private:
     void update();
     void render();
+    void renderMenuBar();
 
-    std::unique_ptr<Window> m_window;
-    std::unique_ptr<Renderer> m_renderer;
-    std::vector<std::unique_ptr<IPanel>> m_panels;
-    bool m_running = false;
+    GLFWwindow* m_window = nullptr;  // Raw pointer for GLFW
+
+    // Panels
+    std::unique_ptr<PatientPanel> m_patientPanel;
+
+    // Views
+    std::unique_ptr<SliceView> m_axialView;
+    std::unique_ptr<SliceView> m_sagittalView;
+    std::unique_ptr<SliceView> m_coronalView;
 };
 
 } // namespace optirad

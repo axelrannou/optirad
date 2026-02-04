@@ -1,5 +1,10 @@
+# CLI app (always built)
 add_subdirectory(optirad_cli)
 
-if(OPTIRAD_BUILD_GUI)
+# GUI app (only if optirad_gui was built)
+if(TARGET optirad_gui)
     add_subdirectory(optirad_gui)
+    message(STATUS "GUI application will be built")
+else()
+    message(STATUS "GUI application will NOT be built (missing dependencies)")
 endif()

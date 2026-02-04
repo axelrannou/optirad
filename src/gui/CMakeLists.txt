@@ -1,3 +1,35 @@
+# Check if OpenGL and GLFW are available
+find_package(OpenGL)
+find_package(glfw3)
+
+if(NOT OpenGL_FOUND OR NOT glfw3_FOUND)
+    message(WARNING "OpenGL or GLFW not found. GUI will not be built.")
+    message(STATUS "To install on Ubuntu/Debian: sudo apt-get install libgl1-mesa-dev libglfw3-dev")
+    message(STATUS "To install on Fedora/RHEL: sudo dnf install mesa-libGL-devel glfw-devel")
+    return()
+endif()
+
+# Check if Dear ImGui is available
+set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/external/imgui)
+if(NOT EXISTS ${IMGUI_DIR}/imgui.h)
+    message(WARNING "Dear ImGui not found at ${IMGUI_DIR}")
+    message(STATUS "To download: cd ${CMAKE_SOURCE_DIR}/external && git clone https://github.com/ocornut/imgui.git")
+    return()
+endif()
+
+# Dear ImGui library
+add_library(imgui STATIC
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
+
+# GUI library
 add_library(optirad_gui
     Application.cpp
     Window.cpp
@@ -12,5 +44,15 @@ add_library(optirad_gui
 )
 
 target_include_directories(optirad_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(optirad_gui PUBLIC optirad_optimization optirad_io)
-# target_link_libraries(optirad_gui PRIVATE imgui glfw glad)
+
+target_link_libraries(optirad_gui PUBLIC
+    optirad_core
+    optirad_io
+    optirad_geometry
+    optirad_optimization
+    imgui
+    OpenGL::GL
+    glfw
+)
+
+message(STATUS "GUI library will be built with Dear ImGui")

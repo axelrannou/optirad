@@ -1,23 +1,39 @@
 #pragma once
 
 #include "IPanel.hpp"
-#include "core/Patient.hpp"
-#include "geometry/StructureSet.hpp"
+#include "core/PatientData.hpp"
+#include "io/DicomImporter.hpp"
+#include <memory>
+#include <string>
 
 namespace optirad {
 
 class PatientPanel : public IPanel {
 public:
-    std::string getName() const override { return "Patient"; }
-    void update() override;
+    PatientPanel();
+    
     void render() override;
-
-    void setPatient(const Patient* patient) { m_patient = patient; }
-    void setStructureSet(const StructureSet* structureSet) { m_structureSet = structureSet; }
-
+    void update() override;  // Declare but don't define inline
+    std::string getName() const override { return "Patient"; }
+    
+    // Access to loaded data
+    PatientData* getPatientData() { return m_patientData.get(); }
+    bool hasData() const { return m_patientData != nullptr; }
+    
 private:
-    const Patient* m_patient = nullptr;
-    const StructureSet* m_structureSet = nullptr;
+    void renderImportDialog();
+    void renderPatientInfo();
+    void renderStructureList();
+    
+    void importDicom(const std::string& path);
+    
+    std::unique_ptr<PatientData> m_patientData;
+    DicomImporter m_importer;
+    
+    // UI state
+    bool m_showImportDialog = false;
+    char m_dicomPath[512] = "";
+    bool m_isImporting = false;
 };
 
 } // namespace optirad

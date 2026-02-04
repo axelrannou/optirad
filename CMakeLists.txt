@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 3.20)
-project(optirad VERSION 0.1.0 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.15)
+project(optirad CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -12,8 +12,16 @@ option(OPTIRAD_BUILD_GUI "Build GUI application" ON)
 # External dependencies
 add_subdirectory(external)
 
-# Source libraries
-add_subdirectory(src)
+# Core modules (always built)
+add_subdirectory(src/utils)
+add_subdirectory(src/core)
+add_subdirectory(src/geometry)
+add_subdirectory(src/io)
+add_subdirectory(src/dose)
+add_subdirectory(src/optimization)
+
+# GUI (optional - only if dependencies found)
+add_subdirectory(src/gui)
 
 # Applications
 add_subdirectory(apps)
