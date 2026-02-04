@@ -1,8 +1,13 @@
 #include "DicomImporter.hpp"
 #include "core/Patient.hpp"
+#include "core/PatientData.hpp"
 #include "geometry/StructureSet.hpp"
+#include "geometry/Structure.hpp"
+#include "geometry/Volume.hpp"
+#include "geometry/Grid.hpp"
 #include "utils/Logger.hpp"
 #include <algorithm>
+#include <map>
 
 #ifdef OPTIRAD_HAS_DCMTK
 #include <dcmtk/dcmdata/dctk.h>
@@ -27,12 +32,10 @@ bool DicomImporter::canImport(const std::string& path) const {
     }
     
     if (fs::is_directory(path)) {
-        // Check if directory contains any files (DICOM often has no extension)
         int fileCount = 0;
         for (const auto& entry : fs::recursive_directory_iterator(path)) {
             if (entry.is_regular_file()) {
                 auto filename = entry.path().filename().string();
-                // Skip macOS metadata files
                 if (filename.substr(0, 2) == "._") continue;
                 fileCount++;
             }
@@ -41,12 +44,297 @@ bool DicomImporter::canImport(const std::string& path) const {
         return fileCount > 0;
     }
     
-    // Single file
     return fs::is_regular_file(path);
 }
 
+std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath) {
+    if (!loadDirectory(dirPath)) {
+        Logger::error("Failed to load DICOM directory: " + dirPath);
+        return nullptr;
+    }
+    
+    auto patientData = std::make_unique<PatientData>();
+    
+    // Import patient info
+    patientData->setPatient(importPatient(dirPath));
+    
+    // Import CT volume
+    auto ctVolume = importCTVolume();
+    if (ctVolume) {
+        Logger::info("CT volume loaded: " + std::to_string(ctVolume->size()) + " voxels");
+        patientData->setCTVolume(std::move(ctVolume));
+        
+        // Convert to electron density
+        patientData->convertHUtoED();
+        Logger::info("Converted HU to electron density");
+    }
+    
+    // Import structures with contours
+    auto structures = importStructuresWithContours();
+    if (structures) {
+        Logger::info("Loaded " + std::to_string(structures->getCount()) + " structures");
+        patientData->setStructureSet(std::move(structures));
+    }
+    
+    return patientData;
+}
+
+std::unique_ptr<Volume<int16_t>> DicomImporter::importCTVolume() {
+#ifdef OPTIRAD_HAS_DCMTK
+    if (m_ctFiles.empty()) {
+        Logger::warn("No CT files to import");
+        return nullptr;
+    }
+    
+    sortCTFilesByPosition();
+    
+    // Read first slice to get dimensions
+    DcmFileFormat firstFile;
+    if (!firstFile.loadFile(m_ctFiles[0].c_str()).good()) {
+        Logger::error("Failed to load first CT slice");
+        return nullptr;
+    }
+    
+    DcmDataset* ds = firstFile.getDataset();
+    
+    Uint16 rows = 0, cols = 0;
+    ds->findAndGetUint16(DCM_Rows, rows);
+    ds->findAndGetUint16(DCM_Columns, cols);
+    
+    // Get pixel spacing
+    OFString pixelSpacing;
+    double spacingX = 1.0, spacingY = 1.0;
+    if (ds->findAndGetOFString(DCM_PixelSpacing, pixelSpacing, 0).good()) {
+        spacingY = std::stod(pixelSpacing.c_str());
+    }
+    if (ds->findAndGetOFString(DCM_PixelSpacing, pixelSpacing, 1).good()) {
+        spacingX = std::stod(pixelSpacing.c_str());
+    }
+    
+    // Get image position (origin)
+    double originX = 0, originY = 0, originZ = 0;
+    OFString pos;
+    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 0).good()) originX = std::stod(pos.c_str());
+    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 1).good()) originY = std::stod(pos.c_str());
+    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 2).good()) originZ = std::stod(pos.c_str());
+    
+    // Calculate slice thickness from first two slices
+    double spacingZ = 1.0;
+    if (m_ctFiles.size() > 1) {
+        DcmFileFormat secondFile;
+        if (secondFile.loadFile(m_ctFiles[1].c_str()).good()) {
+            double z2 = 0;
+            if (secondFile.getDataset()->findAndGetOFString(DCM_ImagePositionPatient, pos, 2).good()) {
+                z2 = std::stod(pos.c_str());
+            }
+            spacingZ = std::abs(z2 - originZ);
+        }
+    }
+    
+    // Create grid - use 3 separate arguments as per Grid API
+    Grid grid;
+    grid.setDimensions(static_cast<size_t>(cols), static_cast<size_t>(rows), m_ctFiles.size());
+    grid.setSpacing(spacingX, spacingY, spacingZ);
+    grid.setOrigin({originX, originY, originZ});
+    
+    Logger::info("CT Grid: " + std::to_string(cols) + "x" + std::to_string(rows) + "x" + std::to_string(m_ctFiles.size()));
+    Logger::info("Spacing: " + std::to_string(spacingX) + "x" + std::to_string(spacingY) + "x" + std::to_string(spacingZ) + " mm");
+    
+    // Create volume
+    auto volume = std::make_unique<Volume<int16_t>>();
+    volume->setGrid(grid);
+    volume->allocate();
+    
+    // Load all slices
+    size_t sliceSize = static_cast<size_t>(rows) * cols;
+    for (size_t z = 0; z < m_ctFiles.size(); ++z) {
+        DcmFileFormat dcmFile;
+        if (!dcmFile.loadFile(m_ctFiles[z].c_str()).good()) {
+            Logger::warn("Failed to load slice " + std::to_string(z));
+            continue;
+        }
+        
+        DcmDataset* sliceDs = dcmFile.getDataset();
+        
+        // Get rescale slope and intercept
+        double rescaleSlope = 1.0, rescaleIntercept = 0.0;
+        sliceDs->findAndGetFloat64(DCM_RescaleSlope, rescaleSlope);
+        sliceDs->findAndGetFloat64(DCM_RescaleIntercept, rescaleIntercept);
+        
+        // Get pixel data
+        const Uint16* pixelData = nullptr;
+        unsigned long count = 0;
+        if (sliceDs->findAndGetUint16Array(DCM_PixelData, pixelData, &count).good() && pixelData) {
+            int16_t* destPtr = volume->data() + z * sliceSize;
+            for (size_t i = 0; i < sliceSize && i < count; ++i) {
+                // Apply rescale to get HU
+                double hu = static_cast<double>(pixelData[i]) * rescaleSlope + rescaleIntercept;
+                destPtr[i] = static_cast<int16_t>(std::clamp(hu, -32768.0, 32767.0));
+            }
+        }
+    }
+    
+    return volume;
+#else
+    Logger::warn("DCMTK not available - cannot import CT volume");
+    return nullptr;
+#endif
+}
+
+std::unique_ptr<StructureSet> DicomImporter::importStructuresWithContours() {
+#ifdef OPTIRAD_HAS_DCMTK
+    if (m_rtStructFile.empty()) {
+        Logger::warn("No RT Structure Set file found");
+        return nullptr;
+    }
+    
+    auto structures = std::make_unique<StructureSet>();
+    
+    DcmFileFormat fileFormat;
+    if (!fileFormat.loadFile(m_rtStructFile.c_str()).good()) {
+        Logger::error("Failed to load RT Structure Set");
+        return nullptr;
+    }
+    
+    DcmDataset* dataset = fileFormat.getDataset();
+    
+    // Build ROI number to name mapping
+    std::map<int, std::string> roiNames;
+    DcmSequenceOfItems* roiSequence = nullptr;
+    if (dataset->findAndGetSequence(DCM_StructureSetROISequence, roiSequence).good()) {
+        for (unsigned long i = 0; i < roiSequence->card(); ++i) {
+            DcmItem* item = roiSequence->getItem(i);
+            if (!item) continue;
+            
+            OFString roiName;
+            Sint32 roiNumber = 0;
+            item->findAndGetOFString(DCM_ROIName, roiName);
+            item->findAndGetSint32(DCM_ROINumber, roiNumber);
+            roiNames[roiNumber] = roiName.c_str();
+        }
+    }
+    
+    // Read ROI contour data
+    DcmSequenceOfItems* contourSequence = nullptr;
+    if (dataset->findAndGetSequence(DCM_ROIContourSequence, contourSequence).good()) {
+        for (unsigned long i = 0; i < contourSequence->card(); ++i) {
+            DcmItem* roiItem = contourSequence->getItem(i);
+            if (!roiItem) continue;
+            
+            Sint32 refROINumber = 0;
+            roiItem->findAndGetSint32(DCM_ReferencedROINumber, refROINumber);
+            
+            auto structure = std::make_unique<Structure>();
+            structure->setROINumber(refROINumber);
+            structure->setName(roiNames.count(refROINumber) ? roiNames[refROINumber] : "Unknown");
+            
+            // Get color
+            const Uint16* colorData = nullptr;
+            unsigned long colorCount = 0;
+            if (roiItem->findAndGetUint16Array(DCM_ROIDisplayColor, colorData, &colorCount).good() && colorCount >= 3) {
+                structure->setColor(
+                    static_cast<uint8_t>(colorData[0]),
+                    static_cast<uint8_t>(colorData[1]),
+                    static_cast<uint8_t>(colorData[2])
+                );
+            }
+            
+            // Determine type from name
+            std::string name = structure->getName();
+            std::string upperName = name;
+            std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
+            
+            if (upperName.find("PTV") != std::string::npos || 
+                upperName.find("GTV") != std::string::npos ||
+                upperName.find("CTV") != std::string::npos) {
+                structure->setType("TARGET");
+                structure->setPriority(1);
+            } else if (upperName.find("BODY") != std::string::npos ||
+                       upperName.find("EXTERNAL") != std::string::npos) {
+                structure->setType("EXTERNAL");
+                structure->setPriority(5);
+            } else {
+                structure->setType("OAR");
+                structure->setPriority(3);
+            }
+            
+            // Read contours
+            DcmSequenceOfItems* contourSeq = nullptr;
+            if (roiItem->findAndGetSequence(DCM_ContourSequence, contourSeq).good()) {
+                for (unsigned long c = 0; c < contourSeq->card(); ++c) {
+                    DcmItem* contourItem = contourSeq->getItem(c);
+                    if (!contourItem) continue;
+                    
+                    Contour contour;
+                    
+                    Sint32 numPoints = 0;
+                    contourItem->findAndGetSint32(DCM_NumberOfContourPoints, numPoints);
+                    
+                    const Float64* contourData = nullptr;
+                    unsigned long dataCount = 0;
+                    if (contourItem->findAndGetFloat64Array(DCM_ContourData, contourData, &dataCount).good() && contourData) {
+                        size_t numCoords = dataCount / 3;
+                        contour.points.reserve(numCoords);
+                        
+                        for (size_t p = 0; p < numCoords; ++p) {
+                            contour.points.push_back({
+                                contourData[p * 3],
+                                contourData[p * 3 + 1],
+                                contourData[p * 3 + 2]
+                            });
+                        }
+                        
+                        if (!contour.points.empty()) {
+                            contour.zPosition = contour.points[0][2];
+                        }
+                    }
+                    
+                    if (!contour.points.empty()) {
+                        structure->addContour(contour);
+                    }
+                }
+            }
+            
+            Logger::info("  - " + structure->getName() + " (" + structure->getType() + 
+                        ", " + std::to_string(structure->getContourCount()) + " contours)");
+            structures->addStructure(std::move(structure));
+        }
+    }
+    
+    return structures;
+#else
+    Logger::warn("DCMTK not available");
+    return nullptr;
+#endif
+}
+
+void DicomImporter::sortCTFilesByPosition() {
+#ifdef OPTIRAD_HAS_DCMTK
+    std::vector<std::pair<double, std::filesystem::path>> filesWithZ;
+    
+    for (const auto& file : m_ctFiles) {
+        DcmFileFormat dcmFile;
+        if (dcmFile.loadFile(file.c_str()).good()) {
+            OFString pos;
+            double z = 0;
+            if (dcmFile.getDataset()->findAndGetOFString(DCM_ImagePositionPatient, pos, 2).good()) {
+                z = std::stod(pos.c_str());
+            }
+            filesWithZ.emplace_back(z, file);
+        }
+    }
+    
+    std::sort(filesWithZ.begin(), filesWithZ.end());
+    
+    m_ctFiles.clear();
+    for (const auto& [z, path] : filesWithZ) {
+        m_ctFiles.push_back(path);
+    }
+#endif
+}
+
 std::unique_ptr<Patient> DicomImporter::importPatient(const std::string& path) {
-    if (!loadDirectory(path)) {
+    if (m_ctFiles.empty() && !loadDirectory(path)) {
         Logger::error("Failed to load DICOM directory: " + path);
         return nullptr;
     }
@@ -78,77 +366,10 @@ std::unique_ptr<Patient> DicomImporter::importPatient(const std::string& path) {
 }
 
 std::unique_ptr<StructureSet> DicomImporter::importStructures(const std::string& path) {
-    auto structures = std::make_unique<StructureSet>();
-    
-#ifdef OPTIRAD_HAS_DCMTK
     if (m_rtStructFile.empty()) {
         loadDirectory(path);
     }
-    
-    if (!m_rtStructFile.empty()) {
-        Logger::info("Loading RT Structure Set: " + m_rtStructFile.string());
-        
-        DcmFileFormat fileFormat;
-        OFCondition status = fileFormat.loadFile(m_rtStructFile.c_str());
-        
-        if (status.good()) {
-            DcmDataset* dataset = fileFormat.getDataset();
-            
-            // Find the StructureSetROISequence
-            DcmItem* roiSeqItem = nullptr;
-            DcmSequenceOfItems* roiSequence = nullptr;
-            
-            if (dataset->findAndGetSequence(DCM_StructureSetROISequence, roiSequence).good()) {
-                unsigned long numROIs = roiSequence->card();
-                Logger::info("Found " + std::to_string(numROIs) + " ROIs in structure set");
-                
-                for (unsigned long i = 0; i < numROIs; ++i) {
-                    roiSeqItem = roiSequence->getItem(i);
-                    if (!roiSeqItem) continue;
-                    
-                    OFString roiName, roiNumber;
-                    roiSeqItem->findAndGetOFString(DCM_ROIName, roiName);
-                    roiSeqItem->findAndGetOFString(DCM_ROINumber, roiNumber);
-                    
-                    // Create structure
-                    auto structure = std::make_unique<Structure>();
-                    structure->setName(roiName.c_str());
-                    
-                    // Try to determine type from name
-                    std::string name = roiName.c_str();
-                    std::transform(name.begin(), name.end(), name.begin(), ::toupper);
-                    
-                    if (name.find("PTV") != std::string::npos || 
-                        name.find("GTV") != std::string::npos ||
-                        name.find("CTV") != std::string::npos) {
-                        structure->setType("TARGET");
-                    } else if (name.find("LUNG") != std::string::npos ||
-                               name.find("HEART") != std::string::npos ||
-                               name.find("SPINAL") != std::string::npos ||
-                               name.find("ESOPHAGUS") != std::string::npos) {
-                        structure->setType("OAR");
-                    } else if (name.find("BODY") != std::string::npos ||
-                               name.find("EXTERNAL") != std::string::npos) {
-                        structure->setType("EXTERNAL");
-                    } else {
-                        structure->setType("UNKNOWN");
-                    }
-                    
-                    Logger::info("  - " + std::string(roiName.c_str()) + " (" + structure->getType() + ")");
-                    structures->addStructure(std::move(structure));
-                }
-            } else {
-                Logger::warn("No StructureSetROISequence found in RT Structure Set");
-            }
-        } else {
-            Logger::error("Failed to load RT Structure Set file: " + std::string(status.text()));
-        }
-    }
-#else
-    Logger::warn("DCMTK not available - returning empty structure set");
-#endif
-    
-    return structures;
+    return importStructuresWithContours();
 }
 
 bool DicomImporter::loadDirectory(const std::string& dirPath) {
@@ -167,9 +388,7 @@ bool DicomImporter::loadDirectory(const std::string& dirPath) {
     m_rtDoseFile.clear();
     
     scanDirectory(fs::path(dirPath));
-    
-    // Sort CT files by path (instance numbers are in path for this dataset)
-    std::sort(m_ctFiles.begin(), m_ctFiles.end());
+    sortCTFilesByPosition();
     
     Logger::info("Scan complete:");
     Logger::info("  CT slices: " + std::to_string(m_ctFiles.size()));
@@ -183,26 +402,16 @@ bool DicomImporter::loadDirectory(const std::string& dirPath) {
 void DicomImporter::scanDirectory(const std::filesystem::path& dir) {
     namespace fs = std::filesystem;
     
-    int filesScanned = 0;
-    
     for (const auto& entry : fs::recursive_directory_iterator(dir)) {
         if (!entry.is_regular_file()) continue;
         
-        // Skip hidden files and macOS metadata
         auto filename = entry.path().filename().string();
-        if (filename[0] == '.') continue;
-        if (filename.substr(0, 2) == "._") continue;
-        if (filename == "DICOMDIR") continue;
+        if (filename[0] == '.' || filename.substr(0, 2) == "._" || filename == "DICOMDIR") continue;
         
         auto ext = entry.path().extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == ".txt" || ext == ".log" || ext == ".xml" || ext == ".json") continue;
         
-        // Skip obvious non-DICOM extensions
-        if (ext == ".txt" || ext == ".log" || ext == ".xml" || ext == ".json") {
-            continue;
-        }
-        
-        filesScanned++;
         std::string sopClass = getSOPClassUID(entry.path());
         
         if (!sopClass.empty()) {
@@ -217,8 +426,6 @@ void DicomImporter::scanDirectory(const std::filesystem::path& dir) {
             }
         }
     }
-    
-    Logger::debug("Scanned " + std::to_string(filesScanned) + " files");
 }
 
 std::string DicomImporter::getSOPClassUID(const std::filesystem::path& file) const {

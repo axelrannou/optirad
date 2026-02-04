@@ -11,11 +11,19 @@ namespace optirad {
  */
 class DoseInfluenceMatrix {
 public:
+    // Constructor
+    DoseInfluenceMatrix() = default;
+    DoseInfluenceMatrix(size_t numVoxels, size_t numBixels);
+    
     void setDimensions(size_t numVoxels, size_t numBixels);
     
     // For building the matrix (dense interface - converts to sparse internally)
     void setValue(size_t voxel, size_t bixel, double value);
     double getValue(size_t voxel, size_t bixel) const;
+    
+    // Operator access (same as setValue/getValue)
+    double& operator()(size_t voxel, size_t bixel);
+    double operator()(size_t voxel, size_t bixel) const;
     
     // Finalize sparse structure after all setValue calls
     void finalize();

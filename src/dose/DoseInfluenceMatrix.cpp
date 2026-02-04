@@ -8,11 +8,23 @@
 
 namespace optirad {
 
+DoseInfluenceMatrix::DoseInfluenceMatrix(size_t numVoxels, size_t numBixels) {
+    setDimensions(numVoxels, numBixels);
+}
+
 void DoseInfluenceMatrix::setDimensions(size_t numVoxels, size_t numBixels) {
     m_numVoxels = numVoxels;
     m_numBixels = numBixels;
     m_denseData.resize(numVoxels * numBixels, 0.0);
     m_useSparse = false;
+}
+
+double& DoseInfluenceMatrix::operator()(size_t voxel, size_t bixel) {
+    return m_denseData[voxel * m_numBixels + bixel];
+}
+
+double DoseInfluenceMatrix::operator()(size_t voxel, size_t bixel) const {
+    return getValue(voxel, bixel);
 }
 
 void DoseInfluenceMatrix::setValue(size_t voxel, size_t bixel, double value) {

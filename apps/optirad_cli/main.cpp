@@ -1,6 +1,9 @@
 #include "io/DicomImporter.hpp"
 #include "core/Patient.hpp"
+#include "core/PatientData.hpp"
 #include "geometry/StructureSet.hpp"
+#include "geometry/Structure.hpp"
+#include "geometry/Volume.hpp"
 #include "utils/Logger.hpp"
 
 #include <iostream>
@@ -27,33 +30,61 @@ int loadDicom(const std::string& path) {
         return 1;
     }
     
-    // Load directory to scan for files
-    if (!importer.loadDirectory(path)) {
-        std::cerr << "Error: Failed to load DICOM directory\n";
+    // Full import - loads CT volume, structures with contours, patient info
+    auto patientData = importer.importAll(path);
+    
+    if (!patientData) {
+        std::cerr << "Error: Failed to import patient data\n";
         return 1;
     }
     
-    // Import patient info
-    auto patient = importer.importPatient(path);
-    if (patient) {
-        std::cout << "Patient Information:\n";
+    // Display patient info
+    if (auto* patient = patientData->getPatient()) {
+        std::cout << "\nPatient Information:\n";
         std::cout << "  Name: " << patient->getName() << "\n";
-        std::cout << "  ID:   " << patient->getID() << "\n\n";
+        std::cout << "  ID:   " << patient->getID() << "\n";
     }
     
-    // Import structures
-    auto structures = importer.importStructures(path);
-    if (structures) {
-        std::cout << "Structures found: " << structures->getCount() << "\n";
+    // Display CT volume info
+    if (auto* ct = patientData->getCTVolume()) {
+        const auto& grid = ct->getGrid();
+        auto dims = grid.getDimensions();
+        auto spacing = grid.getSpacing();
+        auto origin = grid.getOrigin();
+        // Display Grid rows
+        std::cout << "  Rows:       " << dims[1] << "\n";
+        
+        std::cout << "\nCT Volume:\n";
+        std::cout << "  Dimensions: " << dims[0] << " x " << dims[1] << " x " << dims[2] << "\n";
+        std::cout << "  Spacing:    " << spacing[0] << " x " << spacing[1] << " x " << spacing[2] << " mm\n";
+        std::cout << "  Origin:     " << origin[0] << " x " << origin[1] << " x " << origin[2] << " mm\n";
+        std::cout << "  Voxels:     " << ct->size() << "\n";
+        
+        // Find HU range
+        int16_t minHU = 32767, maxHU = -32768;
+        for (size_t i = 0; i < ct->size(); ++i) {
+            minHU = std::min(minHU, ct->data()[i]);
+            maxHU = std::max(maxHU, ct->data()[i]);
+        }
+        std::cout << "  HU Range:   [" << minHU << ", " << maxHU << "]\n";
+    }
+    
+    // Display structures
+    if (auto* structures = patientData->getStructureSet()) {
+        std::cout << "\nStructures: " << structures->getCount() << "\n";
         for (size_t i = 0; i < structures->getCount(); ++i) {
             const auto* s = structures->getStructure(i);
             if (s) {
-                std::cout << "  - " << s->getName() << " (" << s->getType() << ")\n";
+                auto color = s->getColor();
+                std::cout << "  - " << s->getName() 
+                         << " (" << s->getType() << ")"
+                         << " [" << s->getContourCount() << " contours]"
+                         << " RGB(" << (int)color[0] << "," << (int)color[1] << "," << (int)color[2] << ")\n";
             }
         }
     }
     
-    std::cout << "\nDICOM load complete.\n";
+    std::cout << "\n=== DICOM import complete ===\n";
     return 0;
 }
 

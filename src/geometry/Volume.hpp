@@ -13,11 +13,14 @@ public:
     const Grid& getGrid() const;
 
     void allocate();
+
     T& at(size_t i, size_t j, size_t k);
     const T& at(size_t i, size_t j, size_t k) const;
 
     T* data();
     const T* data() const;
+
+    size_t size() const { return m_data.size(); }
 
 private:
     Grid m_grid;
