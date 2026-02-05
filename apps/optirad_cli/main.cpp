@@ -51,14 +51,20 @@ int loadDicom(const std::string& path) {
         auto dims = grid.getDimensions();
         auto spacing = grid.getSpacing();
         auto origin = grid.getOrigin();
-        // Display Grid rows
-        std::cout << "  Rows:       " << dims[1] << "\n";
+        auto orientation = grid.getImageOrientation();
         
         std::cout << "\nCT Volume:\n";
         std::cout << "  Dimensions: " << dims[0] << " x " << dims[1] << " x " << dims[2] << "\n";
         std::cout << "  Spacing:    " << spacing[0] << " x " << spacing[1] << " x " << spacing[2] << " mm\n";
         std::cout << "  Origin:     " << origin[0] << " x " << origin[1] << " x " << origin[2] << " mm\n";
         std::cout << "  Voxels:     " << ct->size() << "\n";
+        std::cout << "\nGeometric Information:\n";
+        std::cout << "  Patient Position: " << grid.getPatientPosition() << "\n";
+        std::cout << "  Slice Thickness:  " << grid.getSliceThickness() << " mm\n";
+        std::cout << "  Image Orientation (row): [" 
+                  << orientation[0] << ", " << orientation[1] << ", " << orientation[2] << "]\n";
+        std::cout << "  Image Orientation (col): [" 
+                  << orientation[3] << ", " << orientation[4] << ", " << orientation[5] << "]\n";
         
         // Find HU range
         int16_t minHU = 32767, maxHU = -32768;

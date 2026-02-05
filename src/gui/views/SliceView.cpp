@@ -35,22 +35,34 @@ void SliceView::setPatientData(PatientData* data) {
     
     if (m_patientData && m_patientData->getCTVolume()) {
         auto dims = m_patientData->getCTVolume()->getGrid().getDimensions();
+        auto spacing = m_patientData->getCTVolume()->getGrid().getSpacing();
         
         switch (m_orientation) {
             case SliceOrientation::Axial:
                 m_maxSlice = dims[2] - 1;
                 m_textureWidth = dims[0];
                 m_textureHeight = dims[1];
+                // Physical size in mm
+                m_physicalWidth = dims[0] * spacing[0];
+                m_physicalHeight = dims[1] * spacing[1];
                 break;
+                
             case SliceOrientation::Sagittal:
                 m_maxSlice = dims[0] - 1;
                 m_textureWidth = dims[1];
                 m_textureHeight = dims[2];
+                // Physical size: width = Y-direction, height = Z-direction
+                m_physicalWidth = dims[1] * spacing[1];
+                m_physicalHeight = dims[2] * spacing[2];
                 break;
+                
             case SliceOrientation::Coronal:
                 m_maxSlice = dims[1] - 1;
                 m_textureWidth = dims[0];
                 m_textureHeight = dims[2];
+                // Physical size: width = X-direction, height = Z-direction
+                m_physicalWidth = dims[0] * spacing[0];
+                m_physicalHeight = dims[2] * spacing[2];
                 break;
         }
         
@@ -95,6 +107,85 @@ void SliceView::renderControls() {
         setSliceIndex(static_cast<size_t>(sliceInt));
     }
     
+    // Show slice position in mm
+    if (m_patientData && m_patientData->getCTVolume()) {
+        const auto& grid = m_patientData->getCTVolume()->getGrid();
+        auto origin = grid.getOrigin();
+        auto spacing = grid.getSpacing();
+        auto patientPos = grid.getPatientPosition();
+        auto dims = grid.getDimensions();
+        
+        // Calculate position in patient coordinate system
+        // DICOM uses LPS (Left, Posterior, Superior) coordinate system
+        double slicePositionMM = 0.0;
+        
+        switch (m_orientation) {
+            case SliceOrientation::Axial:
+                // Z-axis: shows superior-inferior position
+                // In LPS: larger Z = more superior (toward head)
+                slicePositionMM = origin[2] + m_currentSlice * spacing[2];
+                break;
+                
+            case SliceOrientation::Sagittal: {
+                // X-axis: shows left-right position
+                // Need to reverse: slice from left to right
+                // Start from the last slice (most left) and go to right
+                size_t reversedSlice = dims[0] - 1 - m_currentSlice;
+                slicePositionMM = -(origin[0] + reversedSlice * spacing[0]);
+                break;
+            }
+                
+            case SliceOrientation::Coronal: {
+                // Y-axis: shows anterior-posterior position
+                // Need to reverse: slice from back to front (posterior to anterior)
+                size_t reversedSlice = dims[1] - 1 - m_currentSlice;
+                slicePositionMM = -(origin[1] + reversedSlice * spacing[1]);
+                break;
+            }
+        }
+        
+        ImGui::SameLine();
+        ImGui::Text("(%.1f mm)", slicePositionMM);
+        
+        // Debug tooltip showing both LPS and RAS coordinates
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            
+            switch (m_orientation) {
+                case SliceOrientation::Axial: {
+                    double lpsZ = origin[2] + m_currentSlice * spacing[2];
+                    ImGui::Text("Patient Position: %s", patientPos.c_str());
+                    ImGui::Separator();
+                    ImGui::Text("Z (LPS Superior): %.1f mm", lpsZ);
+                    ImGui::Text("Slice %zu/%zu", m_currentSlice, m_maxSlice);
+                    break;
+                }
+                case SliceOrientation::Sagittal: {
+                    size_t reversedSlice = dims[0] - 1 - m_currentSlice;
+                    double lpsX = origin[0] + reversedSlice * spacing[0];
+                    ImGui::Text("Patient Position: %s", patientPos.c_str());
+                    ImGui::Separator();
+                    ImGui::Text("X (LPS Left): %.1f mm", lpsX);
+                    ImGui::Text("R (RAS Right): %.1f mm", -lpsX);
+                    ImGui::Text("Slice %zu/%zu (reversed: %zu)", m_currentSlice, m_maxSlice, reversedSlice);
+                    break;
+                }
+                case SliceOrientation::Coronal: {
+                    size_t reversedSlice = dims[1] - 1 - m_currentSlice;
+                    double lpsY = origin[1] + reversedSlice * spacing[1];
+                    ImGui::Text("Patient Position: %s", patientPos.c_str());
+                    ImGui::Separator();
+                    ImGui::Text("Y (LPS Posterior): %.1f mm", lpsY);
+                    ImGui::Text("A (RAS Anterior): %.1f mm", -lpsY);
+                    ImGui::Text("Slice %zu/%zu (reversed: %zu)", m_currentSlice, m_maxSlice, reversedSlice);
+                    break;
+                }
+            }
+            
+            ImGui::EndTooltip();
+        }
+    }
+    
     // Window/Level controls
     if (ImGui::SliderInt("Window Width", &m_windowWidth, 1, 2000)) {
         m_needsUpdate = true;
@@ -122,6 +213,24 @@ void SliceView::renderControls() {
         m_needsUpdate = true;
     }
     
+    // Show geometric info tooltip
+    if (ImGui::IsItemHovered() || ImGui::IsWindowHovered()) {
+        if (m_patientData && m_patientData->getCTVolume()) {
+            const auto& grid = m_patientData->getCTVolume()->getGrid();
+            
+            if (ImGui::BeginTooltip()) {
+                ImGui::Text("Patient Position: %s", grid.getPatientPosition().c_str());
+                ImGui::Text("Slice Thickness: %.2f mm", grid.getSliceThickness());
+                
+                auto spacing = grid.getSpacing();
+                ImGui::Text("Actual Spacing: %.2f x %.2f x %.2f mm", 
+                           spacing[0], spacing[1], spacing[2]);
+                
+                ImGui::EndTooltip();
+            }
+        }
+    }
+    
     ImGui::Separator();
 }
 
@@ -144,13 +253,25 @@ void SliceView::updateTexture() {
             // Get HU value based on orientation
             switch (m_orientation) {
                 case SliceOrientation::Axial:
+                    // Axial: Standard top-down view
                     hu = ct->at(x, y, m_currentSlice);
                     break;
+                    
                 case SliceOrientation::Sagittal:
-                    hu = ct->at(m_currentSlice, x, y);
+                    // Sagittal: Y-Z plane, flip Y (Z increases superior, flip for screen)
+                    {
+                        int flippedY = m_textureHeight - 1 - y;
+                        hu = ct->at(m_currentSlice, x, flippedY);
+                    }
                     break;
+                    
                 case SliceOrientation::Coronal:
-                    hu = ct->at(x, m_currentSlice, y);
+                    // Coronal: X-Z plane, flip both Y (for superior direction) and slice direction (posterior to anterior)
+                    {
+                        int flippedY = m_textureHeight - 1 - y;
+                        size_t reversedSlice = dims[1] - 1 - m_currentSlice;
+                        hu = ct->at(x, reversedSlice, flippedY);
+                    }
                     break;
             }
             
@@ -185,14 +306,15 @@ void SliceView::renderSlice() {
     // Get available space
     ImVec2 avail = ImGui::GetContentRegionAvail();
     
-    // Calculate display size maintaining aspect ratio
-    float aspect = static_cast<float>(m_textureWidth) / m_textureHeight;
+    // Calculate display size using PHYSICAL aspect ratio (like 3D Slicer)
+    float physicalAspect = static_cast<float>(m_physicalWidth / m_physicalHeight);
+    
     float displayWidth = avail.x;
-    float displayHeight = avail.x / aspect;
+    float displayHeight = avail.x / physicalAspect;
     
     if (displayHeight > avail.y) {
         displayHeight = avail.y;
-        displayWidth = avail.y * aspect;
+        displayWidth = avail.y * physicalAspect;
     }
     
     // Center the image

@@ -19,7 +19,7 @@ public:
     ~SliceView();
     
     void render() override;
-    void update() override;  // Declare but don't define inline
+    void update() override;
     void resize(int width, int height) override;
     std::string getName() const override;
     
@@ -46,6 +46,10 @@ private:
     int m_textureWidth = 0;
     int m_textureHeight = 0;
     bool m_needsUpdate = true;
+    
+    // Physical dimensions for aspect ratio correction
+    double m_physicalWidth = 1.0;   // mm
+    double m_physicalHeight = 1.0;  // mm
 };
 
 } // namespace optirad

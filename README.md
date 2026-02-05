@@ -1,6 +1,173 @@
 # optirad
 OptiRad: Optimization of Radiotherapy Treatment Planning
 
+A modern, modular treatment planning system (TPS) for radiotherapy optimization with both CLI and GUI interfaces.
+
+## Features
+
+- **DICOM Import**: Load CT images, RT structures, RT plans, and RT dose
+- **Structure Management**: Import and visualize ROIs (targets, OARs)
+- **Dose Calculation**: Pencil beam dose engine with electron density conversion
+- **Optimization**: L-BFGS-B optimizer with multiple objective functions
+- **Visualization**: Interactive 2D slice views (Axial/Sagittal/Coronal) with window/level control
+- **GUI**: Modern ImGui-based interface with real-time interaction
+- **CLI**: Command-line tools for batch processing and scripting
+
+## Quick Start
+
+### Prerequisites
+
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y \
+    build-essential cmake git \
+    libgl1-mesa-dev libglu1-mesa-dev libglfw3-dev \
+    libomp-dev
+
+# Optional: DCMTK for DICOM support
+sudo apt-get install -y libdcmtk-dev
+```
+
+### Build
+
+```bash
+# Clone repository
+git clone <repository-url>
+cd optirad
+
+# Setup GUI dependencies (Dear ImGui + OpenGL)
+./scripts/setup_gui.sh
+
+# Build
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+
+# Run tests
+ctest --output-on-failure
+```
+
+## Usage
+
+### Command-Line Interface (CLI)
+
+The CLI application provides a simple interface for batch processing and inspection.
+
+#### Load and Inspect DICOM Data
+
+```bash
+# Load DICOM directory
+./apps/optirad_cli/optirad_cli load /path/to/dicom/folder
+```
+
+#### Available Commands
+
+```bash
+# Show help
+./optirad_cli help
+
+# Load DICOM directory
+./optirad_cli load <dicom_directory>
+```
+
+### Graphical User Interface (GUI)
+
+The GUI provides an interactive visualization and planning environment.
+
+#### Launch GUI
+
+```bash
+./apps/optirad_gui/optirad_gui
+```
+
+#### GUI Features
+
+**1. Import DICOM Data**
+- Click **"Import DICOM Directory"** button in the Patient Panel
+- Browse to your DICOM folder
+- The system will automatically detect and load:
+  - CT image series (sorted by position)
+  - RT Structure Set with contours
+  - RT Plan (if available)
+  - RT Dose (if available)
+
+**2. View Patient Information**
+- **Patient Panel** (left side): Shows patient demographics, CT dimensions, and structure list
+- Toggle structure visibility with checkboxes
+- Color indicators show structure colors
+
+**3. Slice Visualization**
+Three orthogonal views are available:
+- **Axial View**: X-Y plane (looking down through patient)
+- **Sagittal View**: Y-Z plane (side view)
+- **Coronal View**: X-Z plane (front view)
+
+**4. Window/Level Control**
+Each slice view includes:
+- **Slice Slider**: Navigate through slices
+- **Window Width**: Adjust contrast (HU range)
+- **Window Center**: Adjust brightness (center HU)
+- **Presets**: Quick settings for different tissues:
+  - **Soft Tissue**: W=400, L=40 (general anatomy)
+  - **Lung**: W=1500, L=-600 (lung parenchyma)
+  - **Bone**: W=1800, L=400 (skeletal structures)
+
+## Data Format
+
+### DICOM Support
+
+OptiRad supports standard DICOM-RT objects:
+
+| DICOM Type | SOP Class UID | Description |
+|------------|---------------|-------------|
+| CT Image Storage | 1.2.840.10008.5.1.4.1.1.2 | CT slices |
+| RT Structure Set Storage | 1.2.840.10008.5.1.4.1.1.481.3 | ROI contours |
+| RT Plan Storage | 1.2.840.10008.5.1.4.1.1.481.5 | Treatment plan |
+| RT Dose Storage | 1.2.840.10008.5.1.4.1.1.481.2 | Dose distribution |
+
+### PatientData Structure
+
+Internally, data is organized similar to matRad's `ct` + `cst` structure:
+
+```cpp
+PatientData
+├── Patient         // Demographics (name, ID)
+├── CT Volume       // 3D array of HU values (int16_t)
+├── ED Volume       // Electron density (double)
+└── StructureSet    // Collection of ROIs
+    └── Structures  // Individual contours + voxel masks
+```
+
+### Example Data Layout
+
+```
+data/dicom/PATIENT_NAME/
+├── CT_SERIES_UID/
+│   ├── slice_001.dcm
+│   ├── slice_002.dcm
+│   └── ...
+├── RS_SERIES_UID/
+│   └── rtstruct.dcm
+├── RTPLAN_SERIES_UID/
+│   └── rtplan.dcm
+└── RTDOSE_SERIES_UID/
+    └── rtdose.dcm
+```
+
+## Configuration
+
+### CT to Electron Density Conversion
+
+Default piecewise linear HLUT (Hounsfield Lookup Table):
+
+```cpp
+HU ≤ -1000  → ED = 0.0     (air)
+-1000 < HU ≤ 0   → ED = 1.0 + HU/1000  (lung/soft tissue)
+0 < HU ≤ 100     → ED = 1.0 + 0.001*HU (soft tissue)
+HU > 100         → ED = 1.1 + 0.0005*(HU-100) (bone)
+```
+
 ## Project Structure / Architecture
 
 ```
@@ -14,189 +181,67 @@ optirad/
 │   ├── CMakeLists.txt
 │   │
 │   ├── core/                      # Core abstractions and base classes
-│   │   ├── CMakeLists.txt
-│   │   ├── Core.hpp               # Core module header
-│   │   ├── Patient.hpp            # Patient data container
-│   │   ├── Patient.cpp
+│   │   ├── Patient.hpp            # Patient demographics
+│   │   ├── PatientData.hpp        # Main data container (ct + cst)
 │   │   ├── Plan.hpp               # Treatment plan
-│   │   ├── Plan.cpp
 │   │   ├── Beam.hpp               # Beam definition
-│   │   ├── Beam.cpp
-│   │   ├── Machine.hpp            # Machine/linac parameters
-│   │   └── Machine.cpp
+│   │   └── Machine.hpp            # Linac parameters
 │   │
 │   ├── io/                        # Input/Output module
-│   │   ├── CMakeLists.txt
-│   │   ├── IO.hpp                 # IO module header
-│   │   ├── IDataImporter.hpp      # Abstract importer interface
-│   │   ├── IDataExporter.hpp      # Abstract exporter interface
-│   │   ├── DicomImporter.hpp      # DICOM import
-│   │   ├── DicomImporter.cpp
+│   │   ├── DicomImporter.hpp      # DICOM import with DCMTK
 │   │   ├── DicomExporter.hpp      # DICOM RT export
-│   │   ├── DicomExporter.cpp
-│   │   ├── NiftiImporter.hpp      # NIfTI support (optional)
-│   │   └── NiftiImporter.cpp
+│   │   └── IDataImporter.hpp      # Abstract interface
 │   │
 │   ├── geometry/                  # Geometry and coordinate systems
-│   │   ├── CMakeLists.txt
-│   │   ├── Geometry.hpp           # Geometry module header
-│   │   ├── CoordinateSystem.hpp   # World/patient coordinates
-│   │   ├── CoordinateSystem.cpp
-│   │   ├── Grid.hpp               # Dose grid definition
-│   │   ├── Grid.cpp
-│   │   ├── Volume.hpp             # 3D volume representation
-│   │   ├── Volume.cpp
-│   │   ├── Structure.hpp          # ROI/Structure definition
-│   │   ├── Structure.cpp
-│   │   ├── StructureSet.hpp       # Collection of structures
-│   │   └── StructureSet.cpp
+│   │   ├── Grid.hpp               # 3D dose grid
+│   │   ├── Volume.hpp             # Templated 3D volume
+│   │   ├── Structure.hpp          # ROI with contours
+│   │   └── StructureSet.hpp       # Collection of structures
 │   │
 │   ├── dose/                      # Dose calculation engines
-│   │   ├── CMakeLists.txt
-│   │   ├── Dose.hpp               # Dose module header
-│   │   ├── IDoseEngine.hpp        # Abstract dose engine interface
-│   │   ├── DoseEngineFactory.hpp  # Factory for dose engines
-│   │   ├── DoseEngineFactory.cpp
-│   │   ├── DoseMatrix.hpp         # Dose matrix container
-│   │   ├── DoseMatrix.cpp
-│   │   ├── DoseInfluenceMatrix.hpp # Dij matrix for optimization
-│   │   ├── DoseInfluenceMatrix.cpp
-│   │   │
-│   │   └── engines/               # Concrete dose engine implementations
-│   │       ├── PencilBeamEngine.hpp
-│   │       └── PencilBeamEngine.cpp
-│   │   │
-│   │   └── kernels/               # Dose kernels and data
-│   │       ├── Kernel.hpp
-│   │       ├── PhotonKernel.cpp
-│   │       └── ProtonKernel.cpp
+│   │   ├── IDoseEngine.hpp        # Abstract dose engine
+│   │   ├── DoseInfluenceMatrix.hpp # Dij matrix (sparse)
+│   │   └── engines/               # Concrete implementations
+│   │       └── PencilBeamEngine.hpp
 │   │
 │   ├── optimization/              # Optimization module
-│   │   ├── CMakeLists.txt
-│   │   ├── Optimization.hpp       # Optimization module header
-│   │   ├── IOptimizer.hpp         # Abstract optimizer interface
-│   │   ├── OptimizerFactory.hpp   # Factory for optimizers
-│   │   ├── OptimizerFactory.cpp
-│   │   ├── ObjectiveFunction.hpp  # Base objective function
-│   │   ├── ObjectiveFunction.cpp
-│   │   ├── Constraint.hpp         # Constraint definitions
-│   │   ├── Constraint.cpp
-│   │   │
+│   │   ├── IOptimizer.hpp         # Abstract optimizer
+│   │   ├── ObjectiveFunction.hpp  # Base objective
 │   │   ├── objectives/            # Concrete objectives
 │   │   │   ├── SquaredDeviation.hpp
-│   │   │   ├── SquaredDeviation.cpp
 │   │   │   ├── SquaredOverdose.hpp
-│   │   │   ├── SquaredOverdose.cpp
-│   │   │   ├── SquaredUnderdose.hpp
-│   │   │   ├── SquaredUnderdose.cpp
-│   │   │   ├── DVHObjective.hpp
-│   │   │   ├── DVHObjective.cpp
-│   │   │   ├── EUDObjective.hpp
-│   │   │   └── EUDObjective.cpp
-│   │   │
-│   │   └── optimizers/            # Concrete optimizer implementations
-│   │       ├── LBFGSOptimizer.hpp
-│   │       └── LBFGSOptimizer.cpp
+│   │   │   └── SquaredUnderdose.hpp
+│   │   └── optimizers/            # Concrete optimizers
+│   │       └── LBFGSOptimizer.hpp # L-BFGS-B implementation
 │   │
-│   ├── gui/                       # Graphical User Interface (Dear ImGui)
-│   │   ├── CMakeLists.txt
-│   │   ├── GUI.hpp                # GUI module header
-│   │   ├── Application.hpp        # Main application class
-│   │   ├── Application.cpp
-│   │   ├── Window.hpp             # GLFW/SDL window wrapper
-│   │   ├── Window.cpp
-│   │   ├── Renderer.hpp           # OpenGL/Vulkan renderer
-│   │   ├── Renderer.cpp
-│   │   │
-│   │   ├── panels/                # ImGui panels/windows
-│   │   │   ├── IPanel.hpp         # Abstract panel interface
-│   │   │   ├── PatientPanel.hpp   # Patient info & structure list
-│   │   │   ├── PatientPanel.cpp
-│   │   │   ├── BeamPanel.hpp      # Beam configuration
-│   │   │   ├── BeamPanel.cpp
-│   │   │   ├── OptimizationPanel.hpp  # Objectives & constraints
-│   │   │   ├── OptimizationPanel.cpp
-│   │   │   ├── DoseStatsPanel.hpp # DVH, dose statistics
-│   │   │   ├── DoseStatsPanel.cpp
-│   │   │   ├── LogPanel.hpp       # Log/console output
-│   │   │   └── LogPanel.cpp
-│   │   │
-│   │   ├── views/                 # 2D/3D visualization views
-│   │   │   ├── IView.hpp          # Abstract view interface
-│   │   │   ├── SliceView.hpp      # Axial/Sagittal/Coronal CT slices
-│   │   │   ├── SliceView.cpp
-│   │   │   ├── View3D.hpp         # 3D volume rendering / BEV
-│   │   │   ├── View3D.cpp
-│   │   │   ├── DVHView.hpp        # DVH plot (ImPlot)
-│   │   │   ├── DVHView.cpp
-│   │   │   ├── DoseProfileView.hpp # Dose profile curves
-│   │   │   └── DoseProfileView.cpp
-│   │   │
-│   │   ├── widgets/               # Reusable ImGui widgets
-│   │   │   ├── ColorMapWidget.hpp # Dose colormap selector
-│   │   │   ├── SliderWidget.hpp   # Custom sliders
-│   │   │   └── TransferFunctionWidget.hpp
-│   │   │
-│   │   └── rendering/             # OpenGL rendering utilities
-│   │       ├── Shader.hpp         # Shader management
-│   │       ├── Shader.cpp
-│   │       ├── Texture.hpp        # CT/Dose textures
-│   │       ├── Texture.cpp
-│   │       ├── VolumeRenderer.hpp # 3D volume rendering
-│   │       ├── VolumeRenderer.cpp
-│   │       ├── SliceRenderer.hpp  # 2D slice rendering
-│   │       └── SliceRenderer.cpp
+│   ├── gui/                       # Graphical User Interface
+│   │   ├── Application.hpp        # Main GUI application
+│   │   ├── panels/                # UI panels
+│   │   │   ├── PatientPanel.hpp   # Patient info & structures
+│   │   │   └── OptimizationPanel.hpp
+│   │   └── views/                 # Visualization views
+│   │       ├── SliceView.hpp      # 2D slice rendering
+│   │       └── DVHView.hpp        # DVH plots
 │   │
-│   └── utils/                     # Utilities and helpers
-│       ├── CMakeLists.txt
-│       ├── Utils.hpp              # Utils module header
+│   └── utils/                     # Utilities
 │       ├── Logger.hpp             # Logging system
-│       ├── Logger.cpp
-│       ├── Config.hpp             # Configuration management
-│       ├── Config.cpp
-│       ├── Timer.hpp              # Performance timing
-│       ├── Timer.cpp
-│       ├── MathUtils.hpp          # Math helpers
-│       ├── MathUtils.cpp
-│       ├── Interpolation.hpp      # Interpolation functions
-│       └── Interpolation.cpp
+│       └── MathUtils.hpp          # Math helpers
 │
-├── include/                       # Public headers (optional, for library use)
-│   └── optirad/
-│       └── OptiRad.hpp            # Main include header
-│
-├── apps/                          # Applications / executables
-│   ├── CMakeLists.txt
+├── apps/                          # Applications
 │   ├── optirad_cli/               # CLI application
-│   │   ├── CMakeLists.txt
 │   │   └── main.cpp
 │   └── optirad_gui/               # GUI application
-│       ├── CMakeLists.txt
 │       └── main.cpp
 │
-├── tests/                         # Unit and integration tests
-│   ├── CMakeLists.txt
-│   ├── core/
-│   ├── io/
-│   ├── geometry/
-│   ├── dose/
-│   └── optimization/
+├── tests/                         # Unit tests
+│   ├── io/test_dicom_importer.cpp
+│   └── optimization/test_lbfgs_optimizer.cpp
 │
-├── external/                      # Third-party dependencies (submodules/vendored)
-│   ├── CMakeLists.txt
-│   ├── eigen/                     # Linear algebra (header-only)
-│   ├── spdlog/                    # Logging
-│   ├── nlohmann_json/             # JSON parsing
-│   └── dcmtk/                     # DICOM toolkit
+├── external/                      # Third-party dependencies
+│   └── imgui/                     # Dear ImGui (auto-downloaded)
 │
-├── data/                          # Sample data and resources
-│   ├── machines/                  # Machine definition files
-│   ├── kernels/                   # Dose kernels
-│   └── test_data/                 # Test datasets
-│
-└── scripts/                       # Build and utility scripts
-    ├── build.sh
-    └── run_tests.sh
+└── scripts/                       # Build scripts
+    └── setup_gui.sh               # Setup OpenGL + ImGui
 ```
 
 ## Key Design Principles
@@ -218,9 +263,9 @@ optirad/
 ### 4. **Modern C++ (C++17/20)**
 - Smart pointers (`std::unique_ptr`, `std::shared_ptr`)
 - `std::optional`, `std::variant` for type safety
-- Concepts (C++20) for template constraints
+- Templates for generic containers (`Volume<T>`)
 
-## Recommended External Libraries
+## External Libraries
 
 | Library | Purpose | License |
 |---------|---------|---------|
@@ -232,19 +277,4 @@ optirad/
 | Dear ImGui | Immediate mode GUI | MIT |
 | ImPlot | Plotting for ImGui | MIT |
 | GLFW | Window/input management | Zlib |
-| glad/glew | OpenGL loader | MIT |
-
-## Getting Started
-
-```bash
-# Clone and setup
-git clone <repository>
-cd optirad
-mkdir build && cd build
-
-# Configure and build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j$(nproc)
-
-# Run tests
-ctest --output-on-failure
+| OpenGL | Graphics rendering | - |

@@ -79,25 +79,53 @@ void PatientPanel::renderImportDialog() {
 void PatientPanel::renderPatientInfo() {
     if (!m_patientData) return;
     
-    ImGui::Text("Patient Information");
-    ImGui::Indent();
-    
-    if (auto* patient = m_patientData->getPatient()) {
-        ImGui::Text("Name: %s", patient->getName().c_str());
-        ImGui::Text("ID:   %s", patient->getID().c_str());
+    if (ImGui::CollapsingHeader("Patient Information", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Indent();
+        
+        if (auto* patient = m_patientData->getPatient()) {
+            ImGui::Text("Name: %s", patient->getName().c_str());
+            ImGui::Text("ID:   %s", patient->getID().c_str());
+        }
+        
+        ImGui::Unindent();
     }
     
     if (auto* ct = m_patientData->getCTVolume()) {
-        auto dims = ct->getGrid().getDimensions();
-        auto spacing = ct->getGrid().getSpacing();
-        
-        ImGui::Text("CT Volume:");
-        ImGui::Text("  Dimensions: %zux%zux%zu", dims[0], dims[1], dims[2]);
-        ImGui::Text("  Spacing: %.2fx%.2fx%.2f mm", spacing[0], spacing[1], spacing[2]);
-        ImGui::Text("  Voxels: %zu", ct->size());
+        if (ImGui::CollapsingHeader("CT Volume", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Indent();
+            
+            const auto& grid = ct->getGrid();
+            auto dims = grid.getDimensions();
+            auto spacing = grid.getSpacing();
+            auto origin = grid.getOrigin();
+            
+            ImGui::Text("Dimensions: %zu x %zu x %zu", dims[0], dims[1], dims[2]);
+            ImGui::Text("Spacing: %.2f x %.2f x %.2f mm", spacing[0], spacing[1], spacing[2]);
+            ImGui::Text("Origin: (%.1f, %.1f, %.1f) mm", origin[0], origin[1], origin[2]);
+            ImGui::Text("Total Voxels: %zu", ct->size());
+            
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Text("Geometric Information:");
+            
+            ImGui::BulletText("Patient Position: %s", grid.getPatientPosition().c_str());
+            ImGui::BulletText("Slice Thickness: %.2f mm", grid.getSliceThickness());
+            
+            auto orient = grid.getImageOrientation();
+            ImGui::BulletText("Image Orientation (Row): [%.3f, %.3f, %.3f]", 
+                             orient[0], orient[1], orient[2]);
+            ImGui::BulletText("Image Orientation (Col): [%.3f, %.3f, %.3f]", 
+                             orient[3], orient[4], orient[5]);
+            
+            // Calculate and show slice normal (cross product)
+            double nx = orient[1]*orient[5] - orient[2]*orient[4];
+            double ny = orient[2]*orient[3] - orient[0]*orient[5];
+            double nz = orient[0]*orient[4] - orient[1]*orient[3];
+            ImGui::BulletText("Slice Normal: [%.3f, %.3f, %.3f]", nx, ny, nz);
+            
+            ImGui::Unindent();
+        }
     }
-    
-    ImGui::Unindent();
 }
 
 void PatientPanel::renderStructureList() {
