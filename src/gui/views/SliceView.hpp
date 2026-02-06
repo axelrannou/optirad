@@ -30,6 +30,7 @@ private:
     void updateTexture();
     void renderControls();
     void renderSlice();
+    void renderContours();
     
     PatientData* m_patientData = nullptr;
     SliceOrientation m_orientation;
@@ -50,6 +51,10 @@ private:
     // Physical dimensions for aspect ratio correction
     double m_physicalWidth = 1.0;   // mm
     double m_physicalHeight = 1.0;  // mm
+    
+    // Contour display settings
+    float m_contourThickness = 2.0f;
+    bool m_showContours = true;
 };
 
 } // namespace optirad

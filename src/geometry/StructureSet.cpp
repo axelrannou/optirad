@@ -1,4 +1,6 @@
 #include "StructureSet.hpp"
+#include "Grid.hpp"
+#include <algorithm>
 
 namespace optirad {
 

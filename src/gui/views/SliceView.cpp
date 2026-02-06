@@ -186,6 +186,14 @@ void SliceView::renderControls() {
         }
     }
     
+    // Contour display toggle
+    ImGui::Checkbox("Show Contours", &m_showContours);
+    ImGui::SameLine();
+    if (m_showContours) {
+        ImGui::SetNextItemWidth(100);
+        ImGui::SliderFloat("Contour Thickness", &m_contourThickness, 0.5f, 5.0f);
+    }
+    
     // Window/Level controls
     if (ImGui::SliderInt("Window Width", &m_windowWidth, 1, 2000)) {
         m_needsUpdate = true;
@@ -319,12 +327,92 @@ void SliceView::renderSlice() {
     
     // Center the image
     ImVec2 cursor = ImGui::GetCursorPos();
-    ImGui::SetCursorPos(ImVec2(cursor.x + (avail.x - displayWidth) * 0.5f,
-                               cursor.y + (avail.y - displayHeight) * 0.5f));
+    ImVec2 imagePos = ImVec2(cursor.x + (avail.x - displayWidth) * 0.5f,
+                             cursor.y + (avail.y - displayHeight) * 0.5f);
+    ImGui::SetCursorPos(imagePos);
+    
+    // Store image bounds for contour rendering
+    ImVec2 imageMin = ImGui::GetCursorScreenPos();
+    ImVec2 imageMax = ImVec2(imageMin.x + displayWidth, imageMin.y + displayHeight);
     
     // Display texture
     ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(m_textureID)),
                 ImVec2(displayWidth, displayHeight));
+    
+    // Overlay contours if enabled
+    if (m_showContours && m_patientData && m_patientData->getStructureSet()) {
+        renderContours();
+    }
+}
+
+void SliceView::renderContours()
+{
+    // Only render contours for Axial view
+    // RT-STRUCT contours are natively axial (constant Z per contour)
+    if (m_orientation != SliceOrientation::Axial) {
+        return;
+    }
+    
+    auto* structures = m_patientData->getStructureSet();
+    if (!structures) return;
+
+    const auto& grid = m_patientData->getCTVolume()->getGrid();
+    auto dims = grid.getDimensions();
+
+    ImVec2 imageMin = ImGui::GetItemRectMin();
+    ImVec2 imageMax = ImGui::GetItemRectMax();
+    ImVec2 imageSize = ImVec2(imageMax.x - imageMin.x, imageMax.y - imageMin.y);
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    double sliceIndexVoxel = (double)m_currentSlice;
+    constexpr double sliceTol = 0.5;
+
+    for (size_t si = 0; si < structures->getCount(); ++si) {
+        const auto* structure = structures->getStructure(si);
+        if (!structure || !structure->isVisible()) continue;
+
+        auto c = structure->getColor();
+        ImU32 imColor = IM_COL32(c[0], c[1], c[2], 255);
+
+        for (const auto& contour : structure->getContours()) {
+            if (contour.points.size() < 2) continue;
+
+            // Convert contour points to voxel space
+            std::vector<Vec3> vox;
+            vox.reserve(contour.points.size());
+            for (const auto& p : contour.points) {
+                vox.push_back(grid.patientToVoxel({p[0], p[1], p[2]}));
+            }
+
+            // Check if contour is on current slice
+            double z = vox[0][2];
+            if (std::abs(z - sliceIndexVoxel) > sliceTol)
+                continue;
+
+            // Project to screen coordinates
+            std::vector<ImVec2> poly;
+            for (const auto& v : vox) {
+                double u = v[0] / dims[0];
+                double w = v[1] / dims[1];
+
+                poly.push_back({
+                    imageMin.x + (float)(u * imageSize.x),
+                    imageMin.y + (float)(w * imageSize.y)
+                });
+            }
+
+            if (poly.size() >= 2) {
+                drawList->AddPolyline(
+                    poly.data(),
+                    (int)poly.size(),
+                    imColor,
+                    ImDrawFlags_Closed,
+                    m_contourThickness
+                );
+            }
+        }
+    }
 }
 
 void SliceView::update() {
