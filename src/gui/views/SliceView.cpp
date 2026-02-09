@@ -31,6 +31,11 @@ void SliceView::resize(int width, int height) {
 }
 
 void SliceView::setPatientData(PatientData* data) {
+    // Only reset slices if this is new data
+    if (m_patientData == data) {
+        return;
+    }
+    
     m_patientData = data;
     
     if (m_patientData && m_patientData->getCTVolume()) {
@@ -42,7 +47,6 @@ void SliceView::setPatientData(PatientData* data) {
                 m_maxSlice = dims[2] - 1;
                 m_textureWidth = dims[0];
                 m_textureHeight = dims[1];
-                // Physical size in mm
                 m_physicalWidth = dims[0] * spacing[0];
                 m_physicalHeight = dims[1] * spacing[1];
                 break;
@@ -51,7 +55,6 @@ void SliceView::setPatientData(PatientData* data) {
                 m_maxSlice = dims[0] - 1;
                 m_textureWidth = dims[1];
                 m_textureHeight = dims[2];
-                // Physical size: width = Y-direction, height = Z-direction
                 m_physicalWidth = dims[1] * spacing[1];
                 m_physicalHeight = dims[2] * spacing[2];
                 break;
@@ -60,7 +63,6 @@ void SliceView::setPatientData(PatientData* data) {
                 m_maxSlice = dims[1] - 1;
                 m_textureWidth = dims[0];
                 m_textureHeight = dims[2];
-                // Physical size: width = X-direction, height = Z-direction
                 m_physicalWidth = dims[0] * spacing[0];
                 m_physicalHeight = dims[2] * spacing[2];
                 break;

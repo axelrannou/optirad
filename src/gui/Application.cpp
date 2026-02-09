@@ -1,12 +1,12 @@
 #include "Application.hpp"
 #include "panels/PatientPanel.hpp"
 #include "views/SliceView.hpp"
+#include "views/View3D.hpp"
 #include "utils/Logger.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
-#include <GL/gl.h>
 
 namespace optirad {
 
@@ -23,6 +23,7 @@ bool Application::init() {
     // Create window
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     m_window = glfwCreateWindow(1920, 1080, "OptiRad TPS", nullptr, nullptr);
     if (!m_window) {
         Logger::error("Failed to create GLFW window");
@@ -32,6 +33,13 @@ bool Application::init() {
     
     glfwMakeContextCurrent(m_window);
     glfwSwapInterval(1); // VSync
+
+    // Initialize GLEW
+    glewExperimental = GL_TRUE;
+    if (glewInit() != GLEW_OK) {
+        Logger::error("Failed to initialize GLEW");
+        return false;
+    }
     
     // Initialize ImGui
     IMGUI_CHECKVERSION();
@@ -40,6 +48,19 @@ bool Application::init() {
     
     ImGui_ImplGlfw_InitForOpenGL(m_window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
+    
+    // Create 3D view
+    m_view3D = std::make_unique<View3D>();
+    m_view3D->init();
+    
+    // Set up scroll callback for 3D view zoom
+    glfwSetWindowUserPointer(m_window, m_view3D.get());
+    glfwSetScrollCallback(m_window, [](GLFWwindow* win, double xOffset, double yOffset) {
+        auto* view = static_cast<View3D*>(glfwGetWindowUserPointer(win));
+        if (view && !ImGui::GetIO().WantCaptureMouse) {
+            view->handleScroll(yOffset);
+        }
+    });
     
     // Create panels
     m_patientPanel = std::make_unique<PatientPanel>();
@@ -56,7 +77,20 @@ void Application::run() {
     while (!glfwWindowShouldClose(m_window)) {
         glfwPollEvents();
         
-        // Start ImGui frame
+        // Handle 3D view mouse input BEFORE ImGui frame
+        m_view3D->handleMouseInput(m_window);
+        
+        // Clear buffers
+        int display_w, display_h;
+        glfwGetFramebufferSize(m_window, &display_w, &display_h);
+        glViewport(0, 0, display_w, display_h);
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        
+        // Render 3D view
+        m_view3D->render();
+        
+        // Start ImGui frame (renders on top of 3D scene)
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -82,10 +116,6 @@ void Application::run() {
         
         // Render ImGui
         ImGui::Render();
-        int display_w, display_h;
-        glfwGetFramebufferSize(m_window, &display_w, &display_h);
-        glViewport(0, 0, display_w, display_h);
-        glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         
         glfwSwapBuffers(m_window);
@@ -93,6 +123,11 @@ void Application::run() {
 }
 
 void Application::shutdown() {
+    // Cleanup 3D view
+    if (m_view3D) {
+        m_view3D->cleanup();
+    }
+    
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
