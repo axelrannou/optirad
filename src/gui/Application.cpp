@@ -77,7 +77,6 @@ void Application::run() {
     while (!glfwWindowShouldClose(m_window)) {
         glfwPollEvents();
         
-        // Handle 3D view mouse input BEFORE ImGui frame
         m_view3D->handleMouseInput(m_window);
         
         // Clear buffers
@@ -86,6 +85,15 @@ void Application::run() {
         glViewport(0, 0, display_w, display_h);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        
+        // Update 3D view with patient data
+        if (m_patientPanel->hasData()) {
+            auto* data = m_patientPanel->getPatientData();
+            m_view3D->setPatientData(data);
+            m_axialView->setPatientData(data);
+            m_sagittalView->setPatientData(data);
+            m_coronalView->setPatientData(data);
+        }
         
         // Render 3D view
         m_view3D->render();
@@ -100,14 +108,6 @@ void Application::run() {
         
         // Render panels
         m_patientPanel->render();
-        
-        // Update views if patient data changed
-        if (m_patientPanel->hasData()) {
-            auto* data = m_patientPanel->getPatientData();
-            m_axialView->setPatientData(data);
-            m_sagittalView->setPatientData(data);
-            m_coronalView->setPatientData(data);
-        }
         
         // Render views
         m_axialView->render();

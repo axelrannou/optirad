@@ -45,6 +45,8 @@ add_library(optirad_gui
     views/View3D.cpp
     views/renderers/CubeRenderer.cpp
     views/renderers/AxisLabels.cpp
+    views/renderers/VolumeRenderer.cpp
+    views/renderers/StructureRenderer.cpp
 )
 
 target_include_directories(optirad_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

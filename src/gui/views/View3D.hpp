@@ -7,6 +7,8 @@
 
 namespace optirad {
 
+class PatientData;
+
 class View3D {
 public:
     View3D();
@@ -16,11 +18,10 @@ public:
     void render();
     void cleanup();
     
-    // Handle mouse input for rotation (call before ImGui frame)
     void handleMouseInput(GLFWwindow* window);
-    
-    // Call this to handle scroll events
     void handleScroll(double yOffset);
+    
+    void setPatientData(PatientData* data);
 
 private:
     struct Impl;

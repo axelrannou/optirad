@@ -1,6 +1,9 @@
 #include "View3D.hpp"
 #include "renderers/CubeRenderer.hpp"
 #include "renderers/AxisLabels.hpp"
+#include "renderers/VolumeRenderer.hpp"
+#include "renderers/StructureRenderer.hpp"
+#include "core/PatientData.hpp"
 #include <imgui.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -10,10 +13,11 @@
 
 namespace optirad {
 
-// Use pimpl pattern to hide renderer details
 struct View3D::Impl {
     std::unique_ptr<CubeRenderer> cubeRenderer;
     std::unique_ptr<AxisLabels> axisLabels;
+    std::unique_ptr<VolumeRenderer> volumeRenderer;
+    std::unique_ptr<StructureRenderer> structureRenderer;
 };
 
 View3D::View3D() : m_impl(std::make_unique<Impl>()) {}
@@ -28,6 +32,12 @@ void View3D::init() {
     
     m_impl->axisLabels = std::make_unique<AxisLabels>();
     m_impl->axisLabels->init();
+    
+    m_impl->volumeRenderer = std::make_unique<VolumeRenderer>();
+    m_impl->volumeRenderer->init();
+    
+    m_impl->structureRenderer = std::make_unique<StructureRenderer>();
+    m_impl->structureRenderer->init();
 }
 
 void View3D::handleScroll(double yOffset) {
@@ -86,8 +96,18 @@ void View3D::handleMouseInput(GLFWwindow* window) {
     m_middleMousePressed = middlePressed;
 }
 
+void View3D::setPatientData(PatientData* data) {
+    if (!m_impl->volumeRenderer) return;
+    m_impl->volumeRenderer->setPatientData(data);
+    m_impl->structureRenderer->setPatientData(data);
+    
+    // Adjust camera to fit volume when data is first loaded
+    if (data && data->getCTVolume() && m_cameraDistance < 2.0f) {
+        m_cameraDistance = 3.0f;
+    }
+}
+
 void View3D::render() {
-    // Calculate camera matrices
     float cosPitch = std::cos(m_pitch), sinPitch = std::sin(m_pitch);
     float cosYaw = std::cos(m_yaw), sinYaw = std::sin(m_yaw);
     
@@ -103,7 +123,13 @@ void View3D::render() {
     float aspect = static_cast<float>(m_viewportWidth) / static_cast<float>(std::max(m_viewportHeight, 1));
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
     
-    // Render components
+    // Render volume first (optional, can disable)
+    // m_impl->volumeRenderer->render(view, projection, cameraPos);
+    
+    // Render structures (semi-transparent)
+    m_impl->structureRenderer->render(view, projection);
+    
+    // Render orientation cube and labels on top
     m_impl->cubeRenderer->render(view, projection);
     m_impl->axisLabels->render(view, projection);
 }
@@ -111,6 +137,7 @@ void View3D::render() {
 void View3D::cleanup() {
     m_impl->cubeRenderer->cleanup();
     m_impl->axisLabels->cleanup();
+    m_impl->volumeRenderer->cleanup();
+    m_impl->structureRenderer->cleanup();
 }
-
 }
