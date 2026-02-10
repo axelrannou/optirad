@@ -1,6 +1,6 @@
 #pragma once
 
-#include "MathUtils.hpp"
+#include "MathUtils.hpp"  // Local, not utils/MathUtils.hpp
 #include <array>
 #include <cstddef>
 #include <string>
@@ -15,7 +15,10 @@ public:
     
     // DICOM geometric info
     void setPatientPosition(const std::string& pos) { m_patientPosition = pos; }
-    void setImageOrientation(const std::array<double, 6>& orient) { m_imageOrientation = orient; }
+    void setImageOrientation(const std::array<double, 6>& orient) { 
+        m_imageOrientation = orient; 
+        m_matricesDirty = true;
+    }
     void setSliceThickness(double thickness) { m_sliceThickness = thickness; }
 
     std::array<size_t, 3> getDimensions() const;
@@ -26,16 +29,37 @@ public:
     const std::string& getPatientPosition() const { return m_patientPosition; }
     const std::array<double, 6>& getImageOrientation() const { return m_imageOrientation; }
     double getSliceThickness() const { return m_sliceThickness; }
+    
+    // Coordinate transforms
+    Vec3 voxelToPatient(const Vec3& ijk) const;
+    Vec3 patientToVoxel(const Vec3& lps) const;
+    
+    // Direction accessors
+    Vec3 getRowDirection() const;
+    Vec3 getColumnDirection() const;
+    Vec3 getSliceDirection() const;
 
 private:
+    void updateMatricesIfNeeded() const;
+    
     std::array<size_t, 3> m_dimensions = {0, 0, 0};
     Vec3 m_spacing = {1.0, 1.0, 1.0};
     Vec3 m_origin = {0.0, 0.0, 0.0};
     
     // DICOM patient coordinate system
-    std::string m_patientPosition = "HFS";  // Head First Supine (default)
-    std::array<double, 6> m_imageOrientation = {1, 0, 0, 0, 1, 0};  // Row, Column direction cosines
-    double m_sliceThickness = 0.0;  // May differ from spacing[2]
+    std::string m_patientPosition = "HFS";
+    std::array<double, 6> m_imageOrientation = {1, 0, 0, 0, 1, 0};
+    double m_sliceThickness = 0.0;
+    
+    // Direction cosines (cached)
+    mutable Vec3 m_rowDir{1, 0, 0};
+    mutable Vec3 m_colDir{0, 1, 0};
+    mutable Vec3 m_sliceDir{0, 0, 1};
+    
+    // Cached matrices
+    mutable Mat3 m_directionMatrix;
+    mutable Mat3 m_inverseDirectionMatrix;
+    mutable bool m_matricesDirty = true;
 };
 
 } // namespace optirad

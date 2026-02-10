@@ -1,6 +1,7 @@
 # Check if OpenGL and GLFW are available
 find_package(OpenGL)
 find_package(glfw3)
+find_package(GLEW REQUIRED)
 
 if(NOT OpenGL_FOUND OR NOT glfw3_FOUND)
     message(WARNING "OpenGL or GLFW not found. GUI will not be built.")
@@ -41,6 +42,11 @@ add_library(optirad_gui
     panels/LogPanel.cpp
     views/SliceView.cpp
     views/DVHView.cpp
+    views/View3D.cpp
+    views/renderers/CubeRenderer.cpp
+    views/renderers/AxisLabels.cpp
+    views/renderers/VolumeRenderer.cpp
+    views/renderers/StructureRenderer.cpp
 )
 
 target_include_directories(optirad_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -53,6 +59,7 @@ target_link_libraries(optirad_gui PUBLIC
     imgui
     OpenGL::GL
     glfw
+    GLEW::GLEW
 )
 
 message(STATUS "GUI library will be built with Dear ImGui")

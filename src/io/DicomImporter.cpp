@@ -1,13 +1,12 @@
 #include "DicomImporter.hpp"
+#include "RTStructParser.hpp"
 #include "core/Patient.hpp"
 #include "core/PatientData.hpp"
 #include "geometry/StructureSet.hpp"
-#include "geometry/Structure.hpp"
 #include "geometry/Volume.hpp"
 #include "geometry/Grid.hpp"
 #include "utils/Logger.hpp"
 #include <algorithm>
-#include <map>
 
 #ifdef OPTIRAD_HAS_DCMTK
 #include <dcmtk/dcmdata/dctk.h>
@@ -219,194 +218,13 @@ std::unique_ptr<Volume<int16_t>> DicomImporter::importCTVolume() {
 }
 
 std::unique_ptr<StructureSet> DicomImporter::importStructuresWithContours() {
-#ifdef OPTIRAD_HAS_DCMTK
     if (m_rtStructFile.empty()) {
         Logger::warn("No RT Structure Set file found");
         return nullptr;
     }
     
-    auto structures = std::make_unique<StructureSet>();
-    
-    DcmFileFormat fileFormat;
-    if (!fileFormat.loadFile(m_rtStructFile.c_str()).good()) {
-        Logger::error("Failed to load RT Structure Set");
-        return nullptr;
-    }
-    
-    DcmDataset* dataset = fileFormat.getDataset();
-    
-    // Build ROI number to name mapping from StructureSetROISequence
-    std::map<int, std::string> roiNames;
-    DcmSequenceOfItems* roiSequence = nullptr;
-    if (dataset->findAndGetSequence(DCM_StructureSetROISequence, roiSequence).good()) {
-        Logger::info("Found " + std::to_string(roiSequence->card()) + " ROIs in StructureSetROISequence");
-        for (unsigned long i = 0; i < roiSequence->card(); ++i) {
-            DcmItem* item = roiSequence->getItem(i);
-            if (!item) continue;
-            
-            OFString roiName;
-            Sint32 roiNumber = 0;
-            item->findAndGetOFString(DCM_ROIName, roiName);
-            item->findAndGetSint32(DCM_ROINumber, roiNumber);
-            roiNames[roiNumber] = roiName.c_str();
-        }
-    } else {
-        Logger::warn("No StructureSetROISequence found");
-        return structures;
-    }
-    
-    // Read ROI contour data from ROIContourSequence
-    DcmSequenceOfItems* contourSequence = nullptr;
-    if (!dataset->findAndGetSequence(DCM_ROIContourSequence, contourSequence).good()) {
-        Logger::warn("No ROIContourSequence found - structures will have no geometry");
-        return structures;
-    }
-    
-    Logger::info("Found " + std::to_string(contourSequence->card()) + " items in ROIContourSequence");
-    
-    for (unsigned long i = 0; i < contourSequence->card(); ++i) {
-        DcmItem* roiContourItem = contourSequence->getItem(i);
-        if (!roiContourItem) continue;
-        
-        Sint32 refROINumber = 0;
-        roiContourItem->findAndGetSint32(DCM_ReferencedROINumber, refROINumber);
-        
-        auto structure = std::make_unique<Structure>();
-        structure->setROINumber(refROINumber);
-        structure->setName(roiNames.count(refROINumber) ? roiNames[refROINumber] : "Unknown");
-        
-        // Get color from ROI Display Color
-        const Uint16* colorData = nullptr;
-        unsigned long colorCount = 0;
-        if (roiContourItem->findAndGetUint16Array(DCM_ROIDisplayColor, colorData, &colorCount).good() && colorCount >= 3) {
-            structure->setColor(
-                static_cast<uint8_t>(std::min(colorData[0], (Uint16)255)),
-                static_cast<uint8_t>(std::min(colorData[1], (Uint16)255)),
-                static_cast<uint8_t>(std::min(colorData[2], (Uint16)255))
-            );
-        }
-        
-        // Determine type from name
-        std::string name = structure->getName();
-        std::string upperName = name;
-        std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
-        
-        if (upperName.find("PTV") != std::string::npos || 
-            upperName.find("GTV") != std::string::npos ||
-            upperName.find("CTV") != std::string::npos) {
-            structure->setType("TARGET");
-            structure->setPriority(1);
-        } else if (upperName.find("BODY") != std::string::npos ||
-                   upperName.find("EXTERNAL") != std::string::npos) {
-            structure->setType("EXTERNAL");
-            structure->setPriority(5);
-        } else {
-            structure->setType("OAR");
-            structure->setPriority(3);
-        }
-        
-        // Read contours from ContourSequence
-        DcmSequenceOfItems* contourSeq = nullptr;
-        OFCondition contourSeqStatus = roiContourItem->findAndGetSequence(DCM_ContourSequence, contourSeq);
-        
-        if (contourSeqStatus.good() && contourSeq) {
-            unsigned long numContours = contourSeq->card();
-            
-            for (unsigned long c = 0; c < numContours; ++c) {
-                DcmItem* contourItem = contourSeq->getItem(c);
-                if (!contourItem) continue;
-                
-                Contour contour;
-                
-                // Get number of contour points
-                Sint32 numPoints = 0;
-                contourItem->findAndGetSint32(DCM_NumberOfContourPoints, numPoints);
-                
-                // Try different methods to read contour data
-                bool success = false;
-                
-                // Method 1: Try Float64 array (DS - Decimal String stored as double)
-                const Float64* contourDataF64 = nullptr;
-                unsigned long dataCountF64 = 0;
-                if (contourItem->findAndGetFloat64Array(DCM_ContourData, contourDataF64, &dataCountF64).good() 
-                    && contourDataF64 && dataCountF64 >= 3) {
-                    
-                    size_t numCoords = dataCountF64 / 3;
-                    contour.points.reserve(numCoords);
-                    
-                    for (size_t p = 0; p < numCoords; ++p) {
-                        contour.points.push_back({
-                            contourDataF64[p * 3 + 0],
-                            contourDataF64[p * 3 + 1],
-                            contourDataF64[p * 3 + 2]
-                        });
-                    }
-                    success = true;
-                }
-                
-                // Method 2: Try reading as OFString array and parse
-                if (!success) {
-                    DcmElement* contourDataElem = nullptr;
-                    if (contourItem->findAndGetElement(DCM_ContourData, contourDataElem).good() && contourDataElem) {
-                        unsigned long count = contourDataElem->getVM();
-                        if (count >= 3 && (count % 3 == 0)) {
-                            contour.points.reserve(count / 3);
-                            
-                            for (unsigned long p = 0; p < count; p += 3) {
-                                OFString xStr, yStr, zStr;
-                                if (contourDataElem->getOFString(xStr, p).good() &&
-                                    contourDataElem->getOFString(yStr, p + 1).good() &&
-                                    contourDataElem->getOFString(zStr, p + 2).good()) {
-                                    
-                                    try {
-                                        double x = std::stod(xStr.c_str());
-                                        double y = std::stod(yStr.c_str());
-                                        double z = std::stod(zStr.c_str());
-                                        contour.points.push_back({x, y, z});
-                                        success = true;
-                                    } catch (const std::exception& e) {
-                                        Logger::warn("Failed to parse contour coordinate: " + std::string(e.what()));
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                if (success && !contour.points.empty()) {
-                    // Set Z position from first point
-                    contour.zPosition = contour.points[0][2];
-                    structure->addContour(contour);
-                } else if (numPoints > 0) {
-                    Logger::debug("Failed to read contour " + std::to_string(c) + 
-                                " for " + structure->getName() + 
-                                " (expected " + std::to_string(numPoints) + " points)");
-                }
-            }
-        } else {
-            Logger::warn("No ContourSequence for ROI " + structure->getName() + 
-                        " (status: " + std::string(contourSeqStatus.text()) + ")");
-        }
-        
-        if (structure->getContourCount() > 0) {
-            Logger::info("  - " + structure->getName() + 
-                        " (" + structure->getType() + 
-                        ", " + std::to_string(structure->getContourCount()) + " contours)");
-        } else {
-            Logger::warn("  - " + structure->getName() + 
-                        " (" + structure->getType() + 
-                        ", NO CONTOURS LOADED)");
-        }
-        
-        structures->addStructure(std::move(structure));
-    }
-    
-    return structures;
-#else
-    Logger::warn("DCMTK not available");
-    return nullptr;
-#endif
+    RTStructParser parser;
+    return parser.parse(m_rtStructFile.string());
 }
 
 void DicomImporter::sortCTFilesByPosition() {
