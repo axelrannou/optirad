@@ -18,8 +18,6 @@ const std::vector<std::array<uint8_t, 3>> RTStructParser::s_defaultColors = {
 
 std::unique_ptr<StructureSet> RTStructParser::parse(const std::string& filePath) {
 #ifdef OPTIRAD_HAS_DCMTK
-    auto structures = std::make_unique<StructureSet>();
-    
     DcmFileFormat fileFormat;
     if (!fileFormat.loadFile(filePath.c_str()).good()) {
         Logger::error("Failed to load RT Structure Set: " + filePath);
@@ -28,33 +26,37 @@ std::unique_ptr<StructureSet> RTStructParser::parse(const std::string& filePath)
     
     DcmDataset* dataset = fileFormat.getDataset();
     
-    // Extract ROI names
+    // Extract ROI names and metadata
     auto roiNames = extractROINames(dataset);
     if (roiNames.empty()) {
         Logger::warn("No ROI names found in RT-STRUCT");
-        return structures;
+        return std::make_unique<StructureSet>();
     }
     
     // Parse ROI contours
     DcmSequenceOfItems* contourSequence = nullptr;
     if (!dataset->findAndGetSequence(DCM_ROIContourSequence, contourSequence).good()) {
         Logger::warn("No ROIContourSequence found");
-        return structures;
+        return std::make_unique<StructureSet>();
     }
     
-    Logger::info("Parsing " + std::to_string(contourSequence->card()) + " structures");
+    Logger::info("Parsing " + std::to_string(contourSequence->card()) + " structures from RT-STRUCT");
+    
+    auto structureSet = std::make_unique<StructureSet>();
     
     for (unsigned long i = 0; i < contourSequence->card(); ++i) {
         DcmItem* roiContourItem = contourSequence->getItem(i);
         if (!roiContourItem) continue;
         
         auto structure = parseStructure(roiContourItem, roiNames, i);
-        if (structure && structure->getContourCount() > 0) {
-            structures->addStructure(std::move(structure));
+        if (structure) {
+            structureSet->addStructure(std::move(structure));
         }
     }
     
-    return structures;
+    Logger::info("Loaded " + std::to_string(structureSet->getCount()) + " structures");
+    
+    return structureSet;
 #else
     Logger::warn("DCMTK not available");
     return nullptr;
@@ -72,10 +74,10 @@ std::map<int, std::string> RTStructParser::extractROINames(void* datasetPtr) {
             DcmItem* item = roiSequence->getItem(i);
             if (!item) continue;
             
-            OFString roiName;
             Sint32 roiNumber = 0;
-            item->findAndGetOFString(DCM_ROIName, roiName);
+            OFString roiName;
             item->findAndGetSint32(DCM_ROINumber, roiNumber);
+            item->findAndGetOFString(DCM_ROIName, roiName);
             roiNames[roiNumber] = roiName.c_str();
         }
     }

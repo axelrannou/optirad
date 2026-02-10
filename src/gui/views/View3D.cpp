@@ -18,6 +18,7 @@ struct View3D::Impl {
     std::unique_ptr<AxisLabels> axisLabels;
     std::unique_ptr<VolumeRenderer> volumeRenderer;
     std::unique_ptr<StructureRenderer> structureRenderer;
+    PatientData* lastLoadedData = nullptr;
 };
 
 View3D::View3D() : m_impl(std::make_unique<Impl>()) {}
@@ -85,7 +86,7 @@ void View3D::handleMouseInput(GLFWwindow* window) {
     if (m_scrollOffset != 0.0) {
         const float zoomSpeed = 0.1f;
         m_cameraDistance -= static_cast<float>(m_scrollOffset) * zoomSpeed * m_cameraDistance;
-        m_cameraDistance = std::clamp(m_cameraDistance, 0.5f, 50.0f);
+        m_cameraDistance = std::clamp(m_cameraDistance, 0.01f, 50.0f);
         m_scrollOffset = 0.0;
     }
     
@@ -101,9 +102,10 @@ void View3D::setPatientData(PatientData* data) {
     m_impl->volumeRenderer->setPatientData(data);
     m_impl->structureRenderer->setPatientData(data);
     
-    // Adjust camera to fit volume when data is first loaded
-    if (data && data->getCTVolume() && m_cameraDistance < 2.0f) {
+    // Adjust camera to fit volume when data is first loaded (only once)
+    if (data && data->getCTVolume() && data != m_impl->lastLoadedData) {
         m_cameraDistance = 3.0f;
+        m_impl->lastLoadedData = data;
     }
 }
 
@@ -121,7 +123,7 @@ void View3D::render() {
     glm::mat4 view = glm::lookAt(cameraPos, m_target, glm::vec3(0.0f, 1.0f, 0.0f));
     
     float aspect = static_cast<float>(m_viewportWidth) / static_cast<float>(std::max(m_viewportHeight, 1));
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, 0.01f, 100.0f);
     
     // Render volume first (optional, can disable)
     // m_impl->volumeRenderer->render(view, projection, cameraPos);

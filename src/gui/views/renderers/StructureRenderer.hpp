@@ -29,6 +29,7 @@ private:
         size_t indexCount = 0;
         glm::vec3 color;
         bool visible = true;
+        glm::vec3 center;
     };
     
     PatientData* m_patientData = nullptr;
