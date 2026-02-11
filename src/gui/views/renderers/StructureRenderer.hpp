@@ -2,6 +2,7 @@
 #include <GL/glew.h>
 #include <glm/glm.hpp>
 #include <vector>
+#include <mutex>
 
 namespace optirad {
 
@@ -19,7 +20,8 @@ public:
     void setPatientData(PatientData* data);
 
 private:
-    void buildMeshes();
+    void buildMeshes();              // Public wrapper with mutex lock
+    void buildMeshes_unlocked();     // Internal implementation (requires m_meshMutex held)
     void tessellateStructure(size_t structureIndex);
     
     struct StructureMesh {
@@ -35,6 +37,8 @@ private:
     PatientData* m_patientData = nullptr;
     bool m_needsRebuild = false;
     
+    // Thread safety for mesh vector accessed from multiple threads
+    mutable std::mutex m_meshMutex;
     std::vector<StructureMesh> m_meshes;
     GLuint m_shaderProgram = 0;
 };

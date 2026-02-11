@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <memory>
+#include <mutex>
 
 namespace optirad {
 
@@ -36,7 +37,8 @@ private:
     float m_pitch = 0.3f;   // Vertical angle in radians
     glm::vec3 m_target = glm::vec3(0.0f);
     
-    // Mouse state
+    // Mouse state - protected with mutex for thread safety
+    mutable std::mutex m_mouseMutex;
     double m_lastMouseX = 0.0;
     double m_lastMouseY = 0.0;
     bool m_leftMousePressed = false;

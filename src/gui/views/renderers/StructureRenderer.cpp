@@ -359,6 +359,12 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
                 for (int c = 0; c < 8; ++c)
                     if (cornerVals[c] >= isovalue) cubeIndex |= (1 << c);
 
+                // Validate marching cubes index
+                if (cubeIndex < 0 || cubeIndex >= 256) {
+                    Logger::error("Invalid marching cubes index: " + std::to_string(cubeIndex));
+                    continue;
+                }
+
                 if (mc::edgeTable[cubeIndex] == 0) continue;
 
                 // Interpolate edge vertices
@@ -500,6 +506,13 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
 }
 
 void StructureRenderer::buildMeshes() {
+    std::lock_guard<std::mutex> lock(m_meshMutex);
+    buildMeshes_unlocked();
+}
+
+void StructureRenderer::buildMeshes_unlocked() {
+    // Called with m_meshMutex already held - no additional locking needed
+    
     for (auto& mesh : m_meshes) {
         if (mesh.vao) glDeleteVertexArrays(1, &mesh.vao);
         if (mesh.vbo) glDeleteBuffers(1, &mesh.vbo);
@@ -535,9 +548,11 @@ void StructureRenderer::buildMeshes() {
 }
 
 void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projection) {
+    std::lock_guard<std::mutex> lock(m_meshMutex);  // Synchronize with buildMeshes()
+    
     if (!m_patientData || !m_patientData->getStructureSet()) return;
 
-    if (m_needsRebuild) buildMeshes();
+    if (m_needsRebuild) buildMeshes_unlocked();
     if (m_meshes.empty()) return;
 
     auto* structures = m_patientData->getStructureSet();

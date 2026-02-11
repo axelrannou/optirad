@@ -39,6 +39,8 @@ bool Application::init() {
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) {
         Logger::error("Failed to initialize GLEW");
+        glfwDestroyWindow(m_window);
+        glfwTerminate();
         return false;
     }
 
@@ -49,8 +51,22 @@ bool Application::init() {
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
     
-    ImGui_ImplGlfw_InitForOpenGL(m_window, true);
-    ImGui_ImplOpenGL3_Init("#version 330");
+    if (!ImGui_ImplGlfw_InitForOpenGL(m_window, true)) {
+        Logger::error("Failed to initialize ImGui GLFW backend");
+        ImGui::DestroyContext();
+        glfwDestroyWindow(m_window);
+        glfwTerminate();
+        return false;
+    }
+    
+    if (!ImGui_ImplOpenGL3_Init("#version 330")) {
+        Logger::error("Failed to initialize ImGui OpenGL3 backend");
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        glfwDestroyWindow(m_window);
+        glfwTerminate();
+        return false;
+    }
     
     // Create 3D view
     m_view3D = std::make_unique<View3D>();
