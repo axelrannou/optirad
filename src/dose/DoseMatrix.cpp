@@ -21,10 +21,16 @@ const double& DoseMatrix::at(size_t i, size_t j, size_t k) const {
 }
 
 double DoseMatrix::getMax() const {
+    if (m_data.empty()) {
+        return 0.0;  // Return 0 for empty dose matrix
+    }
     return *std::max_element(m_data.begin(), m_data.end());
 }
 
 double DoseMatrix::getMean() const {
+    if (m_data.empty()) {
+        return 0.0;  // Return 0 for empty dose matrix
+    }
     return std::accumulate(m_data.begin(), m_data.end(), 0.0) / m_data.size();
 }
 

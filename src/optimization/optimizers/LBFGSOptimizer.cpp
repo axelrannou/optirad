@@ -351,7 +351,15 @@ double LBFGSOptimizer::lineSearch(
 }
 
 void LBFGSOptimizer::updateHistory(const std::vector<double>& s, const std::vector<double>& y) {
-    double rho = 1.0 / dot(y, s);
+    double sDotY = dot(y, s);
+    
+    // Check for zero curvature to prevent NaN propagation
+    if (std::abs(sDotY) < 1e-14) {
+        Logger::warn("Skipping BFGS update - zero curvature");
+        return;
+    }
+    
+    double rho = 1.0 / sDotY;
     
     if (m_currentMemorySize < m_memorySize) {
         m_sHistory.push_back(s);

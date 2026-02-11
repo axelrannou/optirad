@@ -20,6 +20,14 @@ void Structure::rasterizeContours(const Grid& ctGrid) {
     auto spacing = ctGrid.getSpacing();
     auto origin = ctGrid.getOrigin();
     
+    // Validate grid dimensions and spacing
+    if (dims[0] == 0 || dims[1] == 0 || dims[2] == 0) {
+        return;  // Invalid grid dimensions
+    }
+    if (std::abs(spacing[2]) < 1e-10) {
+        return;  // Invalid Z spacing
+    }
+    
     std::set<size_t> voxelSet; // Use set to avoid duplicates
     
     // Group contours by Z position (slice)
@@ -60,6 +68,11 @@ std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour,
     auto spacing = ctGrid.getSpacing();
     auto origin = ctGrid.getOrigin();
     
+    // Validate spacing to prevent division by zero
+    if (std::abs(spacing[0]) < 1e-10 || std::abs(spacing[1]) < 1e-10) {
+        return voxels;
+    }
+    
     // Find bounding box of contour
     double minX = contour.points[0][0], maxX = minX;
     double minY = contour.points[0][1], maxY = minY;
@@ -71,11 +84,16 @@ std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour,
         maxY = std::max(maxY, pt[1]);
     }
     
-    // Convert to voxel indices
+    // Convert to voxel indices with bounds validation
     int iMin = std::max(0, static_cast<int>((minX - origin[0]) / spacing[0]));
-    int iMax = std::min(static_cast<int>(dims[0]) - 1, static_cast<int>((maxX - origin[0]) / spacing[0]));
+    int iMax = static_cast<int>(dims[0]) > 0 ? std::min(static_cast<int>(dims[0]) - 1, static_cast<int>((maxX - origin[0]) / spacing[0])) : 0;
     int jMin = std::max(0, static_cast<int>((minY - origin[1]) / spacing[1]));
-    int jMax = std::min(static_cast<int>(dims[1]) - 1, static_cast<int>((maxY - origin[1]) / spacing[1]));
+    int jMax = static_cast<int>(dims[1]) > 0 ? std::min(static_cast<int>(dims[1]) - 1, static_cast<int>((maxY - origin[1]) / spacing[1])) : 0;
+    
+    // Early exit if bounds are invalid
+    if (iMin > iMax || jMin > jMax || dims[0] == 0 || dims[1] == 0) {
+        return voxels;
+    }
     
     // Scan each row
     for (int j = jMin; j <= jMax; ++j) {
@@ -110,8 +128,12 @@ std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour,
             int iEnd = std::min(iMax, static_cast<int>((intersections[i + 1] - origin[0]) / spacing[0]));
             
             for (int x = iStart; x <= iEnd; ++x) {
-                size_t voxelIdx = sliceIdx * dims[0] * dims[1] + j * dims[0] + x;
-                voxels.push_back(voxelIdx);
+                if (x >= 0 && x < static_cast<int>(dims[0]) && 
+                    j >= 0 && j < static_cast<int>(dims[1]) &&
+                    sliceIdx >= 0 && sliceIdx < static_cast<int>(dims[2])) {
+                    size_t voxelIdx = sliceIdx * dims[0] * dims[1] + j * dims[0] + x;
+                    voxels.push_back(voxelIdx);
+                }
             }
         }
     }

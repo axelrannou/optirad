@@ -67,6 +67,11 @@ std::array<double, 3> Plan::computeIsoCenter() const {
 
     if (targetVoxels.empty()) {
         // Fallback: use CT volume center if no target voxels found
+        // Validate dimensions first to prevent integer underflow
+        if (dims[0] == 0 || dims[1] == 0 || dims[2] == 0) {
+            std::cerr << "Warning: Invalid grid dimensions, cannot compute isocenter\n";
+            return {0.0, 0.0, 0.0};
+        }
         std::cerr << "Warning: No target voxel indices available, using CT volume center as isocenter\n";
         std::cerr << "Note: You may need to rasterize structure contours first\n";
         std::array<double, 3> iso;

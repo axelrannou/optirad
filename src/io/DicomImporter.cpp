@@ -35,7 +35,10 @@ bool DicomImporter::canImport(const std::string& path) const {
         for (const auto& entry : fs::recursive_directory_iterator(path)) {
             if (entry.is_regular_file()) {
                 auto filename = entry.path().filename().string();
-                if (filename.substr(0, 2) == "._") continue;
+                // Check length before substr to prevent buffer underflow
+                if (filename.length() >= 2 && filename.substr(0, 2) == "._") {
+                    continue;
+                }
                 fileCount++;
             }
         }
@@ -110,18 +113,49 @@ std::unique_ptr<Volume<int16_t>> DicomImporter::importCTVolume() {
     OFString pixelSpacing;
     double spacingX = 1.0, spacingY = 1.0;
     if (ds->findAndGetOFString(DCM_PixelSpacing, pixelSpacing, 0).good()) {
-        spacingY = std::stod(pixelSpacing.c_str());
+        try {
+            spacingY = std::stod(pixelSpacing.c_str());
+        } catch (const std::exception& e) {
+            Logger::warn("Invalid pixel spacing value (Y): " + std::string(pixelSpacing.c_str()));
+            spacingY = 1.0;
+        }
     }
     if (ds->findAndGetOFString(DCM_PixelSpacing, pixelSpacing, 1).good()) {
-        spacingX = std::stod(pixelSpacing.c_str());
+        try {
+            spacingX = std::stod(pixelSpacing.c_str());
+        } catch (const std::exception& e) {
+            Logger::warn("Invalid pixel spacing value (X): " + std::string(pixelSpacing.c_str()));
+            spacingX = 1.0;
+        }
     }
     
     // Get image position (origin)
     double originX = 0, originY = 0, originZ = 0;
     OFString pos;
-    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 0).good()) originX = std::stod(pos.c_str());
-    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 1).good()) originY = std::stod(pos.c_str());
-    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 2).good()) originZ = std::stod(pos.c_str());
+    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 0).good()) {
+        try {
+            originX = std::stod(pos.c_str());
+        } catch (const std::exception& e) {
+            Logger::warn("Invalid image position (X): " + std::string(pos.c_str()));
+            originX = 0.0;
+        }
+    }
+    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 1).good()) {
+        try {
+            originY = std::stod(pos.c_str());
+        } catch (const std::exception& e) {
+            Logger::warn("Invalid image position (Y): " + std::string(pos.c_str()));
+            originY = 0.0;
+        }
+    }
+    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 2).good()) {
+        try {
+            originZ = std::stod(pos.c_str());
+        } catch (const std::exception& e) {
+            Logger::warn("Invalid image position (Z): " + std::string(pos.c_str()));
+            originZ = 0.0;
+        }
+    }
     
     // Get patient position (HFS, FFS, HFP, etc.)
     OFString patientPosition;
@@ -136,7 +170,12 @@ std::unique_ptr<Volume<int16_t>> DicomImporter::importCTVolume() {
     OFString orientStr;
     for (int i = 0; i < 6; ++i) {
         if (ds->findAndGetOFString(DCM_ImageOrientationPatient, orientStr, i).good()) {
-            imageOrientation[i] = std::stod(orientStr.c_str());
+            try {
+                imageOrientation[i] = std::stod(orientStr.c_str());
+            } catch (const std::exception& e) {
+                Logger::warn("Invalid image orientation value at index " + std::to_string(i));
+                // Keep default value
+            }
         }
     }
     
