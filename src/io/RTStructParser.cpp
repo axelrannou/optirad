@@ -174,14 +174,21 @@ std::string RTStructParser::determineType(const std::string& name) {
     std::string upperName = name;
     std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
     
+    // Target patterns
     if (upperName.find("PTV") != std::string::npos || 
         upperName.find("GTV") != std::string::npos ||
-        upperName.find("CTV") != std::string::npos) {
+        upperName.find("CTV") != std::string::npos ||
+        upperName.find("TARGET") != std::string::npos ||
+        upperName.find("TUMOR") != std::string::npos) {
         return "TARGET";
-    } else if (upperName.find("BODY") != std::string::npos ||
-               upperName.find("EXTERNAL") != std::string::npos) {
+    } 
+    // External/body patterns
+    else if (upperName.find("BODY") != std::string::npos ||
+               upperName.find("EXTERNAL") != std::string::npos ||
+               upperName.find("SKIN") != std::string::npos) {
         return "EXTERNAL";
     }
+    // Default to OAR (Organ at Risk)
     return "OAR";
 }
 

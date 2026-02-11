@@ -7,6 +7,8 @@
 
 namespace optirad {
 
+class Grid; // Forward declaration
+
 class StructureSet {
 public:
     StructureSet() = default;
@@ -25,6 +27,9 @@ public:
     size_t getCount() const { return m_structures.size(); }
     
     void clear() { m_structures.clear(); }
+
+    /// Rasterize all structure contours to voxel indices
+    void rasterizeContours(const Grid& ctGrid);
 
 private:
     std::vector<std::unique_ptr<Structure>> m_structures;
