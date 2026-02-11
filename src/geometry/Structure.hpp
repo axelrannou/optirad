@@ -7,6 +7,9 @@
 
 namespace optirad {
 
+// Forward declarations
+class Grid;
+
 /**
  * A single contour on a slice (list of 3D points)
  */
@@ -21,8 +24,8 @@ struct Contour {
 class Structure {
 public:
     Structure() = default;
-    explicit Structure(const std::string& name) : m_name(name) {}
-    
+    ~Structure() = default;
+
     // Basic properties
     void setName(const std::string& name) { m_name = name; }
     const std::string& getName() const { return m_name; }
@@ -59,6 +62,9 @@ public:
     void setVisible(bool visible) { m_visible = visible; }
     bool isVisible() const { return m_visible; }
     
+    /// Rasterize contours to voxel indices using the CT grid
+    void rasterizeContours(const Grid& ctGrid);
+
 private:
     std::string m_name;
     std::string m_type = "UNKNOWN";  // TARGET, OAR, EXTERNAL, UNKNOWN
@@ -73,6 +79,9 @@ private:
     double m_alphaX = 0.1;
     double m_betaX = 0.05;
     bool m_visible = true;
+
+    /// Helper: rasterize a single contour on a specific slice
+    std::vector<size_t> rasterizeContourOnSlice(const Contour& contour, const Grid& ctGrid, int sliceIdx) const;
 };
 
 } // namespace optirad

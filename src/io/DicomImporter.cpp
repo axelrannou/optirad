@@ -72,6 +72,12 @@ std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath
     auto structures = importStructuresWithContours();
     if (structures) {
         Logger::info("Loaded " + std::to_string(structures->getCount()) + " structures");
+        
+        // Rasterize contours to voxel indices
+        if (patientData->getCTVolume()) {
+            structures->rasterizeContours(patientData->getCTVolume()->getGrid());
+        }
+        
         patientData->setStructureSet(std::move(structures));
     }
     

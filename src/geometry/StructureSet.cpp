@@ -1,6 +1,8 @@
 #include "StructureSet.hpp"
 #include "Grid.hpp"
 #include <algorithm>
+#include <iostream>
+#include <cmath>
 
 namespace optirad {
 
@@ -23,6 +25,22 @@ const Structure* StructureSet::getStructureByName(const std::string& name) const
         if (s->getName() == name) return s.get();
     }
     return nullptr;
+}
+
+void StructureSet::rasterizeContours(const Grid& ctGrid) {
+    std::cout << "Rasterizing structure contours...\n";
+    
+    for (auto& structure : m_structures) {
+        if (!structure) continue;
+        
+        std::cout << "  - Rasterizing: " << structure->getName() << " ... ";
+        
+        structure->rasterizeContours(ctGrid);
+        
+        std::cout << structure->getVoxelIndices().size() << " voxels\n";
+    }
+    
+    std::cout << "Rasterization complete.\n";
 }
 
 } // namespace optirad
