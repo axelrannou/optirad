@@ -104,6 +104,10 @@ std::unique_ptr<Volume<int16_t>> DicomImporter::importCTVolume() {
     }
     
     DcmDataset* ds = firstFile.getDataset();
+    if (!ds) {
+        Logger::error("Failed to get dataset from first CT slice");
+        return nullptr;
+    }
     
     Uint16 rows = 0, cols = 0;
     ds->findAndGetUint16(DCM_Rows, rows);
@@ -236,11 +240,19 @@ std::unique_ptr<Volume<int16_t>> DicomImporter::importCTVolume() {
         }
         
         DcmDataset* sliceDs = dcmFile.getDataset();
+        if (!sliceDs) {
+            Logger::warn("Failed to get dataset for slice " + std::to_string(z));
+            continue;
+        }
         
         // Get rescale slope and intercept
         double rescaleSlope = 1.0, rescaleIntercept = 0.0;
-        sliceDs->findAndGetFloat64(DCM_RescaleSlope, rescaleSlope);
-        sliceDs->findAndGetFloat64(DCM_RescaleIntercept, rescaleIntercept);
+        if (!sliceDs->findAndGetFloat64(DCM_RescaleSlope, rescaleSlope).good()) {
+            Logger::warn("Missing RescaleSlope for slice " + std::to_string(z) + ", using default 1.0");
+        }
+        if (!sliceDs->findAndGetFloat64(DCM_RescaleIntercept, rescaleIntercept).good()) {
+            Logger::warn("Missing RescaleIntercept for slice " + std::to_string(z) + ", using default 0.0");
+        }
         
         // Get pixel data
         const Uint16* pixelData = nullptr;

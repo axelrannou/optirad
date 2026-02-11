@@ -1,4 +1,6 @@
 #include "Grid.hpp"
+#include <stdexcept>
+#include <cmath>
 
 namespace optirad {
 
@@ -68,6 +70,14 @@ Vec3 Grid::patientToVoxel(const Vec3& lps) const {
     };
     
     Vec3 rotated = m_inverseDirectionMatrix * delta;
+    
+    // Protect against division by zero
+    constexpr double epsilon = 1e-10;
+    if (std::abs(m_spacing[0]) < epsilon || 
+        std::abs(m_spacing[1]) < epsilon || 
+        std::abs(m_spacing[2]) < epsilon) {
+        throw std::runtime_error("Grid::patientToVoxel: spacing too small or zero");
+    }
     
     return {
         rotated[0] / m_spacing[0],

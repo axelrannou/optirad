@@ -95,7 +95,8 @@ OptimizationResult LBFGSOptimizer::optimize(
         // Check relative objective change
         if (iter > 1 && objectiveHistory.size() >= 2) {
             double prev = objectiveHistory[objectiveHistory.size() - 2];
-            if (prev != 0) {
+            constexpr double epsilon = 1e-14;
+            if (std::abs(prev) > epsilon) {
                 double relObjChange = std::abs(fval - prev) / std::abs(prev);
                 if (relObjChange < 1e-7) {
                     result.converged = true;

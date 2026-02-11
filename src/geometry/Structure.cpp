@@ -130,8 +130,10 @@ std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour,
             for (int x = iStart; x <= iEnd; ++x) {
                 if (x >= 0 && x < static_cast<int>(dims[0]) && 
                     j >= 0 && j < static_cast<int>(dims[1]) &&
-                    sliceIdx >= 0 && sliceIdx < static_cast<int>(dims[2])) {
-                    size_t voxelIdx = sliceIdx * dims[0] * dims[1] + j * dims[0] + x;
+                    sliceIdx >= 0 && sliceIdx < static_cast<int>(dims[2]) &&
+                    dims[0] > 0 && dims[1] > 0 && dims[2] > 0) {
+                    size_t voxelIdx = static_cast<size_t>(sliceIdx) * dims[0] * dims[1] + 
+                                     static_cast<size_t>(j) * dims[0] + static_cast<size_t>(x);
                     voxels.push_back(voxelIdx);
                 }
             }

@@ -9,7 +9,10 @@ PatientPanel::PatientPanel() {
     // Initialize with user's home directory or last used path
     const char* home = std::getenv("HOME");
     if (home) {
-        strncpy(m_dicomPath, home, sizeof(m_dicomPath) - 1);
+        snprintf(m_dicomPath, sizeof(m_dicomPath), "%s", home);
+        m_dicomPath[sizeof(m_dicomPath) - 1] = '\0';  // Ensure null termination
+    } else {
+        m_dicomPath[0] = '\0';  // Initialize to empty string if no HOME
     }
 }
 

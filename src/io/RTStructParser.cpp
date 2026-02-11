@@ -69,10 +69,13 @@ std::map<int, std::string> RTStructParser::extractROINames(void* datasetPtr) {
     std::map<int, std::string> roiNames;
     
     DcmSequenceOfItems* roiSequence = nullptr;
-    if (dataset->findAndGetSequence(DCM_StructureSetROISequence, roiSequence).good()) {
+    if (dataset->findAndGetSequence(DCM_StructureSetROISequence, roiSequence).good() && roiSequence) {
         for (unsigned long i = 0; i < roiSequence->card(); ++i) {
             DcmItem* item = roiSequence->getItem(i);
-            if (!item) continue;
+            if (!item) {
+                Logger::warn("RTStructParser: null item at index " + std::to_string(i));
+                continue;
+            }
             
             Sint32 roiNumber = 0;
             OFString roiName;

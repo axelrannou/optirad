@@ -47,8 +47,9 @@ inline double norm(const Vec3& v) {
 
 inline Vec3 normalize(const Vec3& v) {
     double n = norm(v);
+    // Protect against division by zero - return zero vector if norm is too small
     if (std::abs(n) < 1e-14) {
-        return {0.0, 0.0, 0.0};  // Return zero vector for zero-length input
+        return {0.0, 0.0, 0.0};
     }
     return {v[0]/n, v[1]/n, v[2]/n};
 }

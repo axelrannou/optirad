@@ -1,6 +1,7 @@
 #include "DoseMatrix.hpp"
 #include <algorithm>
 #include <numeric>
+#include <stdexcept>
 
 namespace optirad {
 
@@ -12,11 +13,17 @@ void DoseMatrix::allocate() {
 
 double& DoseMatrix::at(size_t i, size_t j, size_t k) {
     auto dims = m_grid.getDimensions();
+    if (i >= dims[0] || j >= dims[1] || k >= dims[2]) {
+        throw std::out_of_range("DoseMatrix::at: index out of bounds");
+    }
     return m_data[i + dims[0] * (j + dims[1] * k)];
 }
 
 const double& DoseMatrix::at(size_t i, size_t j, size_t k) const {
     auto dims = m_grid.getDimensions();
+    if (i >= dims[0] || j >= dims[1] || k >= dims[2]) {
+        throw std::out_of_range("DoseMatrix::at: index out of bounds");
+    }
     return m_data[i + dims[0] * (j + dims[1] * k)];
 }
 
