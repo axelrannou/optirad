@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Machine.hpp"
-#include "StfProperties.hpp"
+#include "../steering/StfProperties.hpp"
 #include "Beam.hpp"
 #include "PatientData.hpp"
 
