@@ -280,8 +280,16 @@ std::unique_ptr<StructureSet> DicomImporter::importStructuresWithContours() {
         return nullptr;
     }
     
+    // RTStructParser now uses TBB internally for parallel processing
     RTStructParser parser;
-    return parser.parse(m_rtStructFile.string());
+    auto structureSet = parser.parse(m_rtStructFile.string());
+    
+    if (structureSet) {
+        Logger::info("Successfully parsed structure set with " + 
+                    std::to_string(structureSet->getCount()) + " structures");
+    }
+    
+    return structureSet;
 }
 
 void DicomImporter::sortCTFilesByPosition() {

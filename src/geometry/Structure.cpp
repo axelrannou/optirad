@@ -4,6 +4,9 @@
 #include <set>
 #include <cmath>
 #include <map>
+#ifdef OPTIRAD_HAS_TBB
+#include <tbb/parallel_for.h>
+#endif
 
 namespace optirad {
 
@@ -28,8 +31,6 @@ void Structure::rasterizeContours(const Grid& ctGrid) {
         return;  // Invalid Z spacing
     }
     
-    std::set<size_t> voxelSet; // Use set to avoid duplicates
-    
     // Group contours by Z position (slice)
     std::map<int, std::vector<const Contour*>> contoursBySlice;
     
@@ -45,16 +46,56 @@ void Structure::rasterizeContours(const Grid& ctGrid) {
         }
     }
     
-    // Rasterize each slice
-    for (const auto& [sliceIdx, contours] : contoursBySlice) {
-        for (const auto* contour : contours) {
-            // Use scan-line algorithm to fill polygon
-            auto sliceVoxels = rasterizeContourOnSlice(*contour, ctGrid, sliceIdx);
-            voxelSet.insert(sliceVoxels.begin(), sliceVoxels.end());
-        }
+    if (contoursBySlice.empty()) return;
+
+    // Prepare slice index list
+    std::vector<int> sliceIndices;
+    sliceIndices.reserve(contoursBySlice.size());
+    for (const auto& [sliceIdx, _] : contoursBySlice) {
+        sliceIndices.push_back(sliceIdx);
     }
-    
-    m_voxelIndices.assign(voxelSet.begin(), voxelSet.end());
+
+    // Per-slice voxel buffers
+    std::vector<std::vector<size_t>> sliceVoxels(sliceIndices.size());
+
+#ifdef OPTIRAD_HAS_TBB
+    // Parallel rasterization per slice
+    tbb::parallel_for(size_t(0), sliceIndices.size(), [&](size_t i) {
+        int sliceIdx = sliceIndices[i];
+        const auto& contours = contoursBySlice.at(sliceIdx);
+        std::vector<size_t> voxels;
+        for (const auto* contour : contours) {
+            auto v = rasterizeContourOnSlice(*contour, ctGrid, sliceIdx);
+            voxels.insert(voxels.end(), v.begin(), v.end());
+        }
+        sliceVoxels[i] = std::move(voxels);
+    });
+#else
+    // Sequential fallback
+    for (size_t i = 0; i < sliceIndices.size(); ++i) {
+        int sliceIdx = sliceIndices[i];
+        const auto& contours = contoursBySlice.at(sliceIdx);
+        std::vector<size_t> voxels;
+        for (const auto* contour : contours) {
+            auto v = rasterizeContourOnSlice(*contour, ctGrid, sliceIdx);
+            voxels.insert(voxels.end(), v.begin(), v.end());
+        }
+        sliceVoxels[i] = std::move(voxels);
+    }
+#endif
+
+    // Merge + de-duplicate
+    std::vector<size_t> merged;
+    size_t total = 0;
+    for (const auto& v : sliceVoxels) total += v.size();
+    merged.reserve(total);
+    for (auto& v : sliceVoxels) {
+        merged.insert(merged.end(), v.begin(), v.end());
+    }
+
+    std::sort(merged.begin(), merged.end());
+    merged.erase(std::unique(merged.begin(), merged.end()), merged.end());
+    m_voxelIndices = std::move(merged);
 }
 
 std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour, 

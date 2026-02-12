@@ -8,6 +8,10 @@
 #include <dcmtk/dcmdata/dctk.h>
 #endif
 
+#ifdef OPTIRAD_HAS_TBB
+#include <tbb/parallel_for.h>
+#endif
+
 namespace optirad {
 
 const std::vector<std::array<uint8_t, 3>> RTStructParser::s_defaultColors = {
@@ -40,15 +44,34 @@ std::unique_ptr<StructureSet> RTStructParser::parse(const std::string& filePath)
         return std::make_unique<StructureSet>();
     }
     
-    Logger::info("Parsing " + std::to_string(contourSequence->card()) + " structures from RT-STRUCT");
+    unsigned long numStructures = contourSequence->card();
+    Logger::info("Parsing " + std::to_string(numStructures) + " structures from RT-STRUCT");
     
     auto structureSet = std::make_unique<StructureSet>();
+    std::vector<std::unique_ptr<Structure>> structures(numStructures);
     
-    for (unsigned long i = 0; i < contourSequence->card(); ++i) {
+#ifdef OPTIRAD_HAS_TBB
+    Logger::info("Using TBB parallel parsing for RT-STRUCT structures");
+    // Parallel parsing with TBB
+    tbb::parallel_for(0UL, numStructures, [&](unsigned long i) {
         DcmItem* roiContourItem = contourSequence->getItem(i);
-        if (!roiContourItem) continue;
-        
-        auto structure = parseStructure(roiContourItem, roiNames, i);
+        if (roiContourItem) {
+            structures[i] = parseStructure(roiContourItem, roiNames, i);
+        }
+    });
+#else
+    Logger::info("Using sequential parsing for RT-STRUCT structures (TBB not available)");
+    // Sequential fallback
+    for (unsigned long i = 0; i < numStructures; ++i) {
+        DcmItem* roiContourItem = contourSequence->getItem(i);
+        if (roiContourItem) {
+            structures[i] = parseStructure(roiContourItem, roiNames, i);
+        }
+    }
+#endif
+    
+    // Add all parsed structures to StructureSet
+    for (auto& structure : structures) {
         if (structure) {
             structureSet->addStructure(std::move(structure));
         }
@@ -198,19 +221,37 @@ std::string RTStructParser::determineType(const std::string& name) {
 std::vector<Contour> RTStructParser::parseContours(void* contourSeqPtr) {
 #ifdef OPTIRAD_HAS_DCMTK
     DcmSequenceOfItems* contourSeq = static_cast<DcmSequenceOfItems*>(contourSeqPtr);
-    std::vector<Contour> contours;
+    unsigned long numContours = contourSeq->card();
+    std::vector<Contour> contours(numContours);
     
-    for (unsigned long c = 0; c < contourSeq->card(); ++c) {
+#ifdef OPTIRAD_HAS_TBB
+    // Parallel contour parsing with TBB
+    tbb::parallel_for(0UL, numContours, [&](unsigned long c) {
         DcmItem* contourItem = contourSeq->getItem(c);
-        if (!contourItem) continue;
-        
-        Contour contour;
-        if (parseContour(contourItem, contour)) {
-            contours.push_back(contour);
+        if (contourItem) {
+            parseContour(contourItem, contours[c]);
+        }
+    });
+#else
+    // Sequential fallback
+    for (unsigned long c = 0; c < numContours; ++c) {
+        DcmItem* contourItem = contourSeq->getItem(c);
+        if (contourItem) {
+            parseContour(contourItem, contours[c]);
+        }
+    }
+#endif
+    
+    // Filter out empty contours
+    std::vector<Contour> result;
+    result.reserve(numContours);
+    for (auto& contour : contours) {
+        if (!contour.points.empty()) {
+            result.push_back(std::move(contour));
         }
     }
     
-    return contours;
+    return result;
 #else
     return {};
 #endif

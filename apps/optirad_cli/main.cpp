@@ -26,6 +26,10 @@ struct AppState {
     std::shared_ptr<Plan> plan;
 };
 
+// Forward declarations
+int generateStf(const std::vector<std::string>& args, AppState& state);
+std::unique_ptr<optirad::IStfGenerator> selectStfGenerator(const std::string& mode, double gantryStart, double gantryStep, double gantryStop, double bixelWidth, const std::array<double, 3>& iso);
+
 void printUsage(const char* progName) {
     std::cout << "Usage: " << progName << " <command> [options]\n\n"
               << "Commands:\n"
