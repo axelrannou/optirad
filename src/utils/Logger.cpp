@@ -1,5 +1,6 @@
 #include "Logger.hpp"
 
 namespace optirad {
-// All methods are inline in header for now
+// Initialize static member
+std::mutex Logger::s_mutex;
 } // namespace optirad

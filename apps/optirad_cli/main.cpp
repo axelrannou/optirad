@@ -3,7 +3,9 @@
 #include "core/PatientData.hpp"
 #include "core/Plan.hpp"
 #include "core/Machine.hpp"
-#include "core/StfProperties.hpp"
+#include "steering/StfProperties.hpp"
+#include "steering/IStfGenerator.hpp"
+#include "steering/PhotonIMRTStfGenerator.hpp"
 #include "geometry/StructureSet.hpp"
 #include "geometry/Structure.hpp"
 #include "geometry/Volume.hpp"
@@ -28,7 +30,8 @@ void printUsage(const char* progName) {
     std::cout << "Usage: " << progName << " <command> [options]\n\n"
               << "Commands:\n"
               << "  load <dicom_dir>                Load and inspect DICOM directory\n"
-              << "  plan [options]                   Generate a treatment plan\n"
+              << "  plan [options]                   Generate a treatment plan (requires DICOM data first)\n"
+              << "  generateStf                      Generate STF properties (requires plan first)\n"
               << "  interactive                      Enter interactive mode\n"
               << "  help                             Show this help message\n\n"
               << "Plan options:\n"
@@ -171,7 +174,7 @@ int createPlan(const std::vector<std::string>& args, AppState& state) {
     stf.setGantryAngles(gantryStart, gantryStep, gantryStop);
     stf.bixelWidth = bixelWidth;
 
-    // Compute isocenter from CT volume center
+    // Compute isocenter from Target structures or fallback to CT center
     auto iso = plan->computeIsoCenter();
     stf.setUniformIsoCenter(iso);
 
@@ -209,10 +212,12 @@ int runInteractive(AppState& state) {
             break;
         } else if (cmd == "help") {
             std::cout << "Commands:\n"
-                      << "  load <dicom_dir>     Load DICOM data\n"
-                      << "  plan [options]       Create treatment plan\n"
-                      << "  info                 Show current state\n"
-                      << "  quit                 Exit\n";
+                      << "  load <dicom_dir>              Load DICOM data\n"
+                      << "  plan [options]                Create treatment plan (requires DICOM data)\n"
+                      << "  plan-help                     Show plan options and examples\n"
+                      << "  generateStf                   Generate STF from plan (requires plan first)\n"
+                      << "  info                          Show current state and available STF properties\n"
+                      << "  quit                          Exit\n";
         } else if (cmd == "load") {
             if (tokens.size() < 2) {
                 std::cerr << "Error: Missing DICOM directory path\n";
@@ -222,16 +227,101 @@ int runInteractive(AppState& state) {
         } else if (cmd == "plan") {
             std::vector<std::string> planArgs(tokens.begin() + 1, tokens.end());
             createPlan(planArgs, state);
+        } else if (cmd == "plan-help") {
+            std::cout << "\n=== Plan Command Options ===\n"
+                      << "Usage: plan [options]\n\n"
+                      << "Options:\n"
+                      << "  --mode <photons|protons>      Radiation mode (default: photons)\n"
+                      << "  --machine <name>              Machine name (default: Generic)\n"
+                      << "  --fractions <n>               Number of fractions (default: 30)\n"
+                      << "  --gantry-start <deg>          Gantry start angle (default: 0)\n"
+                      << "  --gantry-step <deg>           Gantry angle step (default: 4)\n"
+                      << "  --gantry-stop <deg>           Gantry stop angle exclusive (default: 360)\n"
+                      << "  --bixel-width <mm>            Bixel width in mm (default: 7)\n\n"
+                      << "Examples:\n"
+                      << "  plan --mode photons --gantry-step 60 --bixel-width 7\n"
+                      << "  plan --fractions 25 --machine Generic\n"
+                      << "  plan --gantry-start 0 --gantry-stop 360 --gantry-step 30\n"
+                      << "=============================\n";
+        } else if (cmd == "generateStf") {
+            std::vector<std::string> stfArgs(tokens.begin() + 1, tokens.end());
+            generateStf(stfArgs, state);
         } else if (cmd == "info") {
+            std::cout << "\n=== Current State ===\n";
             std::cout << "Patient data: " << (state.patientData ? "loaded" : "not loaded") << "\n";
             std::cout << "Plan:         " << (state.plan ? state.plan->getName() : "not created") << "\n";
             if (state.plan) {
+                std::cout << "\nPlan Details:\n";
                 state.plan->printSummary();
+                std::cout << "\nTo proceed: use 'generateStf' to generate STF from this plan\n";
+            } else if (state.patientData) {
+                std::cout << "\nTo proceed: use 'plan [options]' to generate a treatment plan\n";
+                std::cout << "             or 'plan-help' to see available options\n";
+            } else {
+                std::cout << "\nTo proceed: use 'load <dicom_dir>' to load patient data first\n";
             }
+            std::cout << "=====================\n";
         } else {
             std::cerr << "Unknown command: " << cmd << "\n";
         }
     }
+    return 0;
+}
+
+// Helper: select STF generator based on mode (future extensibility)
+std::unique_ptr<optirad::IStfGenerator> selectStfGenerator(const std::string& mode, double gantryStart, double gantryStep, double gantryStop, double bixelWidth, const std::array<double, 3>& iso) {
+    // For now, only Photon IMRT is implemented
+    if (mode == "photons" || mode == "photon_imrt") {
+        return std::make_unique<optirad::PhotonIMRTStfGenerator>(gantryStart, gantryStep, gantryStop, bixelWidth, iso);
+    }
+    // Future: add more modalities here
+    // Default fallback
+    return std::make_unique<optirad::PhotonIMRTStfGenerator>(gantryStart, gantryStep, gantryStop, bixelWidth, iso);
+}
+
+// New command: generateStf (uses plan parameters)
+int generateStf(const std::vector<std::string>& args, AppState& state) {
+    if (!state.plan) {
+        std::cerr << "Error: No plan generated. Use 'plan [options]' to create a plan first.\n";
+        return 1;
+    }
+
+    // Use plan's STF properties to generate STF
+    const auto& stfProps = state.plan->getStfProperties();
+    std::string radiationMode = state.plan->getRadiationMode();
+    
+    // Get isocenter from plan
+    std::array<double, 3> iso = {0.0, 0.0, 0.0};
+    if (!stfProps.isoCenters.empty()) {
+        iso = stfProps.isoCenters[0];
+    }
+
+    // Infer parameters from current STF properties
+    double gantryStart = !stfProps.gantryAngles.empty() ? stfProps.gantryAngles[0] : 0.0;
+    double gantryStop = !stfProps.gantryAngles.empty() ? stfProps.gantryAngles.back() + 1.0 : 360.0;
+    double gantryStep = stfProps.gantryAngles.size() > 1 ? stfProps.gantryAngles[1] - stfProps.gantryAngles[0] : 60.0;
+    double bixelWidth = stfProps.bixelWidth;
+
+    auto generator = selectStfGenerator(radiationMode, gantryStart, gantryStep, gantryStop, bixelWidth, iso);
+    auto stf = generator->generate();
+
+    // Print summary
+    std::cout << "\n=== Generated STF Properties (from plan) ===\n";
+    std::cout << "  Radiation Mode: " << radiationMode << "\n";
+    std::cout << "  Gantry angles: ";
+    for (auto a : stf->gantryAngles) std::cout << a << " ";
+    std::cout << "\n  Couch angles: ";
+    for (auto a : stf->couchAngles) std::cout << a << " ";
+    std::cout << "\n  Bixel width: " << stf->bixelWidth << " mm\n";
+    std::cout << "  Number of beams: " << stf->numOfBeams << "\n";
+    if (!stf->isoCenters.empty()) {
+        std::cout << "  IsoCenters: [";
+        for (const auto& iso : stf->isoCenters) {
+            std::cout << "(" << iso[0] << "," << iso[1] << "," << iso[2] << ") ";
+        }
+        std::cout << "]\n";
+    }
+    std::cout << "=========================================\n";
     return 0;
 }
 
@@ -260,12 +350,17 @@ int main(int argc, char* argv[]) {
         return loadDicom(argv[2], state);
     }
 
+
     if (command == "plan") {
-        // Plan without loaded data in single-command mode won't work
-        // Suggest interactive mode
         std::cerr << "Error: Use 'interactive' mode to load data then create a plan.\n";
         std::cerr << "  " << argv[0] << " interactive\n";
         return 1;
+    }
+
+    if (command == "generateStf") {
+        std::vector<std::string> stfArgs;
+        for (int i = 2; i < argc; ++i) stfArgs.emplace_back(argv[i]);
+        return generateStf(stfArgs, state);
     }
 
     if (command == "interactive") {

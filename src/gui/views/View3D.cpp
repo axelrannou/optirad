@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <mutex>
 
 namespace optirad {
 
@@ -42,10 +43,13 @@ void View3D::init() {
 }
 
 void View3D::handleScroll(double yOffset) {
+    std::lock_guard<std::mutex> lock(m_mouseMutex);
     m_scrollOffset = yOffset;
 }
 
 void View3D::handleMouseInput(GLFWwindow* window) {
+    std::lock_guard<std::mutex> lock(m_mouseMutex);
+    
     glfwGetFramebufferSize(window, &m_viewportWidth, &m_viewportHeight);
     
     double mouseX, mouseY;

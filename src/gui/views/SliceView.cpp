@@ -305,10 +305,23 @@ void SliceView::updateTexture() {
     
     // Upload to OpenGL texture
     glBindTexture(GL_TEXTURE_2D, m_textureID);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, m_textureWidth, m_textureHeight, 
-                 0, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    
+    // Only reallocate texture if dimensions changed
+    if (m_textureWidth != m_lastTextureWidth || m_textureHeight != m_lastTextureHeight) {
+        // Allocate new texture memory
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, m_textureWidth, m_textureHeight, 
+                     0, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        
+        m_lastTextureWidth = m_textureWidth;
+        m_lastTextureHeight = m_textureHeight;
+    } else {
+        // Update existing texture (more efficient)
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_textureWidth, m_textureHeight,
+                        GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+    }
+    
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 

@@ -46,6 +46,8 @@ private:
     unsigned int m_textureID = 0;
     int m_textureWidth = 0;
     int m_textureHeight = 0;
+    int m_lastTextureWidth = -1;   // Track previous dimensions to avoid unnecessary reallocation
+    int m_lastTextureHeight = -1;
     bool m_needsUpdate = true;
     
     // Physical dimensions for aspect ratio correction

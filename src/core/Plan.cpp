@@ -3,6 +3,7 @@
 #include "geometry/Volume.hpp"
 #include "geometry/StructureSet.hpp"
 #include "geometry/Structure.hpp"
+#include "utils/Logger.hpp"
 
 #include <iostream>
 #include <numeric>
@@ -67,6 +68,11 @@ std::array<double, 3> Plan::computeIsoCenter() const {
 
     if (targetVoxels.empty()) {
         // Fallback: use CT volume center if no target voxels found
+        // Validate dimensions first to prevent integer underflow
+        if (dims[0] == 0 || dims[1] == 0 || dims[2] == 0) {
+            std::cerr << "Warning: Invalid grid dimensions, cannot compute isocenter\n";
+            return {0.0, 0.0, 0.0};
+        }
         std::cerr << "Warning: No target voxel indices available, using CT volume center as isocenter\n";
         std::cerr << "Note: You may need to rasterize structure contours first\n";
         std::array<double, 3> iso;
@@ -79,7 +85,15 @@ std::array<double, 3> Plan::computeIsoCenter() const {
     // Convert voxel indices to world coordinates and compute center of gravity
     double sumX = 0.0, sumY = 0.0, sumZ = 0.0;
     
+    size_t totalVoxels = dims[0] * dims[1] * dims[2];
     for (size_t voxelIdx : targetVoxels) {
+        // Validate voxel index bounds
+        if (voxelIdx >= totalVoxels) {
+            Logger::warn("Plan::computeIsoCenter: voxel index " + std::to_string(voxelIdx) + 
+                        " out of bounds (max " + std::to_string(totalVoxels) + "), skipping");
+            continue;
+        }
+        
         // Convert linear index to 3D coordinates (i, j, k)
         size_t k = voxelIdx / (dims[0] * dims[1]);
         size_t j = (voxelIdx % (dims[0] * dims[1])) / dims[0];

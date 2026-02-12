@@ -153,11 +153,15 @@ void AxisLabels::render(const glm::mat4& view, const glm::mat4& projection) {
         
         float u0 = label.idx / 6.0f, u1 = (label.idx + 1) / 6.0f;
         float quadVertices[] = {
-            -1.0f, -1.0f, 0.0f,  u0, 1.0f,  1.0f, -1.0f, 0.0f,  u1, 1.0f,
-             1.0f,  1.0f, 0.0f,  u1, 0.0f, -1.0f, -1.0f, 0.0f,  u0, 1.0f,
-             1.0f,  1.0f, 0.0f,  u1, 0.0f, -1.0f,  1.0f, 0.0f,  u0, 0.0f,
+            -1.0f, -1.0f, 0.0f,  u0, 1.0f,
+             1.0f, -1.0f, 0.0f,  u1, 1.0f,
+             1.0f,  1.0f, 0.0f,  u1, 0.0f,
+            -1.0f, -1.0f, 0.0f,  u0, 1.0f,
+             1.0f,  1.0f, 0.0f,  u1, 0.0f,
+            -1.0f,  1.0f, 0.0f,  u0, 0.0f,
         };
         
+        // Allocate sufficient VBO size or use sub-data safely
         glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quadVertices), quadVertices);
         glDrawArrays(GL_TRIANGLES, 0, 6);

@@ -47,6 +47,10 @@ inline double norm(const Vec3& v) {
 
 inline Vec3 normalize(const Vec3& v) {
     double n = norm(v);
+    // Protect against division by zero - return zero vector if norm is too small
+    if (std::abs(n) < 1e-14) {
+        return {0.0, 0.0, 0.0};
+    }
     return {v[0]/n, v[1]/n, v[2]/n};
 }
 
@@ -55,6 +59,12 @@ inline Mat3 inverse(const Mat3& m) {
     double det = m.m[0][0]*(m.m[1][1]*m.m[2][2] - m.m[1][2]*m.m[2][1])
                - m.m[0][1]*(m.m[1][0]*m.m[2][2] - m.m[1][2]*m.m[2][0])
                + m.m[0][2]*(m.m[1][0]*m.m[2][1] - m.m[1][1]*m.m[2][0]);
+    
+    // Check for singular matrix
+    if (std::abs(det) < 1e-14) {
+        // Return identity matrix for singular matrix
+        return Mat3();
+    }
     
     double invDet = 1.0 / det;
     

@@ -69,10 +69,13 @@ std::map<int, std::string> RTStructParser::extractROINames(void* datasetPtr) {
     std::map<int, std::string> roiNames;
     
     DcmSequenceOfItems* roiSequence = nullptr;
-    if (dataset->findAndGetSequence(DCM_StructureSetROISequence, roiSequence).good()) {
+    if (dataset->findAndGetSequence(DCM_StructureSetROISequence, roiSequence).good() && roiSequence) {
         for (unsigned long i = 0; i < roiSequence->card(); ++i) {
             DcmItem* item = roiSequence->getItem(i);
-            if (!item) continue;
+            if (!item) {
+                Logger::warn("RTStructParser: null item at index " + std::to_string(i));
+                continue;
+            }
             
             Sint32 roiNumber = 0;
             OFString roiName;
@@ -222,6 +225,12 @@ bool RTStructParser::parseContour(void* contourItemPtr, Contour& contour) {
     unsigned long dataCountF64 = 0;
     if (contourItem->findAndGetFloat64Array(DCM_ContourData, contourDataF64, &dataCountF64).good() 
         && contourDataF64 && dataCountF64 >= 3) {
+        
+        // Check for valid coordinate count (must be divisible by 3)
+        if (dataCountF64 % 3 != 0) {
+            Logger::warn("Contour data count (" + std::to_string(dataCountF64) + ") not divisible by 3");
+            return false;
+        }
         
         size_t numCoords = dataCountF64 / 3;
         contour.points.reserve(numCoords);

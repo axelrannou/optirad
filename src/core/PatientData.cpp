@@ -1,4 +1,5 @@
 #include "PatientData.hpp"
+#include "utils/Logger.hpp"
 #include <cmath>
 
 namespace optirad {
@@ -10,6 +11,12 @@ void PatientData::convertHUtoED() {
     m_edVolume = std::make_unique<Volume<double>>();
     m_edVolume->setGrid(grid);
     m_edVolume->allocate();
+    
+    // Check that both data arrays are allocated
+    if (!m_ctVolume->data() || !m_edVolume->data()) {
+        Logger::error("convertHUtoED: CT or ED volume data not allocated");
+        return;
+    }
     
     // Simple piecewise linear HU to ED conversion
     // Based on typical HLUT values

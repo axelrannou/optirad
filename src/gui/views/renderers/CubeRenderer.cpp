@@ -1,4 +1,5 @@
 #include "CubeRenderer.hpp"
+#include "utils/Logger.hpp"
 #include <glm/gtc/type_ptr.hpp>
 
 namespace optirad {
@@ -31,15 +32,41 @@ void CubeRenderer::init() {
     GLuint vs = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vs, 1, &vertexShaderSource, nullptr);
     glCompileShader(vs);
+    
+    // Check vertex shader compilation
+    GLint success;
+    glGetShaderiv(vs, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetShaderInfoLog(vs, 512, nullptr, infoLog);
+        Logger::error("CubeRenderer: Vertex shader compilation failed: " + std::string(infoLog));
+    }
 
     GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
     glShaderSource(fs, 1, &fragmentShaderSource, nullptr);
     glCompileShader(fs);
+    
+    // Check fragment shader compilation
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetShaderInfoLog(fs, 512, nullptr, infoLog);
+        Logger::error("CubeRenderer: Fragment shader compilation failed: " + std::string(infoLog));
+    }
 
     m_shaderProgram = glCreateProgram();
     glAttachShader(m_shaderProgram, vs);
     glAttachShader(m_shaderProgram, fs);
     glLinkProgram(m_shaderProgram);
+    
+    // Check program linking
+    glGetProgramiv(m_shaderProgram, GL_LINK_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetProgramInfoLog(m_shaderProgram, 512, nullptr, infoLog);
+        Logger::error("CubeRenderer: Shader program linking failed: " + std::string(infoLog));
+    }
+    
     glDeleteShader(vs);
     glDeleteShader(fs);
 

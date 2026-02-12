@@ -1,4 +1,5 @@
 #include "Volume.hpp"
+#include <stdexcept>
 
 namespace optirad {
 
@@ -16,12 +17,20 @@ void Volume<T>::allocate() {
 template<typename T>
 T& Volume<T>::at(size_t i, size_t j, size_t k) {
     auto dims = m_grid.getDimensions();
+    // Bounds checking
+    if (i >= dims[0] || j >= dims[1] || k >= dims[2]) {
+        throw std::out_of_range("Volume::at - index out of bounds");
+    }
     return m_data[i + dims[0] * (j + dims[1] * k)];
 }
 
 template<typename T>
 const T& Volume<T>::at(size_t i, size_t j, size_t k) const {
     auto dims = m_grid.getDimensions();
+    // Bounds checking
+    if (i >= dims[0] || j >= dims[1] || k >= dims[2]) {
+        throw std::out_of_range("Volume::at - index out of bounds");
+    }
     return m_data[i + dims[0] * (j + dims[1] * k)];
 }
 

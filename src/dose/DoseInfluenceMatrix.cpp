@@ -20,6 +20,9 @@ void DoseInfluenceMatrix::setDimensions(size_t numVoxels, size_t numBixels) {
 }
 
 double& DoseInfluenceMatrix::operator()(size_t voxel, size_t bixel) {
+    if (voxel >= m_numVoxels || bixel >= m_numBixels) {
+        throw std::out_of_range("DoseInfluenceMatrix: index out of bounds");
+    }
     return m_denseData[voxel * m_numBixels + bixel];
 }
 
@@ -35,10 +38,16 @@ void DoseInfluenceMatrix::setValue(size_t voxel, size_t bixel, double value) {
 }
 
 double DoseInfluenceMatrix::getValue(size_t voxel, size_t bixel) const {
+    if (voxel >= m_numVoxels || bixel >= m_numBixels) {
+        throw std::out_of_range("DoseInfluenceMatrix::getValue: index out of bounds");
+    }
     if (!m_useSparse) {
         return m_denseData[voxel * m_numBixels + bixel];
     }
     // Binary search in sparse row
+    if (voxel + 1 >= m_rowPtrs.size()) {
+        throw std::out_of_range("DoseInfluenceMatrix::getValue: invalid row pointer access");
+    }
     size_t rowStart = m_rowPtrs[voxel];
     size_t rowEnd = m_rowPtrs[voxel + 1];
     auto it = std::lower_bound(m_colIndices.begin() + rowStart,
@@ -139,6 +148,7 @@ void DoseInfluenceMatrix::accumulateTransposeProduct(
             for (size_t v = 0; v < m_numVoxels; ++v) {
                 sum += voxelGrad[v] * m_denseData[v * m_numBixels + b];
             }
+            #pragma omp atomic
             grad[b] += sum;
         }
     }

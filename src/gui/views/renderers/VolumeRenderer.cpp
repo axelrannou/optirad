@@ -203,10 +203,23 @@ void VolumeRenderer::createShaders() {
 }
 
 void VolumeRenderer::createBackFBO(int width, int height) {
+    // Only recreate if dimensions changed (prevent unnecessary GPU reallocation)
+    if (m_backFBO && m_lastWidth == width && m_lastHeight == height) {
+        return;
+    }
+    
+    // Clean up old FBO resources
     if (m_backFBO) {
         glDeleteFramebuffers(1, &m_backFBO);
+        m_backFBO = 0;
+    }
+    if (m_backTexture) {
         glDeleteTextures(1, &m_backTexture);
+        m_backTexture = 0;
+    }
+    if (m_backDepthRBO) {
         glDeleteRenderbuffers(1, &m_backDepthRBO);
+        m_backDepthRBO = 0;
     }
 
     glGenFramebuffers(1, &m_backFBO);
