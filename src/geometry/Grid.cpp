@@ -35,9 +35,9 @@ void Grid::updateMatricesIfNeeded() const {
     
     // Direction matrix (columns are voxel axes in LPS)
     m_directionMatrix = Mat3(
-        m_rowDir[0], m_colDir[0], m_sliceDir[0],
-        m_rowDir[1], m_colDir[1], m_sliceDir[1],
-        m_rowDir[2], m_colDir[2], m_sliceDir[2]
+        m_colDir[0], m_rowDir[0], m_sliceDir[0],
+        m_colDir[1], m_rowDir[1], m_sliceDir[1],
+        m_colDir[2], m_rowDir[2], m_sliceDir[2]
     );
     
     m_inverseDirectionMatrix = inverse(m_directionMatrix);
@@ -99,6 +99,33 @@ Vec3 Grid::getColumnDirection() const {
 Vec3 Grid::getSliceDirection() const {
     updateMatricesIfNeeded();
     return m_sliceDir;
+}
+
+std::vector<double> Grid::getXCoordinates() const {
+    std::vector<double> x(m_dimensions[1]);
+    for (size_t j = 0; j < m_dimensions[1]; ++j) {
+        Vec3 pos = voxelToPatient({0.0, static_cast<double>(j), 0.0});
+        x[j] = pos[0];
+    }
+    return x;
+}
+
+std::vector<double> Grid::getYCoordinates() const {
+    std::vector<double> y(m_dimensions[0]);
+    for (size_t i = 0; i < m_dimensions[0]; ++i) {
+        Vec3 pos = voxelToPatient({static_cast<double>(i), 0.0, 0.0});
+        y[i] = pos[1];
+    }
+    return y;
+}
+
+std::vector<double> Grid::getZCoordinates() const {
+    std::vector<double> z(m_dimensions[2]);
+    for (size_t k = 0; k < m_dimensions[2]; ++k) {
+        Vec3 pos = voxelToPatient({0.0, 0.0, static_cast<double>(k)});
+        z[k] = pos[2];
+    }
+    return z;
 }
 
 } // namespace optirad

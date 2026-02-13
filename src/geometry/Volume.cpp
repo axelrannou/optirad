@@ -21,7 +21,7 @@ T& Volume<T>::at(size_t i, size_t j, size_t k) {
     if (i >= dims[0] || j >= dims[1] || k >= dims[2]) {
         throw std::out_of_range("Volume::at - index out of bounds");
     }
-    return m_data[i + dims[0] * (j + dims[1] * k)];
+    return m_data[i + j * dims[0] + k * dims[0] * dims[1]];
 }
 
 template<typename T>
@@ -31,7 +31,7 @@ const T& Volume<T>::at(size_t i, size_t j, size_t k) const {
     if (i >= dims[0] || j >= dims[1] || k >= dims[2]) {
         throw std::out_of_range("Volume::at - index out of bounds");
     }
-    return m_data[i + dims[0] * (j + dims[1] * k)];
+    return m_data[i + j * dims[0] + k * dims[0] * dims[1]];
 }
 
 template<typename T>

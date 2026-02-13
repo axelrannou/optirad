@@ -136,8 +136,13 @@ std::unique_ptr<Structure> RTStructParser::parseStructure(void* roiContourItemPt
     
     // Determine type
     structure->setType(determineType(structure->getName()));
-    structure->setPriority(structure->getType() == "TARGET" ? 1 : 
-                           structure->getType() == "EXTERNAL" ? 5 : 3);
+    // Priority: PTV=1, GTV/CTV=2, OAR=3, TARGET=1, EXTERNAL=5
+    std::string type = structure->getType();
+    int priority = 3; // Default for OAR
+    if (type == "PTV" || type == "TARGET") priority = 1;
+    else if (type == "GTV" || type == "CTV") priority = 2;
+    else if (type == "EXTERNAL") priority = 5;
+    structure->setPriority(priority);
     
     // Parse contours
     DcmSequenceOfItems* contourSeq = nullptr;
@@ -200,12 +205,19 @@ std::string RTStructParser::determineType(const std::string& name) {
     std::string upperName = name;
     std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
     
-    // Target patterns
-    if (upperName.find("PTV") != std::string::npos || 
-        upperName.find("GTV") != std::string::npos ||
-        upperName.find("CTV") != std::string::npos ||
-        upperName.find("TARGET") != std::string::npos ||
-        upperName.find("TUMOR") != std::string::npos) {
+    // Specific target volume patterns
+    if (upperName.find("PTV") != std::string::npos) {
+        return "PTV";
+    }
+    else if (upperName.find("GTV") != std::string::npos) {
+        return "GTV";
+    }
+    else if (upperName.find("CTV") != std::string::npos) {
+        return "CTV";
+    }
+    // Generic target patterns
+    else if (upperName.find("TARGET") != std::string::npos ||
+             upperName.find("TUMOR") != std::string::npos) {
         return "TARGET";
     } 
     // External/body patterns

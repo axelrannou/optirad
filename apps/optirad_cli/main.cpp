@@ -89,13 +89,42 @@ int loadDicom(const std::string& path, AppState& state) {
         std::cout << "  Spacing:    " << spacing[0] << " x " << spacing[1] << " x " << spacing[2] << " mm\n";
         std::cout << "  Origin:     " << origin[0] << " x " << origin[1] << " x " << origin[2] << " mm\n";
         std::cout << "  Voxels:     " << ct->size() << "\n";
-        std::cout << "\nGeometric Information:\n";
-        std::cout << "  Patient Position: " << grid.getPatientPosition() << "\n";
-        std::cout << "  Slice Thickness:  " << grid.getSliceThickness() << " mm\n";
-        std::cout << "  Image Orientation (row): ["
-                  << orientation[0] << ", " << orientation[1] << ", " << orientation[2] << "]\n";
-        std::cout << "  Image Orientation (col): ["
-                  << orientation[3] << ", " << orientation[4] << ", " << orientation[5] << "]\n";
+
+        // Get coordinate arrays
+        auto x_coords = ct->getXCoordinates();
+        auto y_coords = ct->getYCoordinates();
+        auto z_coords = ct->getZCoordinates();
+        
+        // Print first 5 and last element
+        std::cout << "              x: [";
+        for (size_t i = 0; i < std::min(size_t(5), x_coords.size()); ++i) {
+            std::cout << x_coords[i];
+            if (i < 4 && i < x_coords.size() - 1) std::cout << " ";
+        }
+        if (x_coords.size() > 5) {
+            std::cout << " ... " << x_coords.back();
+        }
+        std::cout << "] (1×" << x_coords.size() << " double)\n";
+        
+        std::cout << "              y: [";
+        for (size_t i = 0; i < std::min(size_t(5), y_coords.size()); ++i) {
+            std::cout << y_coords[i];
+            if (i < 4 && i < y_coords.size() - 1) std::cout << " ";
+        }
+        if (y_coords.size() > 5) {
+            std::cout << " ... " << y_coords.back();
+        }
+        std::cout << "] (1×" << y_coords.size() << " double)\n";
+        
+        std::cout << "              z: [";
+        for (size_t i = 0; i < std::min(size_t(5), z_coords.size()); ++i) {
+            std::cout << z_coords[i];
+            if (i < 4 && i < z_coords.size() - 1) std::cout << " ";
+        }
+        if (z_coords.size() > 5) {
+            std::cout << " ... " << z_coords.back();
+        }
+        std::cout << "] (1×" << z_coords.size() << " double)\n";
 
         int16_t minHU = 32767, maxHU = -32768;
         for (size_t i = 0; i < ct->size(); ++i) {
@@ -178,7 +207,7 @@ int createPlan(const std::vector<std::string>& args, AppState& state) {
     stf.setGantryAngles(gantryStart, gantryStep, gantryStop);
     stf.bixelWidth = bixelWidth;
 
-    // Compute isocenter from Target structures or fallback to CT center
+    // Compute isocenter from Target structures
     auto iso = plan->computeIsoCenter();
     stf.setUniformIsoCenter(iso);
 

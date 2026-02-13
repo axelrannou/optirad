@@ -38,6 +38,12 @@ void StructureSet::rasterizeContours(const Grid& ctGrid) {
         
         Logger::info("  - Rasterizing: " + structure->getName() + 
                      " -> " + std::to_string(structure->getVoxelIndices().size()) + " voxels");
+        // Optionally print some voxel indices for debugging
+        Logger::info("    Sample voxel indices: ");
+        const auto& voxels = structure->getVoxelIndices();
+        for (size_t i = 0; i < std::min<size_t>(5, voxels.size()); ++i) {
+            Logger::info("      " + std::to_string(voxels[i]));
+        }
     }
     
     Logger::info("Rasterization complete.");

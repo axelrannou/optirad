@@ -36,57 +36,51 @@ std::array<double, 3> Plan::computeIsoCenter() const {
     auto spacing = grid.getSpacing();
     auto origin = grid.getOrigin();
 
-    // Collect all voxel indices from target structures
-    std::set<size_t> targetVoxels;
-    int targetCount = 0;
+    // Collect all voxel indices from PTV structures only
+    std::set<size_t> ptvVoxels;
+    int ptvCount = 0;
     
     for (size_t i = 0; i < structureSet->getCount(); ++i) {
         const auto* structure = structureSet->getStructure(i);
-        if (structure && structure->getType() == "TARGET") {
-            targetCount++;
-            // Get voxel indices for this target structure
+        if (structure && structure->getType() == "PTV" || structure->getType() == "GTV" || structure->getType() == "CTV") {
+            ptvCount++;
+            // Get voxel indices for this PTV structure
             const auto& voxels = structure->getVoxelIndices();
             if (!voxels.empty()) {
-                targetVoxels.insert(voxels.begin(), voxels.end());
+                ptvVoxels.insert(voxels.begin(), voxels.end());
             } else {
-                std::cerr << "Warning: Target structure '" << structure->getName() 
-                          << "' has no voxel indices (contours not rasterized yet)\n";
+                Logger::warn("PTV structure '" + structure->getName() + 
+                           "' has no voxel indices (contours not rasterized yet)");
             }
         }
     }
 
-    if (targetCount == 0) {
-        std::cerr << "Warning: No TARGET structures found in structure set\n";
-        std::cerr << "Available structures:\n";
+    // Error out if no PTV structures found
+    if (ptvCount == 0) {
+        Logger::error("No PTV structures found in structure set");
+        Logger::error("Available structures:");
         for (size_t i = 0; i < structureSet->getCount(); ++i) {
             const auto* s = structureSet->getStructure(i);
             if (s) {
-                std::cerr << "  - " << s->getName() << " (type: " << s->getType() << ")\n";
+                Logger::error("  - " + s->getName() + " (type: " + s->getType() + ")");
             }
         }
+        Logger::error("Cannot compute isocenter without PTV structures");
+        return {0.0, 0.0, 0.0};
     }
 
-    if (targetVoxels.empty()) {
-        // Fallback: use CT volume center if no target voxels found
-        // Validate dimensions first to prevent integer underflow
-        if (dims[0] == 0 || dims[1] == 0 || dims[2] == 0) {
-            std::cerr << "Warning: Invalid grid dimensions, cannot compute isocenter\n";
-            return {0.0, 0.0, 0.0};
-        }
-        std::cerr << "Warning: No target voxel indices available, using CT volume center as isocenter\n";
-        std::cerr << "Note: You may need to rasterize structure contours first\n";
-        std::array<double, 3> iso;
-        iso[0] = origin[0] + (dims[0] - 1) * spacing[0] / 2.0;
-        iso[1] = origin[1] + (dims[1] - 1) * spacing[1] / 2.0;
-        iso[2] = origin[2] + (dims[2] - 1) * spacing[2] / 2.0;
-        return iso;
+    // Error out if PTV structures have no voxel indices
+    if (ptvVoxels.empty()) {
+        Logger::error("PTV structures found but have no voxel indices");
+        Logger::error("You must rasterize structure contours before computing isocenter");
+        return {0.0, 0.0, 0.0};
     }
 
     // Convert voxel indices to world coordinates and compute center of gravity
     double sumX = 0.0, sumY = 0.0, sumZ = 0.0;
     
     size_t totalVoxels = dims[0] * dims[1] * dims[2];
-    for (size_t voxelIdx : targetVoxels) {
+    for (size_t voxelIdx : ptvVoxels) {
         // Validate voxel index bounds
         if (voxelIdx >= totalVoxels) {
             Logger::warn("Plan::computeIsoCenter: voxel index " + std::to_string(voxelIdx) + 
@@ -109,14 +103,14 @@ std::array<double, 3> Plan::computeIsoCenter() const {
         sumZ += z;
     }
 
-    size_t numVoxels = targetVoxels.size();
+    size_t numVoxels = ptvVoxels.size();
     std::array<double, 3> isoCenter;
     isoCenter[0] = sumX / numVoxels;
     isoCenter[1] = sumY / numVoxels;
     isoCenter[2] = sumZ / numVoxels;
 
-    std::cout << "Computed isocenter from " << numVoxels << " target voxels across " 
-              << targetCount << " target structure(s)\n";
+    Logger::info("Computed isocenter from " + std::to_string(numVoxels) + " PTV voxels across " + 
+                std::to_string(ptvCount) + " PTV structure(s)");
 
     return isoCenter;
 }

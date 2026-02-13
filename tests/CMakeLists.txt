@@ -78,6 +78,13 @@ target_include_directories(test_coordinate_system PRIVATE ${CMAKE_SOURCE_DIR}/sr
 target_link_libraries(test_coordinate_system PRIVATE optirad_geometry GTest::gtest GTest::gtest_main)
 add_test(NAME CoordinateSystemTest COMMAND test_coordinate_system)
 
+add_executable(test_indexing
+    geometry/test_indexing.cpp
+)
+target_include_directories(test_indexing PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_indexing PRIVATE optirad_geometry GTest::gtest GTest::gtest_main)
+add_test(NAME IndexingTest COMMAND test_indexing)
+
 # ============================================================================
 # UNIT TESTS (GoogleTest) - Utils Module
 # ============================================================================

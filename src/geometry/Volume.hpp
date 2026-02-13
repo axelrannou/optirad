@@ -21,6 +21,11 @@ public:
     const T* data() const;
 
     size_t size() const { return m_data.size(); }
+    
+    // Coordinate arrays
+    std::vector<double> getXCoordinates() const { return m_grid.getXCoordinates(); }
+    std::vector<double> getYCoordinates() const { return m_grid.getYCoordinates(); }
+    std::vector<double> getZCoordinates() const { return m_grid.getZCoordinates(); }
 
 private:
     Grid m_grid;

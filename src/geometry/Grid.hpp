@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace optirad {
 
@@ -38,6 +39,11 @@ public:
     Vec3 getRowDirection() const;
     Vec3 getColumnDirection() const;
     Vec3 getSliceDirection() const;
+    
+    // Coordinate arrays
+    std::vector<double> getXCoordinates() const;
+    std::vector<double> getYCoordinates() const;
+    std::vector<double> getZCoordinates() const;
 
 private:
     void updateMatricesIfNeeded() const;

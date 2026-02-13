@@ -210,8 +210,8 @@ std::unique_ptr<Volume<int16_t>> DicomImporter::importCTVolume() {
     
     // Create grid with all geometric information
     Grid grid;
-    grid.setDimensions(static_cast<size_t>(cols), static_cast<size_t>(rows), m_ctFiles.size());
-    grid.setSpacing(spacingX, spacingY, spacingZ);
+    grid.setDimensions(static_cast<size_t>(rows), static_cast<size_t>(cols), m_ctFiles.size());
+    grid.setSpacing(spacingY, spacingX, spacingZ);
     grid.setOrigin({originX, originY, originZ});
     grid.setPatientPosition(patientPosStr);
     grid.setImageOrientation(imageOrientation);
