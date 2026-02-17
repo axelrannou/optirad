@@ -36,87 +36,83 @@ std::array<double, 3> Plan::computeIsoCenter() const {
     auto spacing = grid.getSpacing();
     auto origin = grid.getOrigin();
 
-    // Collect all voxel indices from target structures
-    std::set<size_t> targetVoxels;
-    int targetCount = 0;
+    // Collect all voxel indices from PTV structures only
+    std::set<size_t> ptvVoxels;
+    int ptvCount = 0;
     
     for (size_t i = 0; i < structureSet->getCount(); ++i) {
         const auto* structure = structureSet->getStructure(i);
-        if (structure && structure->getType() == "TARGET") {
-            targetCount++;
-            // Get voxel indices for this target structure
+        // I will fix it later but to compare with matRad we keep all "targets" type
+        if (structure && structure->getType() == "PTV" || structure->getType() == "GTV" || structure->getType() == "CTV") {
+            ptvCount++;
+            // Get voxel indices for this PTV structure
             const auto& voxels = structure->getVoxelIndices();
             if (!voxels.empty()) {
-                targetVoxels.insert(voxels.begin(), voxels.end());
+                ptvVoxels.insert(voxels.begin(), voxels.end());
             } else {
-                std::cerr << "Warning: Target structure '" << structure->getName() 
-                          << "' has no voxel indices (contours not rasterized yet)\n";
+                Logger::warn("PTV structure '" + structure->getName() + 
+                           "' has no voxel indices (contours not rasterized yet)");
             }
         }
     }
 
-    if (targetCount == 0) {
-        std::cerr << "Warning: No TARGET structures found in structure set\n";
-        std::cerr << "Available structures:\n";
+    // Error out if no PTV structures found
+    if (ptvCount == 0) {
+        Logger::error("No PTV structures found in structure set");
+        Logger::error("Available structures:");
         for (size_t i = 0; i < structureSet->getCount(); ++i) {
             const auto* s = structureSet->getStructure(i);
             if (s) {
-                std::cerr << "  - " << s->getName() << " (type: " << s->getType() << ")\n";
+                Logger::error("  - " + s->getName() + " (type: " + s->getType() + ")");
             }
         }
+        Logger::error("Cannot compute isocenter without PTV structures");
+        return {0.0, 0.0, 0.0};
     }
 
-    if (targetVoxels.empty()) {
-        // Fallback: use CT volume center if no target voxels found
-        // Validate dimensions first to prevent integer underflow
-        if (dims[0] == 0 || dims[1] == 0 || dims[2] == 0) {
-            std::cerr << "Warning: Invalid grid dimensions, cannot compute isocenter\n";
-            return {0.0, 0.0, 0.0};
-        }
-        std::cerr << "Warning: No target voxel indices available, using CT volume center as isocenter\n";
-        std::cerr << "Note: You may need to rasterize structure contours first\n";
-        std::array<double, 3> iso;
-        iso[0] = origin[0] + (dims[0] - 1) * spacing[0] / 2.0;
-        iso[1] = origin[1] + (dims[1] - 1) * spacing[1] / 2.0;
-        iso[2] = origin[2] + (dims[2] - 1) * spacing[2] / 2.0;
-        return iso;
+    // Error out if PTV structures have no voxel indices
+    if (ptvVoxels.empty()) {
+        Logger::error("PTV structures found but have no voxel indices");
+        Logger::error("You must rasterize structure contours before computing isocenter");
+        return {0.0, 0.0, 0.0};
     }
 
     // Convert voxel indices to world coordinates and compute center of gravity
     double sumX = 0.0, sumY = 0.0, sumZ = 0.0;
     
     size_t totalVoxels = dims[0] * dims[1] * dims[2];
-    for (size_t voxelIdx : targetVoxels) {
-        // Validate voxel index bounds
-        if (voxelIdx >= totalVoxels) {
+    for (size_t voxelIdx : ptvVoxels) {
+        if (voxelIdx == 0 || voxelIdx > totalVoxels) {
             Logger::warn("Plan::computeIsoCenter: voxel index " + std::to_string(voxelIdx) + 
-                        " out of bounds (max " + std::to_string(totalVoxels) + "), skipping");
+                        " out of bounds (valid range: 1 to " + std::to_string(totalVoxels) + "), skipping");
             continue;
         }
         
-        // Convert linear index to 3D coordinates (i, j, k)
-        size_t k = voxelIdx / (dims[0] * dims[1]);
-        size_t j = (voxelIdx % (dims[0] * dims[1])) / dims[0];
-        size_t i = voxelIdx % dims[0];
+        // Convert 1-based index to 0-based
+        size_t idx0 = voxelIdx - 1;
         
-        // Convert to world coordinates [mm]
-        double x = origin[0] + i * spacing[0];
-        double y = origin[1] + j * spacing[1];
-        double z = origin[2] + k * spacing[2];
+        // Convert linear index to 3D coordinates (column-major: dims = [ny, nx, nz])
+        // index_0based = i + j*ny + k*ny*nx where i=y-index, j=x-index, k=z-index
+        size_t k = idx0 / (dims[0] * dims[1]);  // z-index (slice)
+        size_t j = (idx0 % (dims[0] * dims[1])) / dims[0];  // x-index (column)
+        size_t i = idx0 % dims[0];  // y-index (row)
         
-        sumX += x;
-        sumY += y;
-        sumZ += z;
+        // Convert to world coordinates using the Grid's transformation
+        Vec3 worldPos = grid.voxelToPatient({static_cast<double>(i), static_cast<double>(j), static_cast<double>(k)});
+        
+        sumX += worldPos[0];
+        sumY += worldPos[1];
+        sumZ += worldPos[2];
     }
 
-    size_t numVoxels = targetVoxels.size();
+    size_t numVoxels = ptvVoxels.size();
     std::array<double, 3> isoCenter;
     isoCenter[0] = sumX / numVoxels;
     isoCenter[1] = sumY / numVoxels;
     isoCenter[2] = sumZ / numVoxels;
 
-    std::cout << "Computed isocenter from " << numVoxels << " target voxels across " 
-              << targetCount << " target structure(s)\n";
+    Logger::info("Computed isocenter from " + std::to_string(numVoxels) + " PTV voxels across " + 
+                std::to_string(ptvCount) + " PTV structure(s)");
 
     return isoCenter;
 }

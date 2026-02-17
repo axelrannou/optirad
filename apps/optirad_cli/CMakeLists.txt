@@ -7,3 +7,10 @@ target_link_libraries(optirad_cli PRIVATE
     optirad_geometry
     optirad_utils
 )
+
+# OpenMP for parallel STF generation in header-only steering module
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(optirad_cli PRIVATE OpenMP::OpenMP_CXX)
+endif()
+

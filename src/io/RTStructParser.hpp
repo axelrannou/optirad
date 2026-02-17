@@ -5,6 +5,11 @@
 #include <array>
 #include <vector>
 #include <map>
+#include <mutex>
+
+#ifdef OPTIRAD_HAS_TBB
+#include <tbb/tbb.h>
+#endif
 
 namespace optirad {
 
@@ -24,7 +29,7 @@ private:
     // Extract ROI names from StructureSetROISequence
     std::map<int, std::string> extractROINames(void* dataset);
     
-    // Parse single structure from ROIContourSequence item
+    // Parse single structure from ROIContourSequence item (thread-safe)
     std::unique_ptr<Structure> parseStructure(void* roiContourItem, const std::map<int, std::string>& roiNames, size_t index);
     
     // Extract color from ROI Display Color tag

@@ -4,6 +4,9 @@
 #include <set>
 #include <cmath>
 #include <map>
+#ifdef OPTIRAD_HAS_TBB
+#include <tbb/parallel_for.h>
+#endif
 
 namespace optirad {
 
@@ -28,8 +31,6 @@ void Structure::rasterizeContours(const Grid& ctGrid) {
         return;  // Invalid Z spacing
     }
     
-    std::set<size_t> voxelSet; // Use set to avoid duplicates
-    
     // Group contours by Z position (slice)
     std::map<int, std::vector<const Contour*>> contoursBySlice;
     
@@ -45,16 +46,56 @@ void Structure::rasterizeContours(const Grid& ctGrid) {
         }
     }
     
-    // Rasterize each slice
-    for (const auto& [sliceIdx, contours] : contoursBySlice) {
-        for (const auto* contour : contours) {
-            // Use scan-line algorithm to fill polygon
-            auto sliceVoxels = rasterizeContourOnSlice(*contour, ctGrid, sliceIdx);
-            voxelSet.insert(sliceVoxels.begin(), sliceVoxels.end());
-        }
+    if (contoursBySlice.empty()) return;
+
+    // Prepare slice index list
+    std::vector<int> sliceIndices;
+    sliceIndices.reserve(contoursBySlice.size());
+    for (const auto& [sliceIdx, _] : contoursBySlice) {
+        sliceIndices.push_back(sliceIdx);
     }
-    
-    m_voxelIndices.assign(voxelSet.begin(), voxelSet.end());
+
+    // Per-slice voxel buffers
+    std::vector<std::vector<size_t>> sliceVoxels(sliceIndices.size());
+
+#ifdef OPTIRAD_HAS_TBB
+    // Parallel rasterization per slice
+    tbb::parallel_for(size_t(0), sliceIndices.size(), [&](size_t i) {
+        int sliceIdx = sliceIndices[i];
+        const auto& contours = contoursBySlice.at(sliceIdx);
+        std::vector<size_t> voxels;
+        for (const auto* contour : contours) {
+            auto v = rasterizeContourOnSlice(*contour, ctGrid, sliceIdx);
+            voxels.insert(voxels.end(), v.begin(), v.end());
+        }
+        sliceVoxels[i] = std::move(voxels);
+    });
+#else
+    // Sequential fallback
+    for (size_t i = 0; i < sliceIndices.size(); ++i) {
+        int sliceIdx = sliceIndices[i];
+        const auto& contours = contoursBySlice.at(sliceIdx);
+        std::vector<size_t> voxels;
+        for (const auto* contour : contours) {
+            auto v = rasterizeContourOnSlice(*contour, ctGrid, sliceIdx);
+            voxels.insert(voxels.end(), v.begin(), v.end());
+        }
+        sliceVoxels[i] = std::move(voxels);
+    }
+#endif
+
+    // Merge + de-duplicate
+    std::vector<size_t> merged;
+    size_t total = 0;
+    for (const auto& v : sliceVoxels) total += v.size();
+    merged.reserve(total);
+    for (auto& v : sliceVoxels) {
+        merged.insert(merged.end(), v.begin(), v.end());
+    }
+
+    std::sort(merged.begin(), merged.end());
+    merged.erase(std::unique(merged.begin(), merged.end()), merged.end());
+    m_voxelIndices = std::move(merged);
 }
 
 std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour, 
@@ -64,14 +105,15 @@ std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour,
     
     if (contour.points.size() < 3) return voxels;
     
-    auto dims = ctGrid.getDimensions();
-    auto spacing = ctGrid.getSpacing();
+    auto dims = ctGrid.getDimensions();  // dims = [ny, nx, nz]
+    auto spacing = ctGrid.getSpacing();  // spacing = [sy, sx, sz]
     auto origin = ctGrid.getOrigin();
     
-    // Validate spacing to prevent division by zero
-    if (std::abs(spacing[0]) < 1e-10 || std::abs(spacing[1]) < 1e-10) {
-        return voxels;
-    }
+    auto x_coords = ctGrid.getXCoordinates();  // Length = dims[1] = nx
+    auto y_coords = ctGrid.getYCoordinates();  // Length = dims[0] = ny
+    
+    size_t nx = dims[1];
+    size_t ny = dims[0];
     
     // Find bounding box of contour
     double minX = contour.points[0][0], maxX = minX;
@@ -84,20 +126,31 @@ std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour,
         maxY = std::max(maxY, pt[1]);
     }
     
-    // Convert to voxel indices with bounds validation
-    int iMin = std::max(0, static_cast<int>((minX - origin[0]) / spacing[0]));
-    int iMax = static_cast<int>(dims[0]) > 0 ? std::min(static_cast<int>(dims[0]) - 1, static_cast<int>((maxX - origin[0]) / spacing[0])) : 0;
-    int jMin = std::max(0, static_cast<int>((minY - origin[1]) / spacing[1]));
-    int jMax = static_cast<int>(dims[1]) > 0 ? std::min(static_cast<int>(dims[1]) - 1, static_cast<int>((maxY - origin[1]) / spacing[1])) : 0;
+    int jMin = 0, jMax = static_cast<int>(nx) - 1;
+    for (size_t j = 0; j < nx; ++j) {
+        if (x_coords[j] >= minX) { jMin = static_cast<int>(j); break; }
+    }
+    for (int j = static_cast<int>(nx) - 1; j >= 0; --j) {
+        if (x_coords[j] <= maxX) { jMax = j; break; }
+    }
+    
+    // Find index range for y (i indices in [0, ny-1])
+    int iMin = 0, iMax = static_cast<int>(ny) - 1;
+    for (size_t i = 0; i < ny; ++i) {
+        if (y_coords[i] >= minY) { iMin = static_cast<int>(i); break; }
+    }
+    for (int i = static_cast<int>(ny) - 1; i >= 0; --i) {
+        if (y_coords[i] <= maxY) { iMax = i; break; }
+    }
     
     // Early exit if bounds are invalid
-    if (iMin > iMax || jMin > jMax || dims[0] == 0 || dims[1] == 0) {
+    if (iMin > iMax || jMin > jMax || ny == 0 || nx == 0) {
         return voxels;
     }
     
-    // Scan each row
-    for (int j = jMin; j <= jMax; ++j) {
-        double y = origin[1] + j * spacing[1];
+    // Scan each row in y (i index)
+    for (int i = iMin; i <= iMax; ++i) {
+        double y = y_coords[i];
         
         // Find intersections with contour edges at this y
         std::vector<double> intersections;
@@ -123,18 +176,24 @@ std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour,
         std::sort(intersections.begin(), intersections.end());
         
         // Fill between pairs of intersections
-        for (size_t i = 0; i + 1 < intersections.size(); i += 2) {
-            int iStart = std::max(iMin, static_cast<int>((intersections[i] - origin[0]) / spacing[0]));
-            int iEnd = std::min(iMax, static_cast<int>((intersections[i + 1] - origin[0]) / spacing[0]));
+        for (size_t p = 0; p + 1 < intersections.size(); p += 2) {
+            // Find j indices for x coordinates
+            int jStart = jMin, jEnd = jMax;
+            for (int j = jMin; j <= jMax; ++j) {
+                if (x_coords[j] >= intersections[p]) { jStart = j; break; }
+            }
+            for (int j = jMax; j >= jMin; --j) {
+                if (x_coords[j] <= intersections[p + 1]) { jEnd = j; break; }
+            }
             
-            for (int x = iStart; x <= iEnd; ++x) {
-                if (x >= 0 && x < static_cast<int>(dims[0]) && 
-                    j >= 0 && j < static_cast<int>(dims[1]) &&
-                    sliceIdx >= 0 && sliceIdx < static_cast<int>(dims[2]) &&
-                    dims[0] > 0 && dims[1] > 0 && dims[2] > 0) {
-                    size_t voxelIdx = static_cast<size_t>(sliceIdx) * dims[0] * dims[1] + 
-                                     static_cast<size_t>(j) * dims[0] + static_cast<size_t>(x);
-                    voxels.push_back(voxelIdx);
+            for (int j = jStart; j <= jEnd; ++j) {
+                if (i >= 0 && i < static_cast<int>(ny) && 
+                    j >= 0 && j < static_cast<int>(nx) &&
+                    sliceIdx >= 0 && sliceIdx < static_cast<int>(dims[2])) {
+                    size_t voxelIdx = static_cast<size_t>(i) + 
+                                     static_cast<size_t>(j) * ny + 
+                                     static_cast<size_t>(sliceIdx) * ny * nx;
+                    voxels.push_back(voxelIdx + 1);
                 }
             }
         }

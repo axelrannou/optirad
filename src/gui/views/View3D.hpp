@@ -9,6 +9,8 @@
 namespace optirad {
 
 class PatientData;
+class Stf;
+class BeamRenderer;
 
 class View3D {
 public:
@@ -23,6 +25,8 @@ public:
     void handleScroll(double yOffset);
     
     void setPatientData(PatientData* data);
+    void setStf(const Stf* stf);
+    BeamRenderer* getBeamRenderer();
 
 private:
     struct Impl;

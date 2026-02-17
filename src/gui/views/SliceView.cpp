@@ -408,8 +408,8 @@ void SliceView::renderContours()
             // Project to screen coordinates
             std::vector<ImVec2> poly;
             for (const auto& v : vox) {
-                double u = v[0] / dims[0];
-                double w = v[1] / dims[1];
+                double u = v[1] / dims[1];
+                double w = v[0] / dims[0];
 
                 poly.push_back({
                     imageMin.x + (float)(u * imageSize.x),

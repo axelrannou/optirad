@@ -1,5 +1,6 @@
 #include "StructureSet.hpp"
 #include "Grid.hpp"
+#include "utils/Logger.hpp"
 #include <algorithm>
 #include <iostream>
 #include <cmath>
@@ -28,19 +29,23 @@ const Structure* StructureSet::getStructureByName(const std::string& name) const
 }
 
 void StructureSet::rasterizeContours(const Grid& ctGrid) {
-    std::cout << "Rasterizing structure contours...\n";
+    Logger::info("Rasterizing structure contours...");
     
     for (auto& structure : m_structures) {
         if (!structure) continue;
         
-        std::cout << "  - Rasterizing: " << structure->getName() << " ... ";
-        
         structure->rasterizeContours(ctGrid);
         
-        std::cout << structure->getVoxelIndices().size() << " voxels\n";
+        Logger::info("  - Rasterizing: " + structure->getName() + 
+                     " -> " + std::to_string(structure->getVoxelIndices().size()) + " voxels");
+        Logger::debug("    Sample voxel indices: ");
+        const auto& voxels = structure->getVoxelIndices();
+        for (size_t i = 0; i < std::min<size_t>(5, voxels.size()); ++i) {
+            Logger::debug("      " + std::to_string(voxels[i]));
+        }
     }
     
-    std::cout << "Rasterization complete.\n";
+    Logger::info("Rasterization complete.");
 }
 
 } // namespace optirad

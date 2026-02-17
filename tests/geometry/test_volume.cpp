@@ -87,6 +87,17 @@ TEST_F(DoseVolumeTest, DoseVolumeSizeIsCorrect) {
     EXPECT_EQ(volume.size(), expectedSize);
 }
 
+TEST_F(DoseVolumeTest, VolumeCoordinateArrays) {
+    // Volume should provide coordinate arrays through its grid
+    auto x = volume.getXCoordinates();
+    auto y = volume.getYCoordinates();
+    auto z = volume.getZCoordinates();
+    
+    EXPECT_EQ(x.size(), 5);
+    EXPECT_EQ(y.size(), 5);
+    EXPECT_EQ(z.size(), 5);
+}
+
 } // namespace optirad::tests
 
 int main(int argc, char** argv) {

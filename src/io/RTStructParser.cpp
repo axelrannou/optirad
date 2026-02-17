@@ -8,6 +8,10 @@
 #include <dcmtk/dcmdata/dctk.h>
 #endif
 
+#ifdef OPTIRAD_HAS_TBB
+#include <tbb/parallel_for.h>
+#endif
+
 namespace optirad {
 
 const std::vector<std::array<uint8_t, 3>> RTStructParser::s_defaultColors = {
@@ -40,15 +44,34 @@ std::unique_ptr<StructureSet> RTStructParser::parse(const std::string& filePath)
         return std::make_unique<StructureSet>();
     }
     
-    Logger::info("Parsing " + std::to_string(contourSequence->card()) + " structures from RT-STRUCT");
+    unsigned long numStructures = contourSequence->card();
+    Logger::info("Parsing " + std::to_string(numStructures) + " structures from RT-STRUCT");
     
     auto structureSet = std::make_unique<StructureSet>();
+    std::vector<std::unique_ptr<Structure>> structures(numStructures);
     
-    for (unsigned long i = 0; i < contourSequence->card(); ++i) {
+#ifdef OPTIRAD_HAS_TBB
+    Logger::info("Using TBB parallel parsing for RT-STRUCT structures");
+    // Parallel parsing with TBB
+    tbb::parallel_for(0UL, numStructures, [&](unsigned long i) {
         DcmItem* roiContourItem = contourSequence->getItem(i);
-        if (!roiContourItem) continue;
-        
-        auto structure = parseStructure(roiContourItem, roiNames, i);
+        if (roiContourItem) {
+            structures[i] = parseStructure(roiContourItem, roiNames, i);
+        }
+    });
+#else
+    Logger::info("Using sequential parsing for RT-STRUCT structures (TBB not available)");
+    // Sequential fallback
+    for (unsigned long i = 0; i < numStructures; ++i) {
+        DcmItem* roiContourItem = contourSequence->getItem(i);
+        if (roiContourItem) {
+            structures[i] = parseStructure(roiContourItem, roiNames, i);
+        }
+    }
+#endif
+    
+    // Add all parsed structures to StructureSet
+    for (auto& structure : structures) {
         if (structure) {
             structureSet->addStructure(std::move(structure));
         }
@@ -113,8 +136,13 @@ std::unique_ptr<Structure> RTStructParser::parseStructure(void* roiContourItemPt
     
     // Determine type
     structure->setType(determineType(structure->getName()));
-    structure->setPriority(structure->getType() == "TARGET" ? 1 : 
-                           structure->getType() == "EXTERNAL" ? 5 : 3);
+    // Priority: PTV=1, GTV/CTV=2, OAR=3, TARGET=1, EXTERNAL=5
+    std::string type = structure->getType();
+    int priority = 3; // Default for OAR
+    if (type == "PTV" || type == "TARGET") priority = 1;
+    else if (type == "GTV" || type == "CTV") priority = 2;
+    else if (type == "EXTERNAL") priority = 5;
+    structure->setPriority(priority);
     
     // Parse contours
     DcmSequenceOfItems* contourSeq = nullptr;
@@ -177,12 +205,19 @@ std::string RTStructParser::determineType(const std::string& name) {
     std::string upperName = name;
     std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
     
-    // Target patterns
-    if (upperName.find("PTV") != std::string::npos || 
-        upperName.find("GTV") != std::string::npos ||
-        upperName.find("CTV") != std::string::npos ||
-        upperName.find("TARGET") != std::string::npos ||
-        upperName.find("TUMOR") != std::string::npos) {
+    // Specific target volume patterns
+    if (upperName.find("PTV") != std::string::npos) {
+        return "PTV";
+    }
+    else if (upperName.find("GTV") != std::string::npos) {
+        return "GTV";
+    }
+    else if (upperName.find("CTV") != std::string::npos) {
+        return "CTV";
+    }
+    // Generic target patterns
+    else if (upperName.find("TARGET") != std::string::npos ||
+             upperName.find("TUMOR") != std::string::npos) {
         return "TARGET";
     } 
     // External/body patterns
@@ -198,19 +233,37 @@ std::string RTStructParser::determineType(const std::string& name) {
 std::vector<Contour> RTStructParser::parseContours(void* contourSeqPtr) {
 #ifdef OPTIRAD_HAS_DCMTK
     DcmSequenceOfItems* contourSeq = static_cast<DcmSequenceOfItems*>(contourSeqPtr);
-    std::vector<Contour> contours;
+    unsigned long numContours = contourSeq->card();
+    std::vector<Contour> contours(numContours);
     
-    for (unsigned long c = 0; c < contourSeq->card(); ++c) {
+#ifdef OPTIRAD_HAS_TBB
+    // Parallel contour parsing with TBB
+    tbb::parallel_for(0UL, numContours, [&](unsigned long c) {
         DcmItem* contourItem = contourSeq->getItem(c);
-        if (!contourItem) continue;
-        
-        Contour contour;
-        if (parseContour(contourItem, contour)) {
-            contours.push_back(contour);
+        if (contourItem) {
+            parseContour(contourItem, contours[c]);
+        }
+    });
+#else
+    // Sequential fallback
+    for (unsigned long c = 0; c < numContours; ++c) {
+        DcmItem* contourItem = contourSeq->getItem(c);
+        if (contourItem) {
+            parseContour(contourItem, contours[c]);
+        }
+    }
+#endif
+    
+    // Filter out empty contours
+    std::vector<Contour> result;
+    result.reserve(numContours);
+    for (auto& contour : contours) {
+        if (!contour.points.empty()) {
+            result.push_back(std::move(contour));
         }
     }
     
-    return contours;
+    return result;
 #else
     return {};
 #endif

@@ -77,6 +77,54 @@ TEST_F(GridTest, SliceThicknessProperty) {
     EXPECT_DOUBLE_EQ(grid.getSliceThickness(), 5.0);
 }
 
+TEST_F(GridTest, CoordinateArraysHaveCorrectSize) {
+    auto x = grid.getXCoordinates();
+    auto y = grid.getYCoordinates();
+    auto z = grid.getZCoordinates();
+    
+    EXPECT_EQ(x.size(), 10);
+    EXPECT_EQ(y.size(), 10);
+    EXPECT_EQ(z.size(), 10);
+}
+
+TEST_F(GridTest, CoordinateArraysWithOriginZero) {
+    // With origin at (0,0,0) and unit spacing
+    auto x = grid.getXCoordinates();
+    auto y = grid.getYCoordinates();
+    auto z = grid.getZCoordinates();
+    
+    // First voxel center should be at origin
+    EXPECT_DOUBLE_EQ(x[0], 0.0);
+    EXPECT_DOUBLE_EQ(y[0], 0.0);
+    EXPECT_DOUBLE_EQ(z[0], 0.0);
+    
+    // Last voxel center should be at (dimensions-1) * spacing
+    EXPECT_DOUBLE_EQ(x[9], 9.0);
+    EXPECT_DOUBLE_EQ(y[9], 9.0);
+    EXPECT_DOUBLE_EQ(z[9], 9.0);
+}
+
+TEST_F(GridTest, CoordinateArraysWithNonZeroOrigin) {
+    Grid shifted;
+    shifted.setDimensions(5, 5, 5);
+    shifted.setSpacing(2.0, 2.0, 2.0);
+    shifted.setOrigin({-10.0, -20.0, -30.0});
+    
+    auto x = shifted.getXCoordinates();
+    auto y = shifted.getYCoordinates();
+    auto z = shifted.getZCoordinates();
+    
+    // First voxel should be at origin
+    EXPECT_DOUBLE_EQ(x[0], -10.0);
+    EXPECT_DOUBLE_EQ(y[0], -20.0);
+    EXPECT_DOUBLE_EQ(z[0], -30.0);
+    
+    // Last voxel should be at origin + (dimensions-1) * spacing
+    EXPECT_DOUBLE_EQ(x[4], -10.0 + 4 * 2.0);  // -2.0
+    EXPECT_DOUBLE_EQ(y[4], -20.0 + 4 * 2.0);  // -12.0
+    EXPECT_DOUBLE_EQ(z[4], -30.0 + 4 * 2.0);  // -22.0
+}
+
 } // namespace optirad::tests
 
 int main(int argc, char** argv) {

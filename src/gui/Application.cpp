@@ -1,5 +1,7 @@
 #include "Application.hpp"
 #include "panels/PatientPanel.hpp"
+#include "panels/PlanningPanel.hpp"
+#include "panels/StfPanel.hpp"
 #include "views/SliceView.hpp"
 #include "views/View3D.hpp"
 #include "utils/Logger.hpp"
@@ -83,6 +85,8 @@ bool Application::init() {
     
     // Create panels
     m_patientPanel = std::make_unique<PatientPanel>();
+    m_planningPanel = std::make_unique<PlanningPanel>(m_appState);
+    m_stfPanel = std::make_unique<StfPanel>(m_appState);
     
     // Create slice views
     m_axialView = std::make_unique<SliceView>(SliceOrientation::Axial);
@@ -108,10 +112,24 @@ void Application::run() {
         // Update 3D view with patient data
         if (m_patientPanel->hasData()) {
             auto* data = m_patientPanel->getPatientData();
+
+            // Bridge PatientPanel data → GuiAppState (shared_ptr from raw ptr)
+            if (!m_appState.dicomLoaded()) {
+                // Wrap PatientPanel's data in a non-owning shared_ptr (PatientPanel still owns it)
+                m_appState.patientData = std::shared_ptr<PatientData>(
+                    data, [](PatientData*) {}); // no-op deleter
+            }
+
             m_view3D->setPatientData(data);
             m_axialView->setPatientData(data);
             m_sagittalView->setPatientData(data);
             m_coronalView->setPatientData(data);
+        }
+
+        // Pass STF to 3D view when available
+        if (m_appState.stfGenerated()) {
+            m_view3D->setStf(m_appState.stf.get());
+            m_stfPanel->setBeamRenderer(m_view3D->getBeamRenderer());
         }
         
         // Render 3D view
@@ -127,6 +145,8 @@ void Application::run() {
         
         // Render panels
         m_patientPanel->render();
+        m_planningPanel->render();
+        m_stfPanel->render();
         
         // Render views
         m_axialView->render();
