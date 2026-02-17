@@ -3,6 +3,7 @@
 #include "core/PatientData.hpp"
 #include "core/Plan.hpp"
 #include "core/Machine.hpp"
+#include "core/Stf.hpp"
 #include "steering/StfProperties.hpp"
 #include "steering/IStfGenerator.hpp"
 #include "steering/PhotonIMRTStfGenerator.hpp"
@@ -24,6 +25,8 @@ using namespace optirad;
 struct AppState {
     std::shared_ptr<PatientData> patientData;
     std::shared_ptr<Plan> plan;
+    std::shared_ptr<StfProperties> stfProps;  // lightweight STF properties
+    std::shared_ptr<Stf> stf;                 // full STF with beams and rays
 };
 
 // Forward declarations
@@ -283,7 +286,11 @@ int runInteractive(AppState& state) {
             std::cout << "\n=== Current State ===\n";
             std::cout << "Patient data: " << (state.patientData ? "loaded" : "not loaded") << "\n";
             std::cout << "Plan:         " << (state.plan ? state.plan->getName() : "not created") << "\n";
-            if (state.plan) {
+            std::cout << "STF:          " << (state.stf ? "generated" : "not generated") << "\n";
+            if (state.stf) {
+                state.stf->printSummary();
+                std::cout << "\nTo proceed: STF is ready for dose calculation\n";
+            } else if (state.plan) {
                 std::cout << "\nPlan Details:\n";
                 state.plan->printSummary();
                 std::cout << "\nTo proceed: use 'generateStf' to generate STF from this plan\n";
@@ -335,26 +342,40 @@ int generateStf(const std::vector<std::string>& args, AppState& state) {
     double gantryStep = stfProps.gantryAngles.size() > 1 ? stfProps.gantryAngles[1] - stfProps.gantryAngles[0] : 60.0;
     double bixelWidth = stfProps.bixelWidth;
 
-    auto generator = selectStfGenerator(radiationMode, gantryStart, gantryStep, gantryStop, bixelWidth, iso);
-    auto stf = generator->generate();
+    // Create a PhotonIMRTStfGenerator with machine info
+    PhotonIMRTStfGenerator generator(gantryStart, gantryStep, gantryStop, bixelWidth, iso);
+    generator.setMachine(state.plan->getMachine());
+    generator.setRadiationMode(radiationMode);
+
+    // Extract target voxel world coordinates from patient data
+    auto patientData = state.plan->getPatientData();
+    if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
+        const auto* ct = patientData->getCTVolume();
+        const auto* structureSet = patientData->getStructureSet();
+        const auto& grid = ct->getGrid();
+
+        // Pass Grid and StructureSet to the generator for proper 3D margin expansion
+        generator.setGrid(grid);
+        generator.setStructureSet(*structureSet);
+
+        // Pass CT resolution for potential padding
+        auto spacing = grid.getSpacing();
+        generator.setCTResolution(spacing);
+
+        std::cout << "Using Grid and StructureSet for 3D margin expansion\n";
+    } else {
+        std::cout << "Warning: No patient data available, using fixed field size\n";
+    }
+
+    // Also store lightweight StfProperties for backward compatibility
+    state.stfProps = generator.generate();
+
+    // Generate full Stf with beams and rays
+    auto stf = std::make_shared<Stf>(generator.generateStf());
+    state.stf = stf;
 
     // Print summary
-    std::cout << "\n=== Generated STF Properties (from plan) ===\n";
-    std::cout << "  Radiation Mode: " << radiationMode << "\n";
-    std::cout << "  Gantry angles: ";
-    for (auto a : stf->gantryAngles) std::cout << a << " ";
-    std::cout << "\n  Couch angles: ";
-    for (auto a : stf->couchAngles) std::cout << a << " ";
-    std::cout << "\n  Bixel width: " << stf->bixelWidth << " mm\n";
-    std::cout << "  Number of beams: " << stf->numOfBeams << "\n";
-    if (!stf->isoCenters.empty()) {
-        std::cout << "  IsoCenters: [";
-        for (const auto& iso : stf->isoCenters) {
-            std::cout << "(" << iso[0] << "," << iso[1] << "," << iso[2] << ") ";
-        }
-        std::cout << "]\n";
-    }
-    std::cout << "=========================================\n";
+    state.stf->printSummary();
     return 0;
 }
 

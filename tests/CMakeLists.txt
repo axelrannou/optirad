@@ -53,6 +53,25 @@ target_include_directories(test_beam PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_beam PRIVATE optirad_core GTest::gtest GTest::gtest_main)
 add_test(NAME BeamTest COMMAND test_beam)
 
+# Ray test
+add_executable(test_ray
+    core/test_ray.cpp
+)
+target_include_directories(test_ray PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_ray PRIVATE optirad_core GTest::gtest GTest::gtest_main)
+add_test(NAME RayTest COMMAND test_ray)
+
+# ============================================================================
+# UNIT TESTS (GoogleTest) - Steering Module
+# ============================================================================
+
+add_executable(test_photon_imrt_stf_generator
+    steering/test_photon_imrt_stf_generator.cpp
+)
+target_include_directories(test_photon_imrt_stf_generator PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_photon_imrt_stf_generator PRIVATE optirad_core optirad_geometry GTest::gtest GTest::gtest_main)
+add_test(NAME PhotonIMRTStfGeneratorTest COMMAND test_photon_imrt_stf_generator)
+
 # ============================================================================
 # UNIT TESTS (GoogleTest) - Geometry Module
 # ============================================================================
@@ -84,6 +103,13 @@ add_executable(test_indexing
 target_include_directories(test_indexing PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_indexing PRIVATE optirad_geometry GTest::gtest GTest::gtest_main)
 add_test(NAME IndexingTest COMMAND test_indexing)
+
+add_executable(test_voxel_dilation
+    geometry/test_voxel_dilation.cpp
+)
+target_include_directories(test_voxel_dilation PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_voxel_dilation PRIVATE optirad_geometry GTest::gtest GTest::gtest_main)
+add_test(NAME VoxelDilationTest COMMAND test_voxel_dilation)
 
 # ============================================================================
 # UNIT TESTS (GoogleTest) - Utils Module

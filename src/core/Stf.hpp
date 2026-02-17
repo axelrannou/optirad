@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/Beam.hpp"
+#include "../core/Ray.hpp"
 #include <vector>
 #include <memory>
 #include <string>
@@ -8,14 +9,15 @@
 namespace optirad {
 
 /**
- * Stf (Steering File) - manages the collection of beams for a treatment plan
- * Analogous to matRad's stf structure (array of beam structures)
+ * Stf (Steering File) - manages the collection of beams for a treatment plan.
+ * Analogous to a 1×N struct array in external tools, where each element is a beam
+ * containing angular parameters, geometry, and a list of rays.
  */
 class Stf {
 public:
     Stf() = default;
 
-    // Beam management (similar to StructureSet API)
+    // Beam management
     void addBeam(const Beam& beam);
     void addBeam(Beam&& beam);
     

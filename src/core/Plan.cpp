@@ -42,6 +42,7 @@ std::array<double, 3> Plan::computeIsoCenter() const {
     
     for (size_t i = 0; i < structureSet->getCount(); ++i) {
         const auto* structure = structureSet->getStructure(i);
+        // I will fix it later but to compare with matRad we keep all "targets" type
         if (structure && structure->getType() == "PTV" || structure->getType() == "GTV" || structure->getType() == "CTV") {
             ptvCount++;
             // Get voxel indices for this PTV structure
@@ -81,26 +82,27 @@ std::array<double, 3> Plan::computeIsoCenter() const {
     
     size_t totalVoxels = dims[0] * dims[1] * dims[2];
     for (size_t voxelIdx : ptvVoxels) {
-        // Validate voxel index bounds
-        if (voxelIdx >= totalVoxels) {
+        if (voxelIdx == 0 || voxelIdx > totalVoxels) {
             Logger::warn("Plan::computeIsoCenter: voxel index " + std::to_string(voxelIdx) + 
-                        " out of bounds (max " + std::to_string(totalVoxels) + "), skipping");
+                        " out of bounds (valid range: 1 to " + std::to_string(totalVoxels) + "), skipping");
             continue;
         }
         
-        // Convert linear index to 3D coordinates (i, j, k)
-        size_t k = voxelIdx / (dims[0] * dims[1]);
-        size_t j = (voxelIdx % (dims[0] * dims[1])) / dims[0];
-        size_t i = voxelIdx % dims[0];
+        // Convert 1-based index to 0-based
+        size_t idx0 = voxelIdx - 1;
         
-        // Convert to world coordinates [mm]
-        double x = origin[0] + i * spacing[0];
-        double y = origin[1] + j * spacing[1];
-        double z = origin[2] + k * spacing[2];
+        // Convert linear index to 3D coordinates (column-major: dims = [ny, nx, nz])
+        // index_0based = i + j*ny + k*ny*nx where i=y-index, j=x-index, k=z-index
+        size_t k = idx0 / (dims[0] * dims[1]);  // z-index (slice)
+        size_t j = (idx0 % (dims[0] * dims[1])) / dims[0];  // x-index (column)
+        size_t i = idx0 % dims[0];  // y-index (row)
         
-        sumX += x;
-        sumY += y;
-        sumZ += z;
+        // Convert to world coordinates using the Grid's transformation
+        Vec3 worldPos = grid.voxelToPatient({static_cast<double>(i), static_cast<double>(j), static_cast<double>(k)});
+        
+        sumX += worldPos[0];
+        sumY += worldPos[1];
+        sumZ += worldPos[2];
     }
 
     size_t numVoxels = ptvVoxels.size();
