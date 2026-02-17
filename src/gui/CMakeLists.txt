@@ -40,6 +40,8 @@ add_library(optirad_gui
     panels/OptimizationPanel.cpp
     panels/DoseStatsPanel.cpp
     panels/LogPanel.cpp
+    panels/PlanningPanel.cpp
+    panels/StfPanel.cpp
     views/SliceView.cpp
     views/DVHView.cpp
     views/View3D.cpp
@@ -47,6 +49,7 @@ add_library(optirad_gui
     views/renderers/AxisLabels.cpp
     views/renderers/VolumeRenderer.cpp
     views/renderers/StructureRenderer.cpp
+    views/renderers/BeamRenderer.cpp
 )
 
 target_include_directories(optirad_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -61,5 +64,12 @@ target_link_libraries(optirad_gui PUBLIC
     glfw
     GLEW::GLEW
 )
+
+# OpenMP (needed for header-only steering module used by StfPanel)
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(optirad_gui PRIVATE OpenMP::OpenMP_CXX)
+    message(STATUS "GUI: OpenMP found, STF generation will be parallelised")
+endif()
 
 message(STATUS "GUI library will be built with Dear ImGui")

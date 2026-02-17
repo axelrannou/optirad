@@ -2,6 +2,7 @@
 
 #include "Window.hpp"
 #include "Renderer.hpp"
+#include "AppState.hpp"
 #include "panels/IPanel.hpp"
 #include <vector>
 #include <memory>
@@ -11,6 +12,8 @@
 namespace optirad {
 
 class PatientPanel;
+class PlanningPanel;
+class StfPanel;
 class SliceView;
 class View3D;
 
@@ -28,6 +31,9 @@ private:
     
     GLFWwindow* m_window = nullptr;
     
+    // Shared state
+    GuiAppState m_appState;
+
     // Views
     std::unique_ptr<View3D> m_view3D;
     std::unique_ptr<SliceView> m_axialView;
@@ -36,6 +42,8 @@ private:
     
     // Panels
     std::unique_ptr<PatientPanel> m_patientPanel;
+    std::unique_ptr<PlanningPanel> m_planningPanel;
+    std::unique_ptr<StfPanel> m_stfPanel;
 };
 
 } // namespace optirad

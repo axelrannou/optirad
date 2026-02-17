@@ -3,6 +3,7 @@
 #include "renderers/AxisLabels.hpp"
 #include "renderers/VolumeRenderer.hpp"
 #include "renderers/StructureRenderer.hpp"
+#include "renderers/BeamRenderer.hpp"
 #include "core/PatientData.hpp"
 #include <imgui.h>
 #include <glm/glm.hpp>
@@ -19,6 +20,7 @@ struct View3D::Impl {
     std::unique_ptr<AxisLabels> axisLabels;
     std::unique_ptr<VolumeRenderer> volumeRenderer;
     std::unique_ptr<StructureRenderer> structureRenderer;
+    std::unique_ptr<BeamRenderer> beamRenderer;
     PatientData* lastLoadedData = nullptr;
 };
 
@@ -40,6 +42,9 @@ void View3D::init() {
     
     m_impl->structureRenderer = std::make_unique<StructureRenderer>();
     m_impl->structureRenderer->init();
+    
+    m_impl->beamRenderer = std::make_unique<BeamRenderer>();
+    m_impl->beamRenderer->init();
 }
 
 void View3D::handleScroll(double yOffset) {
@@ -113,6 +118,15 @@ void View3D::setPatientData(PatientData* data) {
     }
 }
 
+void View3D::setStf(const Stf* stf) {
+    if (!m_impl->beamRenderer) return;
+    m_impl->beamRenderer->setStf(stf);
+}
+
+BeamRenderer* View3D::getBeamRenderer() {
+    return m_impl->beamRenderer.get();
+}
+
 void View3D::render() {
     float cosPitch = std::cos(m_pitch), sinPitch = std::sin(m_pitch);
     float cosYaw = std::cos(m_yaw), sinYaw = std::sin(m_yaw);
@@ -135,6 +149,9 @@ void View3D::render() {
     // Render structures (semi-transparent)
     m_impl->structureRenderer->render(view, projection);
     
+    // Render beams / rays / isocenter
+    m_impl->beamRenderer->render(view, projection, cameraPos);
+
     // Render orientation cube and labels on top
     m_impl->cubeRenderer->render(view, projection);
     m_impl->axisLabels->render(view, projection);
@@ -145,5 +162,6 @@ void View3D::cleanup() {
     m_impl->axisLabels->cleanup();
     m_impl->volumeRenderer->cleanup();
     m_impl->structureRenderer->cleanup();
+    m_impl->beamRenderer->cleanup();
 }
 }

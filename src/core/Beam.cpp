@@ -61,8 +61,10 @@ void Beam::computeSourcePoints() {
     Mat3 rotMat = getRotationMatrix(m_gantryAngle, m_couchAngle);
     Mat3 rotMatT = transpose(rotMat);
 
-    // Source point in LPS: sourcePoint_bev * rotMat^T
-    m_sourcePoint = vecMulMatTranspose(m_sourcePointBev, rotMat);
+    // Source point in LPS: sourcePoint_bev * rotMat^T + isocenter
+    // BEV is centered at isocenter, so we add isocenter to get absolute LPS coordinates
+    Vec3 srcRelative = vecMulMatTranspose(m_sourcePointBev, rotMat);
+    m_sourcePoint = vecAdd(srcRelative, m_isocenter);
 }
 
 void Beam::initRaysFromPositions(const std::vector<Vec3>& rayPositionsBev) {
@@ -87,8 +89,9 @@ void Beam::initRaysFromPositions(const std::vector<Vec3>& rayPositionsBev) {
         ray.setTargetPointBev(targetBev);
 
         // Transform to LPS using rotation matrix transpose (row-vector convention)
-        Vec3 posLps = vecMulMatTranspose(posBev, rotMat);
-        Vec3 targetLps = vecMulMatTranspose(targetBev, rotMat);
+        // Then add isocenter offset since BEV is centered at isocenter
+        Vec3 posLps = vecAdd(vecMulMatTranspose(posBev, rotMat), m_isocenter);
+        Vec3 targetLps = vecAdd(vecMulMatTranspose(targetBev, rotMat), m_isocenter);
 
         ray.setRayPos(posLps);
         ray.setTargetPoint(targetLps);
@@ -114,21 +117,21 @@ void Beam::computePhotonRayCorners() {
             {pos[0] + halfBW, 0.0, pos[2] - halfBW}
         }};
 
-        // Transform corners to LPS
+        // Transform corners to LPS and add isocenter offset
         std::array<Vec3, 4> cornersIso;
         for (int c = 0; c < 4; ++c) {
-            cornersIso[c] = vecMulMatTranspose(cornersBev[c], rotMat);
+            cornersIso[c] = vecAdd(vecMulMatTranspose(cornersBev[c], rotMat), m_isocenter);
         }
         ray.setBeamletCornersAtIso(cornersIso);
 
         // Corners at SCD plane: offset = (0, SCD-SAD, 0), scaled position = SCD/SAD * corner_bev
-        // rayCorners_SCD = (repmat([0, SCD-SAD, 0], 4, 1) + (SCD/SAD) * corner_bev) * rotMat^T
+        // rayCorners_SCD = (repmat([0, SCD-SAD, 0], 4, 1) + (SCD/SAD) * corner_bev) * rotMat^T + isocenter
         Vec3 scdOffset = {0.0, m_SCD - m_SAD, 0.0};
         std::array<Vec3, 4> cornersSCD;
         for (int c = 0; c < 4; ++c) {
             Vec3 scaledCorner = vecScale(cornersBev[c], scdRatio);
             Vec3 scdBev = vecAdd(scdOffset, scaledCorner);
-            cornersSCD[c] = vecMulMatTranspose(scdBev, rotMat);
+            cornersSCD[c] = vecAdd(vecMulMatTranspose(scdBev, rotMat), m_isocenter);
         }
         ray.setRayCornersSCD(cornersSCD);
     }
