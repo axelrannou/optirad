@@ -19,11 +19,10 @@ struct MachineMeta {
 };
 
 struct KernelEntry {
-    double depth;
-    std::vector<double> radialDistances;
-    std::vector<double> primaryValues;
-    std::vector<double> firstScatterValues;
-    std::vector<double> secondScatterValues;
+    double SSD;                       // Source-Surface Distance (mm)
+    std::vector<double> kernel1;      // Primary kernel values (one per kernelPos)
+    std::vector<double> kernel2;      // First scatter kernel values
+    std::vector<double> kernel3;      // Second scatter kernel values
 };
 
 struct MachineData {
@@ -45,8 +44,6 @@ struct MachineConstraints {
 class Machine {
 public:
     Machine() = default;
-
-    static Machine createGenericPhoton();
 
     const MachineMeta& getMeta() const { return m_meta; }
     const MachineData& getData() const { return m_data; }

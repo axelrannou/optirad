@@ -1,4 +1,5 @@
 #include "PlanningPanel.hpp"
+#include "io/MachineLoader.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
 #include <cmath>
@@ -87,8 +88,16 @@ void PlanningPanel::render() {
         plan->setNumOfFractions(m_numFractions);
         plan->setPatientData(m_state.patientData);
 
-        // Machine
-        plan->setMachine(Machine::createGenericPhoton());
+        // Load machine from JSON data file
+        try {
+            plan->setMachine(MachineLoader::load(
+                kRadiationModes[m_radiationModeIdx],
+                kMachines[m_machineIdx]));
+        } catch (const std::exception& e) {
+            Logger::error("Failed to load machine: " + std::string(e.what()));
+            ImGui::End();
+            return;
+        }
 
         // STF properties
         StfProperties stfProps;

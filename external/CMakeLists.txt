@@ -1,9 +1,16 @@
-# External dependencies placeholder
-# Add your external libraries here as submodules or FetchContent
+# External dependencies
+include(FetchContent)
+
+# nlohmann/json for JSON parsing (machine files, config, etc.)
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(nlohmann_json)
 
 # Example with FetchContent:
-# include(FetchContent)
-#
 # FetchContent_Declare(
 #     eigen
 #     GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git

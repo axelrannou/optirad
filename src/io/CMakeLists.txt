@@ -2,10 +2,12 @@ add_library(optirad_io
     DicomImporter.cpp
     RTStructParser.cpp
     DicomExporter.cpp
+    MachineLoader.cpp
 )
 
 target_include_directories(optirad_io PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(optirad_io PUBLIC optirad_core optirad_geometry)
+target_link_libraries(optirad_io PUBLIC optirad_core optirad_geometry nlohmann_json::nlohmann_json)
+target_compile_definitions(optirad_io PRIVATE OPTIRAD_DATA_DIR="${OPTIRAD_DATA_DIR}")
 
 # DCMTK for DICOM handling (optional - stub implementation if not found)
 find_package(DCMTK QUIET)

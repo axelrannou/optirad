@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Data directory (machine files, etc.)
+set(OPTIRAD_DATA_DIR "${CMAKE_SOURCE_DIR}/data" CACHE PATH "Path to OptiRad data directory")
+
 # Options
 option(OPTIRAD_BUILD_TESTS "Build unit tests" ON)
 option(OPTIRAD_BUILD_GUI "Build GUI application" ON)

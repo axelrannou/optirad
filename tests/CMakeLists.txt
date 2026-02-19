@@ -22,6 +22,15 @@ add_executable(test_dicom_importer
 target_include_directories(test_dicom_importer PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_dicom_importer PRIVATE optirad_io)
 
+# Machine loader test
+add_executable(test_machine_loader
+    io/test_machine_loader.cpp
+)
+target_include_directories(test_machine_loader PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_machine_loader PRIVATE optirad_io GTest::gtest)
+target_compile_definitions(test_machine_loader PRIVATE OPTIRAD_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+add_test(NAME MachineLoaderTest COMMAND test_machine_loader)
+
 # Enable OpenMP if available
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
@@ -69,7 +78,8 @@ add_executable(test_photon_imrt_stf_generator
     steering/test_photon_imrt_stf_generator.cpp
 )
 target_include_directories(test_photon_imrt_stf_generator PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_photon_imrt_stf_generator PRIVATE optirad_core optirad_geometry GTest::gtest GTest::gtest_main)
+target_link_libraries(test_photon_imrt_stf_generator PRIVATE optirad_io optirad_core optirad_geometry GTest::gtest GTest::gtest_main)
+target_compile_definitions(test_photon_imrt_stf_generator PRIVATE OPTIRAD_DATA_DIR="${OPTIRAD_DATA_DIR}")
 add_test(NAME PhotonIMRTStfGeneratorTest COMMAND test_photon_imrt_stf_generator)
 
 # ============================================================================

@@ -1,4 +1,5 @@
 #include "io/DicomImporter.hpp"
+#include "io/MachineLoader.hpp"
 #include "core/Patient.hpp"
 #include "core/PatientData.hpp"
 #include "core/Plan.hpp"
@@ -197,12 +198,12 @@ int createPlan(const std::vector<std::string>& args, AppState& state) {
     plan->setNumOfFractions(numFractions);
     plan->setPatientData(state.patientData);
 
-    // Create machine
-    if (machineName == "Generic") {
-        plan->setMachine(Machine::createGenericPhoton());
-    } else {
-        std::cerr << "Warning: Unknown machine '" << machineName << "', using Generic.\n";
-        plan->setMachine(Machine::createGenericPhoton());
+    // Load machine from JSON data file
+    try {
+        plan->setMachine(MachineLoader::load(radiationMode, machineName));
+    } catch (const std::exception& e) {
+        std::cerr << "Error loading machine '" << machineName << "': " << e.what() << "\n";
+        return 1;
     }
 
     // Configure STF properties
