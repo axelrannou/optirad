@@ -1,4 +1,5 @@
 #include "io/DicomImporter.hpp"
+#include "io/MachineLoader.hpp"
 #include "core/Patient.hpp"
 #include "core/PatientData.hpp"
 #include "core/Plan.hpp"
@@ -10,6 +11,8 @@
 #include "geometry/StructureSet.hpp"
 #include "geometry/Structure.hpp"
 #include "geometry/Volume.hpp"
+#include "phsp/PhaseSpaceBeamSource.hpp"
+#include "phsp/PhaseSpaceData.hpp"
 #include "utils/Logger.hpp"
 
 #include <iostream>
@@ -27,10 +30,12 @@ struct AppState {
     std::shared_ptr<Plan> plan;
     std::shared_ptr<StfProperties> stfProps;  // lightweight STF properties
     std::shared_ptr<Stf> stf;                 // full STF with beams and rays
+    std::vector<std::shared_ptr<PhaseSpaceBeamSource>> phaseSpaceSources;
 };
 
 // Forward declarations
 int generateStf(const std::vector<std::string>& args, AppState& state);
+int loadPhaseSpace(const std::vector<std::string>& args, AppState& state);
 std::unique_ptr<optirad::IStfGenerator> selectStfGenerator(const std::string& mode, double gantryStart, double gantryStep, double gantryStop, double bixelWidth, const std::array<double, 3>& iso);
 
 void printUsage(const char* progName) {
@@ -38,17 +43,23 @@ void printUsage(const char* progName) {
               << "Commands:\n"
               << "  load <dicom_dir>                Load and inspect DICOM directory\n"
               << "  plan [options]                   Generate a treatment plan (requires DICOM data first)\n"
-              << "  generateStf                      Generate STF properties (requires plan first)\n"
+              << "  generateStf                      Generate STF properties (Generic machines only)\n"
+              << "  loadPhaseSpace [options]          Load phase-space beam source (phase-space machines only)\n"
               << "  interactive                      Enter interactive mode\n"
               << "  help                             Show this help message\n\n"
               << "Plan options:\n"
               << "  --mode <photons|protons>         Radiation mode (default: photons)\n"
-              << "  --machine <name>                 Machine name (default: Generic)\n"
+              << "  --machine <name>                 Machine name (default: Generic, Varian_TrueBeam6MV)\n"
               << "  --fractions <n>                  Number of fractions (default: 30)\n"
               << "  --gantry-start <deg>             Gantry start angle (default: 0)\n"
               << "  --gantry-step <deg>              Gantry angle step (default: 4)\n"
               << "  --gantry-stop <deg>              Gantry stop angle exclusive (default: 360)\n"
-              << "  --bixel-width <mm>               Bixel width (default: 7)\n";
+              << "  --bixel-width <mm>               Bixel width (default: 7)\n\n"
+              << "Phase-space options:\n"
+              << "  --collimator <deg>               Collimator angle (default: 0)\n"
+              << "  --couch <deg>                    Couch angle (default: 0)\n"
+              << "  --max-particles <n>              Max particles per beam (default: 1000000)\n"
+              << "  --viz-sample <n>                 Visualization sample per beam (default: 100000)\n";
 }
 
 int loadDicom(const std::string& path, AppState& state) {
@@ -197,12 +208,12 @@ int createPlan(const std::vector<std::string>& args, AppState& state) {
     plan->setNumOfFractions(numFractions);
     plan->setPatientData(state.patientData);
 
-    // Create machine
-    if (machineName == "Generic") {
-        plan->setMachine(Machine::createGenericPhoton());
-    } else {
-        std::cerr << "Warning: Unknown machine '" << machineName << "', using Generic.\n";
-        plan->setMachine(Machine::createGenericPhoton());
+    // Load machine from JSON data file
+    try {
+        plan->setMachine(MachineLoader::load(radiationMode, machineName));
+    } catch (const std::exception& e) {
+        std::cerr << "Error loading machine '" << machineName << "': " << e.what() << "\n";
+        return 1;
     }
 
     // Configure STF properties
@@ -251,7 +262,9 @@ int runInteractive(AppState& state) {
                       << "  load <dicom_dir>              Load DICOM data\n"
                       << "  plan [options]                Create treatment plan (requires DICOM data)\n"
                       << "  plan-help                     Show plan options and examples\n"
-                      << "  generateStf                   Generate STF from plan (requires plan first)\n"
+                      << "  generateStf                   Generate STF from plan (Generic machines only)\n"
+                      << "  loadPhaseSpace [options]       Load phase-space beam source (PSF machines only)\n"
+                      << "  phsp-info                     Show phase-space source metrics\n"
                       << "  info                          Show current state and available STF properties\n"
                       << "  quit                          Exit\n";
         } else if (cmd == "load") {
@@ -282,11 +295,40 @@ int runInteractive(AppState& state) {
         } else if (cmd == "generateStf") {
             std::vector<std::string> stfArgs(tokens.begin() + 1, tokens.end());
             generateStf(stfArgs, state);
+        } else if (cmd == "loadPhaseSpace") {
+            std::vector<std::string> phspArgs(tokens.begin() + 1, tokens.end());
+            loadPhaseSpace(phspArgs, state);
+        } else if (cmd == "phsp-info") {
+            if (state.phaseSpaceSources.empty()) {
+                std::cout << "No phase-space sources loaded.\n";
+            } else {
+                std::cout << "\n=== Phase-Space Sources (" << state.phaseSpaceSources.size() << " beams) ===\n";
+                for (size_t i = 0; i < state.phaseSpaceSources.size(); ++i) {
+                    const auto& m = state.phaseSpaceSources[i]->getMetrics();
+                    std::cout << "Beam " << i << " (gantry=" << state.phaseSpaceSources[i]->getGantryAngle() << " deg):\n";
+                    std::cout << "  Particles: " << m.totalCount
+                              << " (photons=" << m.photonCount
+                              << " electrons=" << m.electronCount
+                              << " positrons=" << m.positronCount << ")\n";
+                    std::cout << "  Energy: mean=" << m.meanEnergy << " MeV"
+                              << " [" << m.minEnergy << ", " << m.maxEnergy << "]\n";
+                    std::cout << "  Angular: sigma_u=" << m.angularSpreadU
+                              << " sigma_v=" << m.angularSpreadV << "\n";
+                }
+                std::cout << "=========================\n";
+            }
         } else if (cmd == "info") {
             std::cout << "\n=== Current State ===\n";
-            std::cout << "Patient data: " << (state.patientData ? "loaded" : "not loaded") << "\n";
-            std::cout << "Plan:         " << (state.plan ? state.plan->getName() : "not created") << "\n";
-            std::cout << "STF:          " << (state.stf ? "generated" : "not generated") << "\n";
+            std::cout << "Patient data:   " << (state.patientData ? "loaded" : "not loaded") << "\n";
+            std::cout << "Plan:           " << (state.plan ? state.plan->getName() : "not created") << "\n";
+            if (state.plan) {
+                std::cout << "Machine:        " << state.plan->getMachine().getName()
+                          << (state.plan->getMachine().isPhaseSpace() ? " [phase-space]" : " [generic]")
+                          << "\n";
+            }
+            std::cout << "STF:            " << (state.stf ? "generated" : "not generated") << "\n";
+            std::cout << "Phase-space:    " << (!state.phaseSpaceSources.empty() ?
+                std::to_string(state.phaseSpaceSources.size()) + " beams loaded" : "not loaded") << "\n";
             if (state.stf) {
                 state.stf->printSummary();
                 std::cout << "\nTo proceed: STF is ready for dose calculation\n";
@@ -323,6 +365,13 @@ std::unique_ptr<optirad::IStfGenerator> selectStfGenerator(const std::string& mo
 int generateStf(const std::vector<std::string>& args, AppState& state) {
     if (!state.plan) {
         std::cerr << "Error: No plan generated. Use 'plan [options]' to create a plan first.\n";
+        return 1;
+    }
+
+    // Gate: STF generation only for generic machines
+    if (state.plan->getMachine().isPhaseSpace()) {
+        std::cerr << "Error: STF generation is not applicable for phase-space machines.\n";
+        std::cerr << "Use 'loadPhaseSpace' instead to build the beam source from IAEA PSF files.\n";
         return 1;
     }
 
@@ -376,6 +425,86 @@ int generateStf(const std::vector<std::string>& args, AppState& state) {
 
     // Print summary
     state.stf->printSummary();
+    return 0;
+}
+
+// New command: loadPhaseSpace (builds beam sources from IAEA PSF files for all gantry angles)
+int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
+    if (!state.plan) {
+        std::cerr << "Error: No plan generated. Use 'plan [options]' first.\n";
+        return 1;
+    }
+
+    if (!state.plan->getMachine().isPhaseSpace()) {
+        std::cerr << "Error: Current machine is not a phase-space machine.\n";
+        std::cerr << "Use 'plan --machine Varian_TrueBeam6MV' to select a PSF machine.\n";
+        return 1;
+    }
+
+    // Default parameters (collimator/couch shared across beams, gantry from plan)
+    double collimatorAngle = 0.0;
+    double couchAngle = 0.0;
+    int64_t maxParticles = 1000000;
+    int64_t vizSample = 100000;
+
+    // Parse options
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--collimator" && i + 1 < args.size()) {
+            collimatorAngle = std::stod(args[++i]);
+        } else if (args[i] == "--couch" && i + 1 < args.size()) {
+            couchAngle = std::stod(args[++i]);
+        } else if (args[i] == "--max-particles" && i + 1 < args.size()) {
+            maxParticles = std::stoll(args[++i]);
+        } else if (args[i] == "--viz-sample" && i + 1 < args.size()) {
+            vizSample = std::stoll(args[++i]);
+        }
+    }
+
+    // Get gantry angles and isocenter from plan
+    const auto& stfProps = state.plan->getStfProperties();
+    const auto& gantryAngles = stfProps.gantryAngles;
+    std::array<double, 3> iso = {0.0, 0.0, 0.0};
+    if (!stfProps.isoCenters.empty()) {
+        iso = stfProps.isoCenters[0];
+    }
+
+    std::cout << "\n=== Loading Phase-Space Beam Sources ===\n";
+    std::cout << "Beams: " << gantryAngles.size() << " gantry angles\n";
+    std::cout << "Collimator: " << collimatorAngle << " deg\n";
+    std::cout << "Couch: " << couchAngle << " deg\n";
+    std::cout << "Max particles/beam: " << maxParticles << "\n";
+    std::cout << "Viz sample/beam: " << vizSample << "\n\n";
+
+    try {
+        const int numBeams = static_cast<int>(gantryAngles.size());
+        state.phaseSpaceSources.clear();
+        state.phaseSpaceSources.resize(numBeams);
+
+        // Build all beams in parallel (OpenMP)
+        #pragma omp parallel for schedule(dynamic)
+        for (int i = 0; i < numBeams; ++i) {
+            auto source = std::make_shared<PhaseSpaceBeamSource>();
+            source->configure(state.plan->getMachine(), gantryAngles[i],
+                              collimatorAngle, couchAngle, iso);
+            source->build(maxParticles, vizSample);
+            state.phaseSpaceSources[i] = std::move(source);
+        }
+
+        // Print metrics sequentially
+        for (int i = 0; i < numBeams; ++i) {
+            const auto& metrics = state.phaseSpaceSources[i]->getMetrics();
+            std::cout << "Beam " << i << " (gantry=" << gantryAngles[i] << " deg): "
+                      << metrics.totalCount << " particles, "
+                      << "mean E=" << metrics.meanEnergy << " MeV\n";
+        }
+
+        std::cout << "\n=== Loaded " << state.phaseSpaceSources.size() << " beam sources ===\n";
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return 1;
+    }
+
     return 0;
 }
 

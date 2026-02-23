@@ -4,6 +4,7 @@
 #include "renderers/VolumeRenderer.hpp"
 #include "renderers/StructureRenderer.hpp"
 #include "renderers/BeamRenderer.hpp"
+#include "renderers/PhaseSpaceRenderer.hpp"
 #include "core/PatientData.hpp"
 #include <imgui.h>
 #include <glm/glm.hpp>
@@ -21,6 +22,7 @@ struct View3D::Impl {
     std::unique_ptr<VolumeRenderer> volumeRenderer;
     std::unique_ptr<StructureRenderer> structureRenderer;
     std::unique_ptr<BeamRenderer> beamRenderer;
+    std::unique_ptr<PhaseSpaceRenderer> phaseSpaceRenderer;
     PatientData* lastLoadedData = nullptr;
 };
 
@@ -45,6 +47,9 @@ void View3D::init() {
     
     m_impl->beamRenderer = std::make_unique<BeamRenderer>();
     m_impl->beamRenderer->init();
+    
+    m_impl->phaseSpaceRenderer = std::make_unique<PhaseSpaceRenderer>();
+    m_impl->phaseSpaceRenderer->init();
 }
 
 void View3D::handleScroll(double yOffset) {
@@ -127,6 +132,15 @@ BeamRenderer* View3D::getBeamRenderer() {
     return m_impl->beamRenderer.get();
 }
 
+void View3D::setPhaseSpaceSources(const std::vector<const PhaseSpaceBeamSource*>& sources) {
+    if (!m_impl->phaseSpaceRenderer) return;
+    m_impl->phaseSpaceRenderer->setSources(sources);
+}
+
+PhaseSpaceRenderer* View3D::getPhaseSpaceRenderer() {
+    return m_impl->phaseSpaceRenderer.get();
+}
+
 void View3D::render() {
     float cosPitch = std::cos(m_pitch), sinPitch = std::sin(m_pitch);
     float cosYaw = std::cos(m_yaw), sinYaw = std::sin(m_yaw);
@@ -151,6 +165,9 @@ void View3D::render() {
     
     // Render beams / rays / isocenter
     m_impl->beamRenderer->render(view, projection, cameraPos);
+    
+    // Render phase-space particles
+    m_impl->phaseSpaceRenderer->render(view, projection, cameraPos);
 
     // Render orientation cube and labels on top
     m_impl->cubeRenderer->render(view, projection);
@@ -163,5 +180,6 @@ void View3D::cleanup() {
     m_impl->volumeRenderer->cleanup();
     m_impl->structureRenderer->cleanup();
     m_impl->beamRenderer->cleanup();
+    m_impl->phaseSpaceRenderer->cleanup();
 }
 }

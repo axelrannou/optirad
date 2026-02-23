@@ -5,12 +5,15 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 namespace optirad {
 
 class PatientData;
 class Stf;
 class BeamRenderer;
+class PhaseSpaceRenderer;
+class PhaseSpaceBeamSource;
 
 class View3D {
 public:
@@ -26,7 +29,9 @@ public:
     
     void setPatientData(PatientData* data);
     void setStf(const Stf* stf);
+    void setPhaseSpaceSources(const std::vector<const PhaseSpaceBeamSource*>& sources);
     BeamRenderer* getBeamRenderer();
+    PhaseSpaceRenderer* getPhaseSpaceRenderer();
 
 private:
     struct Impl;

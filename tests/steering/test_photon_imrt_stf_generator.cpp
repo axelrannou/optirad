@@ -4,6 +4,7 @@
 #include "core/Stf.hpp"
 #include "core/Beam.hpp"
 #include "core/Ray.hpp"
+#include "io/MachineLoader.hpp"
 #include <cmath>
 
 namespace optirad::tests {
@@ -13,7 +14,7 @@ protected:
     Machine machine;
 
     void SetUp() override {
-        machine = Machine::createGenericPhoton();
+        machine = MachineLoader::load("photons", "Generic");
     }
 };
 

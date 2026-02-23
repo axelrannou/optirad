@@ -22,6 +22,15 @@ add_executable(test_dicom_importer
 target_include_directories(test_dicom_importer PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_dicom_importer PRIVATE optirad_io)
 
+# Machine loader test
+add_executable(test_machine_loader
+    io/test_machine_loader.cpp
+)
+target_include_directories(test_machine_loader PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_machine_loader PRIVATE optirad_io GTest::gtest)
+target_compile_definitions(test_machine_loader PRIVATE OPTIRAD_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+add_test(NAME MachineLoaderTest COMMAND test_machine_loader)
+
 # Enable OpenMP if available
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
@@ -69,7 +78,8 @@ add_executable(test_photon_imrt_stf_generator
     steering/test_photon_imrt_stf_generator.cpp
 )
 target_include_directories(test_photon_imrt_stf_generator PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_photon_imrt_stf_generator PRIVATE optirad_core optirad_geometry GTest::gtest GTest::gtest_main)
+target_link_libraries(test_photon_imrt_stf_generator PRIVATE optirad_io optirad_core optirad_geometry GTest::gtest GTest::gtest_main)
+target_compile_definitions(test_photon_imrt_stf_generator PRIVATE OPTIRAD_DATA_DIR="${OPTIRAD_DATA_DIR}")
 add_test(NAME PhotonIMRTStfGeneratorTest COMMAND test_photon_imrt_stf_generator)
 
 # ============================================================================
@@ -138,3 +148,38 @@ add_test(NAME MathUtilsTest COMMAND test_mathutils)
 
 add_test(NAME LBFGSOptimizerTest COMMAND test_lbfgs_optimizer)
 add_test(NAME DicomImporterTest COMMAND test_dicom_importer ${CMAKE_SOURCE_DIR}/data/dicom)
+
+# ============================================================================
+# UNIT TESTS (GoogleTest) - Phase-Space Module
+# ============================================================================
+
+add_executable(test_iaea_header_parser
+    phsp/test_iaea_header_parser.cpp
+)
+target_include_directories(test_iaea_header_parser PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_iaea_header_parser PRIVATE optirad_phsp GTest::gtest GTest::gtest_main)
+target_compile_definitions(test_iaea_header_parser PRIVATE OPTIRAD_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+add_test(NAME IAEAHeaderParserTest COMMAND test_iaea_header_parser)
+
+add_executable(test_iaea_phsp_reader
+    phsp/test_iaea_phsp_reader.cpp
+)
+target_include_directories(test_iaea_phsp_reader PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_iaea_phsp_reader PRIVATE optirad_phsp GTest::gtest GTest::gtest_main)
+target_compile_definitions(test_iaea_phsp_reader PRIVATE OPTIRAD_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+add_test(NAME IAEAPhspReaderTest COMMAND test_iaea_phsp_reader)
+
+add_executable(test_phase_space_data
+    phsp/test_phase_space_data.cpp
+)
+target_include_directories(test_phase_space_data PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_phase_space_data PRIVATE optirad_phsp GTest::gtest GTest::gtest_main)
+add_test(NAME PhaseSpaceDataTest COMMAND test_phase_space_data)
+
+add_executable(test_phase_space_beam_source
+    phsp/test_phase_space_beam_source.cpp
+)
+target_include_directories(test_phase_space_beam_source PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_phase_space_beam_source PRIVATE optirad_phsp optirad_core GTest::gtest GTest::gtest_main)
+target_compile_definitions(test_phase_space_beam_source PRIVATE OPTIRAD_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+add_test(NAME PhaseSpaceBeamSourceTest COMMAND test_phase_space_beam_source)
