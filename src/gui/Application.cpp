@@ -29,13 +29,19 @@ bool Application::init() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4); // 4x MSAA
-    m_window = glfwCreateWindow(1920, 1080, "OptiRad TPS", nullptr, nullptr);
+
+    // Detect primary monitor resolution (supports 4K etc.)
+    const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
+    int initW = mode ? mode->width  : 1920;
+    int initH = mode ? mode->height : 1080;
+    m_window = glfwCreateWindow(initW, initH, "OptiRad TPS", nullptr, nullptr);
     if (!m_window) {
         Logger::error("Failed to create GLFW window");
         glfwTerminate();
         return false;
     }
     
+    glfwMaximizeWindow(m_window);
     glfwMakeContextCurrent(m_window);
     glfwSwapInterval(1); // VSync
 

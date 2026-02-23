@@ -1,8 +1,10 @@
 #include "PlanningPanel.hpp"
 #include "io/MachineLoader.hpp"
+#include "steering/PhotonIMRTStfGenerator.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
 #include <cmath>
+#include <chrono>
 
 namespace optirad {
 
@@ -139,6 +141,98 @@ void PlanningPanel::render() {
                     stfProps.isoCenters[0][0],
                     stfProps.isoCenters[0][1],
                     stfProps.isoCenters[0][2]);
+    }
+
+    // ── Generate STF ──
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::CollapsingHeader("STF Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool canGenerateStf = m_state.planCreated() &&
+                              !m_state.isPhaseSpaceMachine();
+
+        if (!m_state.planCreated()) {
+            ImGui::TextDisabled("Create a plan first to generate STF.");
+        } else if (m_state.isPhaseSpaceMachine()) {
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f),
+                "Phase-space machine: use the Phase Space panel instead.");
+        }
+
+        if (m_isGeneratingStf) {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Generating STF...");
+            ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(-1, 0));
+
+            if (m_stfGenerationDone) {
+                m_stfThread.join();
+                m_isGeneratingStf = false;
+                m_stfGenerationDone = false;
+                Logger::info("STF generation complete");
+            }
+        } else {
+            if (!canGenerateStf) ImGui::BeginDisabled();
+
+            if (ImGui::Button("Generate STF", ImVec2(-1, 30))) {
+                m_state.resetStf();
+                m_isGeneratingStf = true;
+                m_stfGenerationDone = false;
+
+                m_stfThread = std::thread([this]() {
+                    auto start = std::chrono::steady_clock::now();
+
+                    const auto& stfP = m_state.plan->getStfProperties();
+                    std::string radiationMode = m_state.plan->getRadiationMode();
+
+                    std::array<double, 3> iso = {0.0, 0.0, 0.0};
+                    if (!stfP.isoCenters.empty()) {
+                        iso = stfP.isoCenters[0];
+                    }
+
+                    double gantryStart = !stfP.gantryAngles.empty() ? stfP.gantryAngles[0] : 0.0;
+                    double gantryStop = !stfP.gantryAngles.empty() ? stfP.gantryAngles.back() + 1.0 : 360.0;
+                    double gantryStep = stfP.gantryAngles.size() > 1
+                        ? stfP.gantryAngles[1] - stfP.gantryAngles[0] : 60.0;
+                    double bixelWidth = stfP.bixelWidth;
+
+                    PhotonIMRTStfGenerator generator(gantryStart, gantryStep, gantryStop, bixelWidth, iso);
+                    generator.setMachine(m_state.plan->getMachine());
+                    generator.setRadiationMode(radiationMode);
+
+                    auto patientData = m_state.plan->getPatientData();
+                    if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
+                        const auto* ct = patientData->getCTVolume();
+                        const auto* structureSet = patientData->getStructureSet();
+                        const auto& grid = ct->getGrid();
+
+                        generator.setGrid(grid);
+                        generator.setStructureSet(*structureSet);
+                        generator.setCTResolution(grid.getSpacing());
+                    }
+
+                    m_state.stfProps = generator.generate();
+                    m_state.stf = std::make_shared<Stf>(generator.generateStf());
+
+                    auto end = std::chrono::steady_clock::now();
+                    double elapsed = std::chrono::duration<double>(end - start).count();
+                    m_stfStatusMessage = "Generated in " + std::to_string(elapsed).substr(0, 5) + "s";
+
+                    m_stfGenerationDone = true;
+                });
+            }
+
+            if (!canGenerateStf) ImGui::EndDisabled();
+        }
+
+        // Show STF status
+        if (m_state.stfGenerated()) {
+            if (!m_stfStatusMessage.empty()) {
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", m_stfStatusMessage.c_str());
+            }
+            ImGui::Text("Beams: %zu | Rays: %zu | Bixels: %zu",
+                        m_state.stf->getCount(),
+                        m_state.stf->getTotalNumOfRays(),
+                        m_state.stf->getTotalNumOfBixels());
+        }
     }
 
     ImGui::End();

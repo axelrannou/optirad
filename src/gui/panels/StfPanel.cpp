@@ -44,71 +44,10 @@ void StfPanel::render() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ── Generate STF button ──
-    if (m_isGenerating) {
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Generating STF...");
-        ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(-1, 0));
-        
-        // Check if background thread finished
-        if (m_generationDone) {
-            m_generationThread.join();
-            m_isGenerating = false;
-            m_generationDone = false;
-            Logger::info("STF generation complete");
-        }
-    } else {
-        if (ImGui::Button("Generate STF", ImVec2(-1, 30))) {
-            // Reset STF
-            m_state.resetStf();
-            m_isGenerating = true;
-            m_generationDone = false;
-
-            // Run generation on background thread to keep GUI responsive
-            m_generationThread = std::thread([this]() {
-                auto start = std::chrono::steady_clock::now();
-
-                const auto& stfP = m_state.plan->getStfProperties();
-                std::string radiationMode = m_state.plan->getRadiationMode();
-
-                std::array<double, 3> iso = {0.0, 0.0, 0.0};
-                if (!stfP.isoCenters.empty()) {
-                    iso = stfP.isoCenters[0];
-                }
-
-                double gantryStart = !stfP.gantryAngles.empty() ? stfP.gantryAngles[0] : 0.0;
-                double gantryStop = !stfP.gantryAngles.empty() ? stfP.gantryAngles.back() + 1.0 : 360.0;
-                double gantryStep = stfP.gantryAngles.size() > 1
-                    ? stfP.gantryAngles[1] - stfP.gantryAngles[0] : 60.0;
-                double bixelWidth = stfP.bixelWidth;
-
-                PhotonIMRTStfGenerator generator(gantryStart, gantryStep, gantryStop, bixelWidth, iso);
-                generator.setMachine(m_state.plan->getMachine());
-                generator.setRadiationMode(radiationMode);
-
-                auto patientData = m_state.plan->getPatientData();
-                if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
-                    const auto* ct = patientData->getCTVolume();
-                    const auto* structureSet = patientData->getStructureSet();
-                    const auto& grid = ct->getGrid();
-
-                    generator.setGrid(grid);
-                    generator.setStructureSet(*structureSet);
-                    generator.setCTResolution(grid.getSpacing());
-                }
-
-                m_state.stfProps = generator.generate();
-                m_state.stf = std::make_shared<Stf>(generator.generateStf());
-
-                auto end = std::chrono::steady_clock::now();
-                double elapsed = std::chrono::duration<double>(end - start).count();
-                m_statusMessage = "Generated in " + std::to_string(elapsed).substr(0, 5) + "s";
-
-                m_generationDone = true;
-            });
-        }
-    }
-
     // ── Show STF results ──
+    if (!m_state.stfGenerated()) {
+        ImGui::TextDisabled("Generate STF from the Planning panel.");
+    }
     if (m_state.stfGenerated()) {
         ImGui::Spacing();
         ImGui::Separator();
