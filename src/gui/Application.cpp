@@ -2,8 +2,10 @@
 #include "panels/PatientPanel.hpp"
 #include "panels/PlanningPanel.hpp"
 #include "panels/StfPanel.hpp"
+#include "panels/PhaseSpacePanel.hpp"
 #include "views/SliceView.hpp"
 #include "views/View3D.hpp"
+#include "views/renderers/PhaseSpaceRenderer.hpp"
 #include "utils/Logger.hpp"
 
 #include <imgui.h>
@@ -87,6 +89,7 @@ bool Application::init() {
     m_patientPanel = std::make_unique<PatientPanel>();
     m_planningPanel = std::make_unique<PlanningPanel>(m_appState);
     m_stfPanel = std::make_unique<StfPanel>(m_appState);
+    m_phaseSpacePanel = std::make_unique<PhaseSpacePanel>(m_appState);
     
     // Create slice views
     m_axialView = std::make_unique<SliceView>(SliceOrientation::Axial);
@@ -131,6 +134,17 @@ void Application::run() {
             m_view3D->setStf(m_appState.stf.get());
             m_stfPanel->setBeamRenderer(m_view3D->getBeamRenderer());
         }
+
+        // Pass phase-space data to 3D view when available
+        if (m_appState.phaseSpaceLoaded()) {
+            std::vector<const PhaseSpaceBeamSource*> sources;
+            sources.reserve(m_appState.phaseSpaceSources.size());
+            for (const auto& src : m_appState.phaseSpaceSources) {
+                sources.push_back(src.get());
+            }
+            m_view3D->setPhaseSpaceSources(sources);
+            m_phaseSpacePanel->setPhaseSpaceRenderer(m_view3D->getPhaseSpaceRenderer());
+        }
         
         // Render 3D view
         m_view3D->render();
@@ -147,6 +161,7 @@ void Application::run() {
         m_patientPanel->render();
         m_planningPanel->render();
         m_stfPanel->render();
+        m_phaseSpacePanel->render();
         
         // Render views
         m_axialView->render();
@@ -192,6 +207,7 @@ void Application::renderMenuBar() {
         
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("Patient Panel", nullptr, true);
+            ImGui::MenuItem("Phase Space Panel", nullptr, true);
             ImGui::MenuItem("Axial View", nullptr, true);
             ImGui::MenuItem("Sagittal View", nullptr, true);
             ImGui::MenuItem("Coronal View", nullptr, true);

@@ -21,6 +21,17 @@ void StfPanel::render() {
         return;
     }
 
+    // Gate: STF generation only for generic machines
+    if (m_state.isPhaseSpaceMachine()) {
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f),
+            "Machine uses phase-space beam source.");
+        ImGui::TextWrapped(
+            "STF generation is not needed for phase-space machines. "
+            "Use the Phase Space panel to load and inspect beam data.");
+        ImGui::End();
+        return;
+    }
+
     // Show plan summary
     const auto& plan = m_state.plan;
     const auto& stfProps = plan->getStfProperties();

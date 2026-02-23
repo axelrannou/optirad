@@ -42,6 +42,7 @@ add_library(optirad_gui
     panels/LogPanel.cpp
     panels/PlanningPanel.cpp
     panels/StfPanel.cpp
+    panels/PhaseSpacePanel.cpp
     views/SliceView.cpp
     views/DVHView.cpp
     views/View3D.cpp
@@ -50,6 +51,7 @@ add_library(optirad_gui
     views/renderers/VolumeRenderer.cpp
     views/renderers/StructureRenderer.cpp
     views/renderers/BeamRenderer.cpp
+    views/renderers/PhaseSpaceRenderer.cpp
 )
 
 target_include_directories(optirad_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -59,6 +61,7 @@ target_link_libraries(optirad_gui PUBLIC
     optirad_io
     optirad_geometry
     optirad_optimization
+    optirad_phsp
     imgui
     OpenGL::GL
     glfw

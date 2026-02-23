@@ -14,6 +14,7 @@ namespace optirad {
 class PatientPanel;
 class PlanningPanel;
 class StfPanel;
+class PhaseSpacePanel;
 class SliceView;
 class View3D;
 
@@ -44,6 +45,7 @@ private:
     std::unique_ptr<PatientPanel> m_patientPanel;
     std::unique_ptr<PlanningPanel> m_planningPanel;
     std::unique_ptr<StfPanel> m_stfPanel;
+    std::unique_ptr<PhaseSpacePanel> m_phaseSpacePanel;
 };
 
 } // namespace optirad

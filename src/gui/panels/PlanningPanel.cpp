@@ -7,7 +7,8 @@
 namespace optirad {
 
 static const char* kRadiationModes[] = { "photons" };
-static const char* kMachines[] = { "Generic" };
+static const char* kMachines[] = { "Generic", "Varian_TrueBeam6MV" };
+static const bool kIsPhaseSpace[] = { false, true };
 
 PlanningPanel::PlanningPanel(GuiAppState& state) : m_state(state) {}
 
@@ -28,6 +29,11 @@ void PlanningPanel::render() {
         ImGui::Indent();
         ImGui::Combo("Mode", &m_radiationModeIdx, kRadiationModes, IM_ARRAYSIZE(kRadiationModes));
         ImGui::Combo("Machine", &m_machineIdx, kMachines, IM_ARRAYSIZE(kMachines));
+        if (kIsPhaseSpace[m_machineIdx]) {
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Phase-space (IAEA PSF)");
+        } else {
+            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.5f, 1.0f), "Generic (pencil-beam)");
+        }
         ImGui::Unindent();
     }
 
@@ -55,11 +61,13 @@ void PlanningPanel::render() {
         ImGui::Unindent();
     }
 
-    // ── Bixel Width ──
-    if (ImGui::CollapsingHeader("Bixel Width", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Indent();
-        ImGui::DragFloat("Width (mm)", &m_bixelWidth, 0.5f, 1.0f, 20.0f, "%.1f");
-        ImGui::Unindent();
+    // ── Bixel Width (only for generic machines) ──
+    if (!kIsPhaseSpace[m_machineIdx]) {
+        if (ImGui::CollapsingHeader("Bixel Width", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Indent();
+            ImGui::DragFloat("Width (mm)", &m_bixelWidth, 0.5f, 1.0f, 20.0f, "%.1f");
+            ImGui::Unindent();
+        }
     }
 
     ImGui::Separator();
@@ -68,7 +76,7 @@ void PlanningPanel::render() {
     // ── Validation ──
     bool paramsValid = (m_gantryStep > 0.0f) &&
                        (m_gantryStop > m_gantryStart) &&
-                       (m_bixelWidth > 0.0f) &&
+                       (kIsPhaseSpace[m_machineIdx] || m_bixelWidth > 0.0f) &&
                        (m_numFractions > 0);
 
     if (!paramsValid) {
