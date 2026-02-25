@@ -19,6 +19,9 @@ void LBFGSOptimizer::setTolerance(double tol) { m_tolerance = tol; }
 void LBFGSOptimizer::setMemorySize(int m) { m_memorySize = m; }
 void LBFGSOptimizer::setMaxFluence(double maxFluence) { m_maxFluence = maxFluence; }
 void LBFGSOptimizer::setVerbose(bool verbose) { m_verbose = verbose; }
+void LBFGSOptimizer::setPrescriptionDose(double dose) { m_prescriptionDose = dose; }
+void LBFGSOptimizer::setHotspotThreshold(double threshold) { m_hotspotThreshold = threshold; }
+void LBFGSOptimizer::setHotspotPenalty(double penalty) { m_hotspotPenalty = penalty; }
 
 OptimizationResult LBFGSOptimizer::optimize(
     const DoseInfluenceMatrix& dij,
@@ -42,12 +45,10 @@ OptimizationResult LBFGSOptimizer::optimize(
     double lb = 0.0;
     double ub = m_maxFluence;
     
-    // Initialize weights
-    std::vector<double> x(n, 1.0);
-    #pragma omp parallel for
-    for (int i = 0; i < n; ++i) {
-        x[i] = std::max(lb, std::min(ub, x[i]));
-    }
+    // Initialize weights to 0 (standard for TPS optimizers).
+    // Starting from 0 lets the objectives drive doses up to target levels
+    // while NTO/overdose objectives prevent overshoot.
+    std::vector<double> x(n, 0.0);
     
     // Compute initial objective and gradient
     std::vector<double> grad(n);
@@ -92,13 +93,15 @@ OptimizationResult LBFGSOptimizer::optimize(
             break;
         }
         
-        // Check relative objective change
+        // Check relative objective change (but only when gradient is also small)
         if (iter > 1 && objectiveHistory.size() >= 2) {
             double prev = objectiveHistory[objectiveHistory.size() - 2];
             constexpr double epsilon = 1e-14;
             if (std::abs(prev) > epsilon) {
                 double relObjChange = std::abs(fval - prev) / std::abs(prev);
-                if (relObjChange < 1e-7) {
+                // Require BOTH small relative change AND small gradient
+                // to avoid premature convergence when the landscape is still active
+                if (relObjChange < 1e-7 && projGradNorm < m_tolerance * 100.0) {
                     result.converged = true;
                     if (m_verbose) {
                         std::cout << std::setw(8) << iter 
@@ -218,6 +221,30 @@ double LBFGSOptimizer::computeObjectiveAndGradient(
         #pragma omp parallel for
         for (int i = 0; i < numVoxels; ++i) {
             gVox[i] += objGrad[i];
+        }
+    }
+    
+    // Eclipse-style NTO (Normal Tissue Objective) / Global hotspot penalty
+    // Penalizes ALL voxels receiving dose > prescriptionDose * hotspotThreshold
+    // Uses progressive cubic penalty matching matRad_OptimizerEclipseBased
+    if (m_prescriptionDose > 0 && m_hotspotPenalty > 0) {
+        double hotspotLimit = m_prescriptionDose * m_hotspotThreshold;
+        
+        #pragma omp parallel for reduction(+:objVal)
+        for (int i = 0; i < numVoxels; ++i) {
+            double excess = dose[i] - hotspotLimit;
+            if (excess > 0) {
+                double normalizedExcess = excess / m_prescriptionDose;
+                // Progressive penalty: cubic scaling for stronger hotspot suppression
+                double penaltyScale = m_hotspotPenalty * (normalizedExcess * normalizedExcess) *
+                                      (1.0 + 10.0 * normalizedExcess);
+                objVal += penaltyScale * (excess * excess);
+                
+                // Gradient: 2 * penalty * normalizedExcess * (1 + 15 * normalizedExcess) * excess
+                double gradScale = 2.0 * m_hotspotPenalty * normalizedExcess *
+                                   (1.0 + 15.0 * normalizedExcess);
+                gVox[i] += gradScale * excess;
+            }
         }
     }
     

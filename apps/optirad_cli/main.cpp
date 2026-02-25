@@ -13,6 +13,18 @@
 #include "geometry/Volume.hpp"
 #include "phsp/PhaseSpaceBeamSource.hpp"
 #include "phsp/PhaseSpaceData.hpp"
+#include "dose/DoseEngineFactory.hpp"
+#include "dose/DoseInfluenceMatrix.hpp"
+#include "dose/DoseMatrix.hpp"
+#include "dose/DijSerializer.hpp"
+#include "dose/DoseCalcOptions.hpp"
+#include "optimization/OptimizerFactory.hpp"
+#include "optimization/objectives/SquaredDeviation.hpp"
+#include "optimization/objectives/SquaredOverdose.hpp"
+#include "optimization/objectives/SquaredUnderdose.hpp"
+#include "optimization/objectives/DVHObjective.hpp"
+#include "optimization/Constraint.hpp"
+#include "dose/PlanAnalysis.hpp"
 #include "utils/Logger.hpp"
 
 #include <iostream>
@@ -21,6 +33,9 @@
 #include <sstream>
 #include <vector>
 #include <cstdlib>
+#include <chrono>
+#include <algorithm>
+#include <numeric>
 
 using namespace optirad;
 
@@ -31,11 +46,21 @@ struct AppState {
     std::shared_ptr<StfProperties> stfProps;  // lightweight STF properties
     std::shared_ptr<Stf> stf;                 // full STF with beams and rays
     std::vector<std::shared_ptr<PhaseSpaceBeamSource>> phaseSpaceSources;
+
+    // Dose calculation
+    std::shared_ptr<DoseInfluenceMatrix> dij;
+    std::shared_ptr<Grid> doseGrid;
+
+    // Optimization
+    std::vector<double> optimizedWeights;
+    std::shared_ptr<DoseMatrix> doseResult;
 };
 
 // Forward declarations
 int generateStf(const std::vector<std::string>& args, AppState& state);
 int loadPhaseSpace(const std::vector<std::string>& args, AppState& state);
+int doseCalc(const std::vector<std::string>& args, AppState& state);
+int optimize(const std::vector<std::string>& args, AppState& state);
 std::unique_ptr<optirad::IStfGenerator> selectStfGenerator(const std::string& mode, double gantryStart, double gantryStep, double gantryStop, double bixelWidth, const std::array<double, 3>& iso);
 
 void printUsage(const char* progName) {
@@ -44,6 +69,8 @@ void printUsage(const char* progName) {
               << "  load <dicom_dir>                Load and inspect DICOM directory\n"
               << "  plan [options]                   Generate a treatment plan (requires DICOM data first)\n"
               << "  generateStf                      Generate STF properties (Generic machines only)\n"
+              << "  doseCalc [options]               Calculate Dij (requires STF)\n"
+              << "  optimize [options]               Run optimization (requires Dij)\n"
               << "  loadPhaseSpace [options]          Load phase-space beam source (phase-space machines only)\n"
               << "  interactive                      Enter interactive mode\n"
               << "  help                             Show this help message\n\n"
@@ -55,6 +82,14 @@ void printUsage(const char* progName) {
               << "  --gantry-step <deg>              Gantry angle step (default: 4)\n"
               << "  --gantry-stop <deg>              Gantry stop angle exclusive (default: 360)\n"
               << "  --bixel-width <mm>               Bixel width (default: 7)\n\n"
+              << "Dose calc options:\n"
+              << "  --dose-resolution <mm>           Dose grid resolution (default: 2.5)\n"
+              << "  --no-cache                       Disable Dij cache\n\n"
+              << "Optimize options:\n"
+              << "  --max-iter <n>                   Max iterations (default: 500)\n"
+              << "  --tolerance <val>                Convergence tolerance (default: 1e-5)\n"
+              << "  --target-dose <Gy>               Prescribed dose for targets (default: 60)\n"
+              << "  --oar-max-dose <Gy>              Max dose for OARs (default: 30)\n\n"
               << "Phase-space options:\n"
               << "  --collimator <deg>               Collimator angle (default: 0)\n"
               << "  --couch <deg>                    Couch angle (default: 0)\n"
@@ -263,6 +298,8 @@ int runInteractive(AppState& state) {
                       << "  plan [options]                Create treatment plan (requires DICOM data)\n"
                       << "  plan-help                     Show plan options and examples\n"
                       << "  generateStf                   Generate STF from plan (Generic machines only)\n"
+                      << "  doseCalc [options]            Calculate Dij (requires STF)\n"
+                      << "  optimize [options]            Run optimization (requires Dij)\n"
                       << "  loadPhaseSpace [options]       Load phase-space beam source (PSF machines only)\n"
                       << "  phsp-info                     Show phase-space source metrics\n"
                       << "  info                          Show current state and available STF properties\n"
@@ -298,6 +335,12 @@ int runInteractive(AppState& state) {
         } else if (cmd == "loadPhaseSpace") {
             std::vector<std::string> phspArgs(tokens.begin() + 1, tokens.end());
             loadPhaseSpace(phspArgs, state);
+        } else if (cmd == "doseCalc") {
+            std::vector<std::string> dcArgs(tokens.begin() + 1, tokens.end());
+            doseCalc(dcArgs, state);
+        } else if (cmd == "optimize") {
+            std::vector<std::string> optArgs(tokens.begin() + 1, tokens.end());
+            optimize(optArgs, state);
         } else if (cmd == "phsp-info") {
             if (state.phaseSpaceSources.empty()) {
                 std::cout << "No phase-space sources loaded.\n";
@@ -327,6 +370,8 @@ int runInteractive(AppState& state) {
                           << "\n";
             }
             std::cout << "STF:            " << (state.stf ? "generated" : "not generated") << "\n";
+            std::cout << "Dij:            " << (state.dij ? "computed (nnz=" + std::to_string(state.dij->getNumNonZeros()) + ")" : "not computed") << "\n";
+            std::cout << "Optimization:   " << (!state.optimizedWeights.empty() ? "done" : "not done") << "\n";
             std::cout << "Phase-space:    " << (!state.phaseSpaceSources.empty() ?
                 std::to_string(state.phaseSpaceSources.size()) + " beams loaded" : "not loaded") << "\n";
             if (state.stf) {
@@ -508,6 +553,281 @@ int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
     return 0;
 }
 
+// ── doseCalc command: compute Dij with optional caching ──
+int doseCalc(const std::vector<std::string>& args, AppState& state) {
+    if (!state.stf || state.stf->isEmpty()) {
+        std::cerr << "Error: No STF generated. Use 'generateStf' first.\n";
+        return 1;
+    }
+
+    double doseResolution = 2.5;
+    bool useCache = true;
+    double absoluteThreshold = 1e-6;
+    double relativeThreshold = 0.01;
+    int numThreads = 0;
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--dose-resolution" && i + 1 < args.size()) {
+            doseResolution = std::stod(args[++i]);
+        } else if (args[i] == "--no-cache") {
+            useCache = false;
+        } else if (args[i] == "--abs-threshold" && i + 1 < args.size()) {
+            absoluteThreshold = std::stod(args[++i]);
+        } else if (args[i] == "--rel-threshold" && i + 1 < args.size()) {
+            relativeThreshold = std::stod(args[++i]);
+        } else if (args[i] == "--threads" && i + 1 < args.size()) {
+            numThreads = std::stoi(args[++i]);
+        }
+    }
+
+    std::cout << "\n=== Dose Calculation ===\n";
+    std::cout << "Dose grid resolution: " << doseResolution << " mm\n";
+    std::cout << "Thresholds: absolute=" << absoluteThreshold
+              << ", relative=" << (relativeThreshold * 100.0) << "%\n";
+    std::cout << "Threads: " << (numThreads > 0 ? std::to_string(numThreads) : "all") << "\n";
+
+    // Set dose resolution on plan
+    state.plan->setDoseGridResolution({doseResolution, doseResolution, doseResolution});
+
+    // Create dose grid
+    const auto& ctGrid = state.patientData->getGrid();
+    auto doseGrid = std::make_shared<Grid>(
+        Grid::createDoseGrid(ctGrid, {doseResolution, doseResolution, doseResolution}));
+    state.doseGrid = doseGrid;
+
+    auto dims = doseGrid->getDimensions();
+    std::cout << "Dose grid: " << dims[0] << "x" << dims[1] << "x" << dims[2]
+              << " (" << doseGrid->getNumVoxels() << " voxels)\n";
+
+    // Check cache
+    if (useCache) {
+        std::string patientName = "unknown";
+        if (state.patientData->getPatient()) {
+            patientName = state.patientData->getPatient()->getName();
+        }
+        std::string cacheFile = DijSerializer::getCacheDir() + "/" +
+            DijSerializer::buildCacheKey(
+                patientName,
+                static_cast<int>(state.stf->getCount()),
+                state.plan->getStfProperties().bixelWidth,
+                doseResolution);
+
+        if (DijSerializer::exists(cacheFile)) {
+            std::cout << "Loading Dij from cache: " << cacheFile << "\n";
+            auto loaded = DijSerializer::load(cacheFile);
+            state.dij = std::make_shared<DoseInfluenceMatrix>(std::move(loaded));
+            std::cout << "Dij loaded: " << state.dij->getNumVoxels() << " x "
+                      << state.dij->getNumBixels() << " (nnz: " << state.dij->getNumNonZeros() << ")\n";
+            std::cout << "=== Done ===\n";
+            return 0;
+        }
+    }
+
+    // Compute Dij
+    std::cout << "Computing Dij (" << state.stf->getCount() << " beams, "
+              << state.stf->getTotalNumOfBixels() << " bixels)...\n";
+
+    auto engine = DoseEngineFactory::create("PencilBeam");
+    engine->setProgressCallback([](int current, int total, const std::string& msg) {
+        std::cout << "\r  Beam " << current << "/" << total << " " << msg << std::flush;
+    });
+
+    // Apply user options
+    DoseCalcOptions opts;
+    opts.absoluteThreshold = absoluteThreshold;
+    opts.relativeThreshold = relativeThreshold;
+    opts.numThreads = numThreads;
+    engine->setOptions(opts);
+
+    auto start = std::chrono::steady_clock::now();
+    auto dij = engine->calculateDij(*state.plan, *state.stf, *state.patientData, *doseGrid);
+    auto end = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(end - start).count();
+
+    state.dij = std::make_shared<DoseInfluenceMatrix>(std::move(dij));
+    std::cout << "\nDij: " << state.dij->getNumVoxels() << " x " << state.dij->getNumBixels()
+              << " (nnz: " << state.dij->getNumNonZeros() << ") in " << elapsed << "s\n";
+
+    // Save to cache
+    if (useCache) {
+        std::string patientName = "unknown";
+        if (state.patientData->getPatient()) {
+            patientName = state.patientData->getPatient()->getName();
+        }
+        std::string cacheFile = DijSerializer::getCacheDir() + "/" +
+            DijSerializer::buildCacheKey(
+                patientName,
+                static_cast<int>(state.stf->getCount()),
+                state.plan->getStfProperties().bixelWidth,
+                doseResolution);
+        DijSerializer::save(*state.dij, cacheFile);
+        std::cout << "Saved to cache: " << cacheFile << "\n";
+    }
+
+    std::cout << "=== Done ===\n";
+    return 0;
+}
+
+// ── optimize command: run L-BFGS-B fluence optimization ──
+int optimize(const std::vector<std::string>& args, AppState& state) {
+    if (!state.dij || state.dij->getNumNonZeros() == 0) {
+        std::cerr << "Error: No Dij computed. Use 'doseCalc' first.\n";
+        return 1;
+    }
+
+    int maxIter = 500;
+    double tolerance = 1e-5;
+    double targetDose = 60.0;
+    double oarMaxDose = 30.0;
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--max-iter" && i + 1 < args.size()) {
+            maxIter = std::stoi(args[++i]);
+        } else if (args[i] == "--tolerance" && i + 1 < args.size()) {
+            tolerance = std::stod(args[++i]);
+        } else if (args[i] == "--target-dose" && i + 1 < args.size()) {
+            targetDose = std::stod(args[++i]);
+        } else if (args[i] == "--oar-max-dose" && i + 1 < args.size()) {
+            oarMaxDose = std::stod(args[++i]);
+        }
+    }
+
+    // Build objectives from structures
+    const auto* ss = state.patientData->getStructureSet();
+    if (!ss || ss->getCount() == 0) {
+        std::cerr << "Error: No structures available for optimization.\n";
+        return 1;
+    }
+
+    const auto& ctGrid = state.patientData->getGrid();
+    const auto& doseGrid = *state.doseGrid;
+
+    // ── Pre-optimization summary ──
+    std::cout << "\n╔══════════════════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║                       PRE-OPTIMIZATION SUMMARY                              ║\n";
+    std::cout << "╚══════════════════════════════════════════════════════════════════════════════╝\n\n";
+    std::cout << "  Bixels:      " << state.dij->getNumBixels() << "\n";
+    std::cout << "  Dose voxels: " << state.dij->getNumVoxels() << "\n";
+    std::cout << "  NNZ:         " << state.dij->getNumNonZeros() << "\n";
+    std::cout << "  Max iter:    " << maxIter << "\n";
+    std::cout << "  Tolerance:   " << tolerance << "\n\n";
+
+    std::vector<std::unique_ptr<ObjectiveFunction>> ownedObjs;
+    std::vector<ObjectiveFunction*> objPtrs;
+
+    std::cout << "  Objectives:\n";
+    std::cout << "  ──────────────────────────────────────────────────────────────\n";
+
+    for (size_t si = 0; si < ss->getCount(); ++si) {
+        const auto* structure = ss->getStructure(si);
+        if (!structure || structure->getVoxelIndices().empty()) continue;
+
+        // Map CT-grid voxel indices → dose-grid voxel indices
+        auto doseIndices = Grid::mapVoxelIndices(ctGrid, doseGrid, structure->getVoxelIndices());
+
+        std::string type = structure->getType();
+        std::string name = structure->getName();
+        bool isTarget = (type.find("TARGET") != std::string::npos ||
+                        type.find("PTV") != std::string::npos ||
+                        type.find("CTV") != std::string::npos ||
+                        type.find("GTV") != std::string::npos ||
+                        name.find("PTV") != std::string::npos ||
+                        name.find("CTV") != std::string::npos ||
+                        name.find("GTV") != std::string::npos);
+
+        if (isTarget) {
+            // Target: SquaredDeviation + MinDVH(D95) + MaxDVH(D2)
+            {
+                auto obj = std::make_unique<SquaredDeviation>();
+                obj->setPrescribedDose(targetDose);
+                obj->setWeight(100.0);
+                obj->setStructure(structure);
+                obj->setVoxelIndices(doseIndices);
+                std::cout << "  Target: " << name << " -> SquaredDeviation @ " << targetDose
+                          << " Gy (w=100, " << doseIndices.size() << " voxels)\n";
+                objPtrs.push_back(obj.get());
+                ownedObjs.push_back(std::move(obj));
+            }
+            // MinDVH: D95 >= prescribed dose (95% of target should get at least prescribed dose)
+            {
+                auto obj = std::make_unique<DVHObjective>();
+                obj->setType(DVHObjective::Type::MIN_DVH);
+                obj->setDoseThreshold(targetDose);
+                obj->setVolumeFraction(0.95);
+                obj->setWeight(50.0);
+                obj->setStructure(structure);
+                obj->setVoxelIndices(doseIndices);
+                std::cout << "  Target: " << name << " -> MinDVH D95% >= " << targetDose
+                          << " Gy (w=50, " << doseIndices.size() << " voxels)\n";
+                objPtrs.push_back(obj.get());
+                ownedObjs.push_back(std::move(obj));
+            }
+            // MaxDVH: D2 <= 1.07*prescribed (hot spot control)
+            {
+                auto obj = std::make_unique<DVHObjective>();
+                obj->setType(DVHObjective::Type::MAX_DVH);
+                obj->setDoseThreshold(targetDose * 1.07);
+                obj->setVolumeFraction(0.02);
+                obj->setWeight(30.0);
+                obj->setStructure(structure);
+                obj->setVoxelIndices(doseIndices);
+                std::cout << "  Target: " << name << " -> MaxDVH D2% <= " << targetDose * 1.07
+                          << " Gy (w=30, " << doseIndices.size() << " voxels)\n";
+                objPtrs.push_back(obj.get());
+                ownedObjs.push_back(std::move(obj));
+            }
+        } else {
+            auto obj = std::make_unique<SquaredOverdose>();
+            obj->setMaxDose(oarMaxDose);
+            obj->setWeight(1.0);
+            obj->setStructure(structure);
+            obj->setVoxelIndices(doseIndices);
+            std::cout << "  OAR:    " << name << " -> SquaredOverdose @ " << oarMaxDose
+                      << " Gy (w=1, " << doseIndices.size() << " voxels)\n";
+            objPtrs.push_back(obj.get());
+            ownedObjs.push_back(std::move(obj));
+        }
+    }
+
+    if (objPtrs.empty()) {
+        std::cerr << "Error: No valid objectives generated from structures.\n";
+        return 1;
+    }
+
+    std::cout << "\n  Total objectives: " << objPtrs.size() << "\n";
+    std::cout << "\nRunning L-BFGS-B optimizer...\n";
+
+    auto optimizer = OptimizerFactory::create("LBFGS");
+    optimizer->setMaxIterations(maxIter);
+    optimizer->setTolerance(tolerance);
+
+    auto start = std::chrono::steady_clock::now();
+    std::vector<Constraint> constraints;
+    auto result = optimizer->optimize(*state.dij, objPtrs, constraints);
+    auto end = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(end - start).count();
+
+    state.optimizedWeights = std::move(result.weights);
+
+    std::cout << "\nOptimization " << (result.converged ? "converged" : "reached max iterations")
+              << " in " << result.iterations << " iterations (" << elapsed << "s)\n"
+              << "Final objective: " << result.finalObjective << "\n";
+
+    // Forward dose computation
+    std::cout << "\nComputing forward dose...\n";
+    auto engine = DoseEngineFactory::create("PencilBeam");
+    auto dose = engine->calculateDose(*state.dij, state.optimizedWeights, *state.doseGrid);
+    state.doseResult = std::make_shared<DoseMatrix>(std::move(dose));
+
+    // Comprehensive Plan Analysis
+    auto stats = PlanAnalysis::computeStats(
+        *state.doseResult, *state.patientData, *state.doseGrid, targetDose);
+    PlanAnalysis::print(stats);
+
+    std::cout << "=== Done ===\n";
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     Logger::init();
 
@@ -551,8 +871,15 @@ int main(int argc, char* argv[]) {
     }
 
     if (command == "optimize") {
-        std::cout << "Optimization not yet implemented\n";
-        return 0;
+        std::vector<std::string> optArgs;
+        for (int i = 2; i < argc; ++i) optArgs.emplace_back(argv[i]);
+        return optimize(optArgs, state);
+    }
+
+    if (command == "doseCalc") {
+        std::vector<std::string> dcArgs;
+        for (int i = 2; i < argc; ++i) dcArgs.emplace_back(argv[i]);
+        return doseCalc(dcArgs, state);
     }
 
     std::cerr << "Unknown command: " << command << "\n";

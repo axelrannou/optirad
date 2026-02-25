@@ -2,6 +2,8 @@
 
 #include "IView.hpp"
 #include "core/PatientData.hpp"
+#include "dose/DoseMatrix.hpp"
+#include "geometry/Grid.hpp"
 #include <memory>
 #include <string>
 
@@ -25,12 +27,19 @@ public:
     
     void setPatientData(PatientData* data);
     void setSliceIndex(size_t index);
+
+    /// Set dose overlay data (nullptr to disable)
+    void setDoseData(const DoseMatrix* dose, const Grid* doseGrid);
     
 private:
     void updateTexture();
+    void updateDoseTexture();
     void renderControls();
     void renderSlice();
     void renderContours();
+    
+    /// Jet colormap: value in [0,1] → R,G,B
+    static void jetColormap(float t, unsigned char& r, unsigned char& g, unsigned char& b);
     
     PatientData* m_patientData = nullptr;
     SliceOrientation m_orientation;
@@ -46,7 +55,7 @@ private:
     unsigned int m_textureID = 0;
     int m_textureWidth = 0;
     int m_textureHeight = 0;
-    int m_lastTextureWidth = -1;   // Track previous dimensions to avoid unnecessary reallocation
+    int m_lastTextureWidth = -1;
     int m_lastTextureHeight = -1;
     bool m_needsUpdate = true;
     
@@ -57,6 +66,15 @@ private:
     // Contour display settings
     float m_contourThickness = 2.0f;
     bool m_showContours = true;
+
+    // Dose overlay
+    const DoseMatrix* m_doseData = nullptr;
+    const Grid* m_doseGrid = nullptr;
+    unsigned int m_doseTextureID = 0;
+    bool m_showDose = true;
+    float m_doseAlpha = 0.4f;
+    float m_doseThresholdPct = 5.0f; // % of max dose below which dose is not shown
+    bool m_doseNeedsUpdate = true;
 };
 
 } // namespace optirad

@@ -8,15 +8,12 @@ std::string SquaredOverdose::getName() const { return "SquaredOverdose"; }
 void SquaredOverdose::setMaxDose(double dose) { m_maxDose = dose; }
 
 double SquaredOverdose::compute(const std::vector<double>& dose) const {
-    if (!m_structure) return 0.0;
-    
-    auto indices = m_structure->getVoxelIndices();
-    if (indices.empty()) {
-        return 0.0;  // No voxels to compute on
-    }
+    const auto& indices = getActiveIndices();
+    if (indices.empty()) return 0.0;
     
     double sum = 0.0;
     for (size_t idx : indices) {
+        if (idx >= dose.size()) continue;
         double excess = std::max(0.0, dose[idx] - m_maxDose);
         sum += excess * excess;
     }
@@ -25,15 +22,12 @@ double SquaredOverdose::compute(const std::vector<double>& dose) const {
 
 std::vector<double> SquaredOverdose::gradient(const std::vector<double>& dose) const {
     std::vector<double> grad(dose.size(), 0.0);
-    if (!m_structure) return grad;
-    
-    auto indices = m_structure->getVoxelIndices();
-    if (indices.empty()) {
-        return grad;  // No voxels to compute on, return zero gradient
-    }
+    const auto& indices = getActiveIndices();
+    if (indices.empty()) return grad;
     
     double scale = 2.0 * m_weight / indices.size();
     for (size_t idx : indices) {
+        if (idx >= dose.size()) continue;
         if (dose[idx] > m_maxDose) {
             grad[idx] = scale * (dose[idx] - m_maxDose);
         }

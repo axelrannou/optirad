@@ -15,6 +15,8 @@ class PatientPanel;
 class PlanningPanel;
 class StfPanel;
 class PhaseSpacePanel;
+class OptimizationPanel;
+class DoseStatsPanel;
 class SliceView;
 class View3D;
 
@@ -46,6 +48,8 @@ private:
     std::unique_ptr<PlanningPanel> m_planningPanel;
     std::unique_ptr<StfPanel> m_stfPanel;
     std::unique_ptr<PhaseSpacePanel> m_phaseSpacePanel;
+    std::unique_ptr<OptimizationPanel> m_optimizationPanel;
+    std::unique_ptr<DoseStatsPanel> m_doseStatsPanel;
 };
 
 } // namespace optirad

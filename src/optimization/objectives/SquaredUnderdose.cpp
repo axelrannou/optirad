@@ -8,15 +8,12 @@ std::string SquaredUnderdose::getName() const { return "SquaredUnderdose"; }
 void SquaredUnderdose::setMinDose(double dose) { m_minDose = dose; }
 
 double SquaredUnderdose::compute(const std::vector<double>& dose) const {
-    if (!m_structure) return 0.0;
-    
-    auto indices = m_structure->getVoxelIndices();
-    if (indices.empty()) {
-        return 0.0;  // No voxels to compute on
-    }
+    const auto& indices = getActiveIndices();
+    if (indices.empty()) return 0.0;
     
     double sum = 0.0;
     for (size_t idx : indices) {
+        if (idx >= dose.size()) continue;
         double deficit = std::max(0.0, m_minDose - dose[idx]);
         sum += deficit * deficit;
     }
@@ -25,15 +22,12 @@ double SquaredUnderdose::compute(const std::vector<double>& dose) const {
 
 std::vector<double> SquaredUnderdose::gradient(const std::vector<double>& dose) const {
     std::vector<double> grad(dose.size(), 0.0);
-    if (!m_structure) return grad;
-    
-    auto indices = m_structure->getVoxelIndices();
-    if (indices.empty()) {
-        return grad;  // No voxels to compute on, return zero gradient
-    }
+    const auto& indices = getActiveIndices();
+    if (indices.empty()) return grad;
     
     double scale = 2.0 * m_weight / indices.size();
     for (size_t idx : indices) {
+        if (idx >= dose.size()) continue;
         if (dose[idx] < m_minDose) {
             grad[idx] = -scale * (m_minDose - dose[idx]);
         }

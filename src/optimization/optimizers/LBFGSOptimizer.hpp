@@ -24,6 +24,11 @@ public:
     void setMaxFluence(double maxFluence);
     void setVerbose(bool verbose);
 
+    // Normal Tissue Objective (NTO) / Eclipse-style hotspot control
+    void setPrescriptionDose(double dose);
+    void setHotspotThreshold(double threshold);  // fraction of Rx (e.g. 1.0 = 100%)
+    void setHotspotPenalty(double penalty);
+
 private:
     // Parameters
     int m_maxIterations = 500;
@@ -38,6 +43,11 @@ private:
     double m_c1 = 1e-4;      // Armijo condition
     double m_c2 = 0.9;       // Wolfe curvature condition
     double m_initialStepSize = 1.0;
+    
+    // NTO parameters (Eclipse-style hotspot control)
+    double m_prescriptionDose = 0.0;   // 0 = disabled
+    double m_hotspotThreshold = 1.0;   // fraction of Rx
+    double m_hotspotPenalty = 10000.0;  // penalty weight
     
     // L-BFGS history
     std::deque<std::vector<double>> m_sHistory;

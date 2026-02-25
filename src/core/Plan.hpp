@@ -49,6 +49,10 @@ public:
     /// Compute isocenter from CT volume center of mass (simplified)
     std::array<double, 3> computeIsoCenter() const;
 
+    // Dose grid resolution
+    void setDoseGridResolution(const std::array<double, 3>& res) { m_doseGridResolution = res; }
+    const std::array<double, 3>& getDoseGridResolution() const { return m_doseGridResolution; }
+
     /// Print plan summary
     void printSummary() const;
 
@@ -60,6 +64,7 @@ private:
     StfProperties m_stfProperties;
     std::shared_ptr<PatientData> m_patientData;
     std::vector<Beam> m_beams;
+    std::array<double, 3> m_doseGridResolution = {2.5, 2.5, 2.5}; // mm
 };
 
 } // namespace optirad

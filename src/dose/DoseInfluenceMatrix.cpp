@@ -1,6 +1,7 @@
 #include "DoseInfluenceMatrix.hpp"
 #include <algorithm>
 #include <stdexcept>
+#include <numeric>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -8,148 +9,304 @@
 
 namespace optirad {
 
-DoseInfluenceMatrix::DoseInfluenceMatrix(size_t numVoxels, size_t numBixels) {
-    setDimensions(numVoxels, numBixels);
-}
+// ────────────────────────────────────────────────────────────────
+// Construction
+// ────────────────────────────────────────────────────────────────
+
+DoseInfluenceMatrix::DoseInfluenceMatrix(size_t numVoxels, size_t numBixels)
+    : m_numVoxels(numVoxels), m_numBixels(numBixels) {}
 
 void DoseInfluenceMatrix::setDimensions(size_t numVoxels, size_t numBixels) {
     m_numVoxels = numVoxels;
     m_numBixels = numBixels;
-    m_denseData.resize(numVoxels * numBixels, 0.0);
-    m_useSparse = false;
+    m_finalized = false;
+    m_cooRows.clear();
+    m_cooCols.clear();
+    m_cooVals.clear();
+    m_values.clear();
+    m_colIndices.clear();
+    m_rowPtrs.clear();
 }
 
-double& DoseInfluenceMatrix::operator()(size_t voxel, size_t bixel) {
-    if (voxel >= m_numVoxels || bixel >= m_numBixels) {
-        throw std::out_of_range("DoseInfluenceMatrix: index out of bounds");
-    }
-    return m_denseData[voxel * m_numBixels + bixel];
+void DoseInfluenceMatrix::reserveNonZeros(size_t nnz) {
+    m_cooRows.reserve(nnz);
+    m_cooCols.reserve(nnz);
+    m_cooVals.reserve(nnz);
 }
+
+void DoseInfluenceMatrix::appendBatch(const std::vector<size_t>& rows,
+                                       const std::vector<size_t>& cols,
+                                       const std::vector<double>& vals) {
+    if (m_finalized)
+        throw std::runtime_error("DoseInfluenceMatrix: cannot appendBatch after finalize()");
+    m_cooRows.insert(m_cooRows.end(), rows.begin(), rows.end());
+    m_cooCols.insert(m_cooCols.end(), cols.begin(), cols.end());
+    m_cooVals.insert(m_cooVals.end(), vals.begin(), vals.end());
+}
+
+// ────────────────────────────────────────────────────────────────
+// COO accumulation
+// ────────────────────────────────────────────────────────────────
+
+void DoseInfluenceMatrix::setValue(size_t voxel, size_t bixel, double value) {
+    if (m_finalized)
+        throw std::runtime_error("DoseInfluenceMatrix: cannot setValue after finalize()");
+    if (voxel >= m_numVoxels || bixel >= m_numBixels)
+        throw std::out_of_range("DoseInfluenceMatrix::setValue: index out of bounds");
+    m_cooRows.push_back(voxel);
+    m_cooCols.push_back(bixel);
+    m_cooVals.push_back(value);
+}
+
+// ────────────────────────────────────────────────────────────────
+// Finalize: COO → CSR
+// ────────────────────────────────────────────────────────────────
+
+void DoseInfluenceMatrix::finalize() {
+    if (m_finalized) return;
+
+    size_t nnz = m_cooRows.size();
+
+    // Sort COO by (row, col) using an index permutation
+    std::vector<size_t> perm(nnz);
+    std::iota(perm.begin(), perm.end(), 0);
+    std::sort(perm.begin(), perm.end(), [&](size_t a, size_t b) {
+        if (m_cooRows[a] != m_cooRows[b]) return m_cooRows[a] < m_cooRows[b];
+        return m_cooCols[a] < m_cooCols[b];
+    });
+
+    // Build CSR, merging duplicate (row,col) entries by summing values
+    m_rowPtrs.assign(m_numVoxels + 1, 0);
+    m_values.clear();
+    m_colIndices.clear();
+    m_values.reserve(nnz);
+    m_colIndices.reserve(nnz);
+
+    for (size_t pi = 0; pi < nnz; ++pi) {
+        size_t i = perm[pi];
+        size_t row = m_cooRows[i];
+        size_t col = m_cooCols[i];
+        double val = m_cooVals[i];
+
+        // Merge with previous entry if same (row, col)
+        if (!m_values.empty() && !m_colIndices.empty() &&
+            m_colIndices.back() == col &&
+            m_rowPtrs[row + 1] == 0 &&  // still on same row check below
+            pi > 0 && m_cooRows[perm[pi - 1]] == row)
+        {
+            // Simpler merge check: if the last pushed entry has same col and is in same row
+            m_values.back() += val;
+        } else {
+            m_values.push_back(val);
+            m_colIndices.push_back(col);
+        }
+    }
+
+    // Actually, the merge logic above is fragile. Let me redo it cleanly.
+    // Rebuild from scratch with a cleaner approach:
+    m_values.clear();
+    m_colIndices.clear();
+    m_rowPtrs.assign(m_numVoxels + 1, 0);
+
+    if (nnz > 0) {
+        size_t prevRow = m_cooRows[perm[0]];
+        size_t prevCol = m_cooCols[perm[0]];
+        double accum  = m_cooVals[perm[0]];
+
+        for (size_t pi = 1; pi < nnz; ++pi) {
+            size_t i = perm[pi];
+            size_t row = m_cooRows[i];
+            size_t col = m_cooCols[i];
+
+            if (row == prevRow && col == prevCol) {
+                accum += m_cooVals[i]; // merge duplicate
+            } else {
+                // Flush previous entry
+                m_values.push_back(accum);
+                m_colIndices.push_back(prevCol);
+                // Mark row boundaries
+                for (size_t r = prevRow + 1; r <= row; ++r) {
+                    // rows [prevRow+1 .. row] start at current position
+                }
+                prevRow = row;
+                prevCol = col;
+                accum = m_cooVals[i];
+            }
+        }
+        // Flush last entry
+        m_values.push_back(accum);
+        m_colIndices.push_back(prevCol);
+    }
+
+    // Build row pointers by counting entries per row
+    // (redo with a simple counting approach)
+    m_rowPtrs.assign(m_numVoxels + 1, 0);
+    {
+        // Count entries per row from the deduplicated sorted COO
+        // We have m_values and m_colIndices, but we need to reconstruct row info.
+        // Let me redo completely with a cleaner 2-pass approach.
+    }
+
+    // --- CLEAN 2-pass COO → CSR ---
+    m_values.clear();
+    m_colIndices.clear();
+    m_rowPtrs.assign(m_numVoxels + 1, 0);
+
+    // Pass 1: count entries per row (after dedup)
+    if (nnz > 0) {
+        size_t prevRow = m_cooRows[perm[0]];
+        size_t prevCol = m_cooCols[perm[0]];
+        for (size_t pi = 1; pi < nnz; ++pi) {
+            size_t i = perm[pi];
+            if (m_cooRows[i] != prevRow || m_cooCols[i] != prevCol) {
+                m_rowPtrs[prevRow + 1]++; // count for row prevRow
+                prevRow = m_cooRows[i];
+                prevCol = m_cooCols[i];
+            }
+        }
+        m_rowPtrs[prevRow + 1]++; // last entry
+    }
+
+    // Cumulative sum
+    for (size_t r = 0; r < m_numVoxels; ++r) {
+        m_rowPtrs[r + 1] += m_rowPtrs[r];
+    }
+
+    size_t totalNnz = m_rowPtrs[m_numVoxels];
+    m_values.resize(totalNnz);
+    m_colIndices.resize(totalNnz);
+
+    // Pass 2: fill values and column indices
+    if (nnz > 0) {
+        std::vector<size_t> rowCursor(m_rowPtrs.begin(), m_rowPtrs.begin() + m_numVoxels);
+
+        size_t prevRow = m_cooRows[perm[0]];
+        size_t prevCol = m_cooCols[perm[0]];
+        double accum = m_cooVals[perm[0]];
+
+        for (size_t pi = 1; pi < nnz; ++pi) {
+            size_t i = perm[pi];
+            size_t row = m_cooRows[i];
+            size_t col = m_cooCols[i];
+
+            if (row == prevRow && col == prevCol) {
+                accum += m_cooVals[i];
+            } else {
+                size_t pos = rowCursor[prevRow]++;
+                m_values[pos] = accum;
+                m_colIndices[pos] = prevCol;
+                prevRow = row;
+                prevCol = col;
+                accum = m_cooVals[i];
+            }
+        }
+        size_t pos = rowCursor[prevRow]++;
+        m_values[pos] = accum;
+        m_colIndices[pos] = prevCol;
+    }
+
+    // Free COO memory
+    m_cooRows.clear();   m_cooRows.shrink_to_fit();
+    m_cooCols.clear();   m_cooCols.shrink_to_fit();
+    m_cooVals.clear();   m_cooVals.shrink_to_fit();
+
+    m_finalized = true;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Direct CSR loading (deserialization)
+// ────────────────────────────────────────────────────────────────
+
+void DoseInfluenceMatrix::loadCSR(std::vector<size_t> rowPtrs,
+                                   std::vector<size_t> colIndices,
+                                   std::vector<double>  values) {
+    m_rowPtrs    = std::move(rowPtrs);
+    m_colIndices = std::move(colIndices);
+    m_values     = std::move(values);
+    m_finalized  = true;
+    // Free any leftover COO
+    m_cooRows.clear(); m_cooRows.shrink_to_fit();
+    m_cooCols.clear(); m_cooCols.shrink_to_fit();
+    m_cooVals.clear(); m_cooVals.shrink_to_fit();
+}
+
+// ────────────────────────────────────────────────────────────────
+// Read-only access
+// ────────────────────────────────────────────────────────────────
 
 double DoseInfluenceMatrix::operator()(size_t voxel, size_t bixel) const {
     return getValue(voxel, bixel);
 }
 
-void DoseInfluenceMatrix::setValue(size_t voxel, size_t bixel, double value) {
-    if (m_useSparse) {
-        throw std::runtime_error("Cannot setValue after finalize()");
-    }
-    m_denseData[voxel * m_numBixels + bixel] = value;
-}
-
 double DoseInfluenceMatrix::getValue(size_t voxel, size_t bixel) const {
-    if (voxel >= m_numVoxels || bixel >= m_numBixels) {
+    if (voxel >= m_numVoxels || bixel >= m_numBixels)
         throw std::out_of_range("DoseInfluenceMatrix::getValue: index out of bounds");
+
+    if (!m_finalized) {
+        // Linear scan through COO (slow – only for debugging/tests)
+        double sum = 0.0;
+        for (size_t k = 0; k < m_cooRows.size(); ++k) {
+            if (m_cooRows[k] == voxel && m_cooCols[k] == bixel)
+                sum += m_cooVals[k];
+        }
+        return sum;
     }
-    if (!m_useSparse) {
-        return m_denseData[voxel * m_numBixels + bixel];
-    }
-    // Binary search in sparse row
-    if (voxel + 1 >= m_rowPtrs.size()) {
-        throw std::out_of_range("DoseInfluenceMatrix::getValue: invalid row pointer access");
-    }
+
+    // Binary search in CSR row
     size_t rowStart = m_rowPtrs[voxel];
-    size_t rowEnd = m_rowPtrs[voxel + 1];
-    auto it = std::lower_bound(m_colIndices.begin() + rowStart,
-                               m_colIndices.begin() + rowEnd, bixel);
-    if (it != m_colIndices.begin() + rowEnd && *it == bixel) {
-        return m_values[it - m_colIndices.begin()];
-    }
+    size_t rowEnd   = m_rowPtrs[voxel + 1];
+    auto beg = m_colIndices.begin() + static_cast<ptrdiff_t>(rowStart);
+    auto end = m_colIndices.begin() + static_cast<ptrdiff_t>(rowEnd);
+    auto it  = std::lower_bound(beg, end, bixel);
+    if (it != end && *it == bixel)
+        return m_values[static_cast<size_t>(it - m_colIndices.begin())];
     return 0.0;
 }
 
-void DoseInfluenceMatrix::finalize() {
-    // Count non-zeros
-    size_t nnz = 0;
-    for (double v : m_denseData) {
-        if (v != 0.0) ++nnz;
-    }
-    
-    double sparsity = 1.0 - static_cast<double>(nnz) / m_denseData.size();
-    
-    // Only convert to sparse if beneficial
-    if (sparsity > (1.0 - SPARSE_THRESHOLD) && m_denseData.size() > 10000) {
-        m_values.reserve(nnz);
-        m_colIndices.reserve(nnz);
-        m_rowPtrs.resize(m_numVoxels + 1);
-        
-        size_t idx = 0;
-        for (size_t v = 0; v < m_numVoxels; ++v) {
-            m_rowPtrs[v] = m_values.size();
-            for (size_t b = 0; b < m_numBixels; ++b) {
-                double val = m_denseData[v * m_numBixels + b];
-                if (val != 0.0) {
-                    m_values.push_back(val);
-                    m_colIndices.push_back(b);
-                }
-            }
-        }
-        m_rowPtrs[m_numVoxels] = m_values.size();
-        
-        m_denseData.clear();
-        m_denseData.shrink_to_fit();
-        m_useSparse = true;
-    }
-}
+// ────────────────────────────────────────────────────────────────
+// Dimensions / stats
+// ────────────────────────────────────────────────────────────────
 
 size_t DoseInfluenceMatrix::getNumVoxels() const { return m_numVoxels; }
 size_t DoseInfluenceMatrix::getNumBixels() const { return m_numBixels; }
+
 size_t DoseInfluenceMatrix::getNumNonZeros() const {
-    return m_useSparse ? m_values.size() : 
-           std::count_if(m_denseData.begin(), m_denseData.end(), 
-                        [](double v) { return v != 0.0; });
+    return m_finalized ? m_values.size() : m_cooRows.size();
 }
 
+// ────────────────────────────────────────────────────────────────
+// Linear algebra (all CSR-based, require finalized)
+// ────────────────────────────────────────────────────────────────
+
 std::vector<double> DoseInfluenceMatrix::computeDose(const std::vector<double>& weights) const {
+    if (!m_finalized)
+        throw std::runtime_error("DoseInfluenceMatrix::computeDose requires finalize()");
+
     std::vector<double> dose(m_numVoxels, 0.0);
-    
-    if (m_useSparse) {
-        #pragma omp parallel for
-        for (size_t v = 0; v < m_numVoxels; ++v) {
-            double sum = 0.0;
-            for (size_t k = m_rowPtrs[v]; k < m_rowPtrs[v + 1]; ++k) {
-                sum += m_values[k] * weights[m_colIndices[k]];
-            }
-            dose[v] = sum;
-        }
-    } else {
-        #pragma omp parallel for
-        for (size_t v = 0; v < m_numVoxels; ++v) {
-            double sum = 0.0;
-            for (size_t b = 0; b < m_numBixels; ++b) {
-                sum += m_denseData[v * m_numBixels + b] * weights[b];
-            }
-            dose[v] = sum;
-        }
+    #pragma omp parallel for schedule(dynamic, 1024)
+    for (size_t v = 0; v < m_numVoxels; ++v) {
+        double sum = 0.0;
+        for (size_t k = m_rowPtrs[v]; k < m_rowPtrs[v + 1]; ++k)
+            sum += m_values[k] * weights[m_colIndices[k]];
+        dose[v] = sum;
     }
     return dose;
 }
 
 void DoseInfluenceMatrix::accumulateTransposeProduct(
     const std::vector<double>& voxelGrad,
-    std::vector<double>& grad) const 
+    std::vector<double>& grad) const
 {
-    if (m_useSparse) {
-        // For sparse: iterate by row (voxel), accumulate to columns (beamlets)
-        // Need thread-safe accumulation
-        #pragma omp parallel for
-        for (size_t v = 0; v < m_numVoxels; ++v) {
-            double gv = voxelGrad[v];
-            if (gv == 0.0) continue;
-            for (size_t k = m_rowPtrs[v]; k < m_rowPtrs[v + 1]; ++k) {
-                #pragma omp atomic
-                grad[m_colIndices[k]] += gv * m_values[k];
-            }
-        }
-    } else {
-        #pragma omp parallel for
-        for (size_t b = 0; b < m_numBixels; ++b) {
-            double sum = 0.0;
-            for (size_t v = 0; v < m_numVoxels; ++v) {
-                sum += voxelGrad[v] * m_denseData[v * m_numBixels + b];
-            }
+    if (!m_finalized)
+        throw std::runtime_error("accumulateTransposeProduct requires finalize()");
+
+    #pragma omp parallel for schedule(dynamic, 1024)
+    for (size_t v = 0; v < m_numVoxels; ++v) {
+        double gv = voxelGrad[v];
+        if (gv == 0.0) continue;
+        for (size_t k = m_rowPtrs[v]; k < m_rowPtrs[v + 1]; ++k) {
             #pragma omp atomic
-            grad[b] += sum;
+            grad[m_colIndices[k]] += gv * m_values[k];
         }
     }
 }

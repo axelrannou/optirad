@@ -128,4 +128,114 @@ std::vector<double> Grid::getZCoordinates() const {
     return z;
 }
 
+Grid Grid::createDoseGrid(const Grid& ctGrid, const Vec3& doseResolution) {
+    auto ctDims = ctGrid.getDimensions();
+    auto ctSpacing = ctGrid.getSpacing();
+    auto ctOrigin = ctGrid.getOrigin();
+
+    // Physical extent of the CT grid
+    double extentX = static_cast<double>(ctDims[0]) * ctSpacing[0];
+    double extentY = static_cast<double>(ctDims[1]) * ctSpacing[1];
+    double extentZ = static_cast<double>(ctDims[2]) * ctSpacing[2];
+
+    // Number of dose voxels
+    size_t doseNx = std::max(size_t(1), static_cast<size_t>(std::ceil(extentX / doseResolution[0])));
+    size_t doseNy = std::max(size_t(1), static_cast<size_t>(std::ceil(extentY / doseResolution[1])));
+    size_t doseNz = std::max(size_t(1), static_cast<size_t>(std::ceil(extentZ / doseResolution[2])));
+
+    // Compute new origin so that the dose grid is centered on the CT grid
+    // CT center = origin + (N-1)/2 * spacing (for each axis in voxel space)
+    // We compute physical center from the CT grid and re-center the dose grid
+    Vec3 ctCenter = ctGrid.voxelToPatient({
+        static_cast<double>(ctDims[0] - 1) * 0.5,
+        static_cast<double>(ctDims[1] - 1) * 0.5,
+        static_cast<double>(ctDims[2] - 1) * 0.5
+    });
+
+    // New origin: center - (N-1)/2 * doseSpacing (in patient coords via direction matrix)
+    // For simplicity, since dose grid uses same orientation:
+    Grid doseGrid;
+    doseGrid.setDimensions(doseNx, doseNy, doseNz);
+    doseGrid.setSpacing(doseResolution[0], doseResolution[1], doseResolution[2]);
+    doseGrid.setPatientPosition(ctGrid.getPatientPosition());
+    doseGrid.setImageOrientation(ctGrid.getImageOrientation());
+    doseGrid.setSliceThickness(doseResolution[2]);
+
+    // Dose grid origin: compute so that dose center matches CT center
+    // In voxel space, center of dose grid is ((doseNx-1)/2, (doseNy-1)/2, (doseNz-1)/2)
+    // We need: doseOrigin + M * diag(doseSpacing) * doseCenter_ijk = ctCenter
+    // => doseOrigin = ctCenter - M * diag(doseSpacing) * doseCenter_ijk
+    Vec3 doseCenter_ijk = {
+        static_cast<double>(doseNx - 1) * 0.5,
+        static_cast<double>(doseNy - 1) * 0.5,
+        static_cast<double>(doseNz - 1) * 0.5
+    };
+    // Temporarily set origin to (0,0,0) and compute what center maps to
+    doseGrid.setOrigin({0.0, 0.0, 0.0});
+    Vec3 mappedCenter = doseGrid.voxelToPatient(doseCenter_ijk);
+    
+    // Adjust origin
+    Vec3 doseOrigin = {
+        ctCenter[0] - mappedCenter[0],
+        ctCenter[1] - mappedCenter[1],
+        ctCenter[2] - mappedCenter[2]
+    };
+    doseGrid.setOrigin(doseOrigin);
+
+    return doseGrid;
+}
+
+std::vector<size_t> Grid::mapVoxelIndices(const Grid& fromGrid, const Grid& toGrid,
+                                           const std::vector<size_t>& fromIndices) {
+    auto fromDims = fromGrid.getDimensions();
+    auto toDims = toGrid.getDimensions();
+    size_t fromNx = fromDims[0], fromNy = fromDims[1];
+    size_t toNx = toDims[0], toNy = toDims[1], toNz = toDims[2];
+
+    std::vector<size_t> mapped;
+    mapped.reserve(fromIndices.size());
+
+    // Use a set to avoid duplicates
+    std::vector<bool> seen(toGrid.getNumVoxels(), false);
+
+    for (size_t idx : fromIndices) {
+        // Convert flat index to ijk in source grid
+        size_t iz = idx / (fromNx * fromNy);
+        size_t rem = idx % (fromNx * fromNy);
+        size_t iy = rem / fromNx;
+        size_t ix = rem % fromNx;
+
+        // Convert to patient coordinates
+        Vec3 lps = fromGrid.voxelToPatient({
+            static_cast<double>(ix),
+            static_cast<double>(iy),
+            static_cast<double>(iz)
+        });
+
+        // Convert to target grid voxel coordinates
+        Vec3 ijk = toGrid.patientToVoxel(lps);
+        int tix = static_cast<int>(std::round(ijk[0]));
+        int tiy = static_cast<int>(std::round(ijk[1]));
+        int tiz = static_cast<int>(std::round(ijk[2]));
+
+        // Bounds check
+        if (tix < 0 || tix >= static_cast<int>(toNx) ||
+            tiy < 0 || tiy >= static_cast<int>(toNy) ||
+            tiz < 0 || tiz >= static_cast<int>(toNz)) {
+            continue;
+        }
+
+        size_t toIdx = static_cast<size_t>(tix) +
+                       static_cast<size_t>(tiy) * toNx +
+                       static_cast<size_t>(tiz) * toNx * toNy;
+
+        if (!seen[toIdx]) {
+            seen[toIdx] = true;
+            mapped.push_back(toIdx);
+        }
+    }
+
+    return mapped;
+}
+
 } // namespace optirad

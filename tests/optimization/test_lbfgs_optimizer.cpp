@@ -86,9 +86,10 @@ int main() {
     for (size_t v = 0; v < grid.getNumVoxels(); ++v) {
         for (size_t b = 0; b < static_cast<size_t>(numBixels); ++b) {
             double value = 0.01 + 0.1 * (std::rand() % 100) / 100.0;
-            dij(v, b) = value;
+            dij.setValue(v, b, value);
         }
     }
+    dij.finalize();
     
     // Create objectives (use raw pointers for API compatibility)
     std::vector<ObjectiveFunction*> objectives;

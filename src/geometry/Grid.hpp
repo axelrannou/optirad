@@ -45,6 +45,15 @@ public:
     std::vector<double> getYCoordinates() const;
     std::vector<double> getZCoordinates() const;
 
+    /// Create a dose calculation grid from a CT grid with different resolution.
+    /// The dose grid covers the same physical extent but with coarser spacing.
+    static Grid createDoseGrid(const Grid& ctGrid, const Vec3& doseResolution);
+
+    /// Map flat voxel indices from one grid to another via nearest-neighbor.
+    /// Returns dose-grid flat indices corresponding to ctVoxelIndices.
+    static std::vector<size_t> mapVoxelIndices(const Grid& fromGrid, const Grid& toGrid,
+                                                const std::vector<size_t>& fromIndices);
+
 private:
     void updateMatricesIfNeeded() const;
     

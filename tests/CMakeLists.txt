@@ -183,3 +183,72 @@ target_include_directories(test_phase_space_beam_source PRIVATE ${CMAKE_SOURCE_D
 target_link_libraries(test_phase_space_beam_source PRIVATE optirad_phsp optirad_core GTest::gtest GTest::gtest_main)
 target_compile_definitions(test_phase_space_beam_source PRIVATE OPTIRAD_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 add_test(NAME PhaseSpaceBeamSourceTest COMMAND test_phase_space_beam_source)
+
+# ============================================================================
+# UNIT TESTS (GoogleTest) - Dose Module
+# ============================================================================
+
+add_executable(test_dose_influence_matrix
+    dose/test_dose_influence_matrix.cpp
+)
+target_include_directories(test_dose_influence_matrix PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_dose_influence_matrix PRIVATE optirad_dose GTest::gtest GTest::gtest_main)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(test_dose_influence_matrix PRIVATE OpenMP::OpenMP_CXX)
+endif()
+add_test(NAME DoseInfluenceMatrixTest COMMAND test_dose_influence_matrix)
+
+add_executable(test_dij_serializer
+    dose/test_dij_serializer.cpp
+)
+target_include_directories(test_dij_serializer PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_dij_serializer PRIVATE optirad_dose GTest::gtest GTest::gtest_main)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(test_dij_serializer PRIVATE OpenMP::OpenMP_CXX)
+endif()
+add_test(NAME DijSerializerTest COMMAND test_dij_serializer)
+
+add_executable(test_fft2d
+    dose/test_fft2d.cpp
+)
+target_include_directories(test_fft2d PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_fft2d PRIVATE optirad_dose GTest::gtest GTest::gtest_main)
+add_test(NAME FFT2DTest COMMAND test_fft2d)
+
+add_executable(test_grid_interpolant2d
+    dose/test_grid_interpolant2d.cpp
+)
+target_include_directories(test_grid_interpolant2d PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_grid_interpolant2d PRIVATE optirad_dose GTest::gtest GTest::gtest_main)
+add_test(NAME GridInterpolant2DTest COMMAND test_grid_interpolant2d)
+
+add_executable(test_siddon_ray_tracer
+    dose/test_siddon_ray_tracer.cpp
+)
+target_include_directories(test_siddon_ray_tracer PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_siddon_ray_tracer PRIVATE optirad_dose optirad_geometry GTest::gtest GTest::gtest_main)
+add_test(NAME SiddonRayTracerTest COMMAND test_siddon_ray_tracer)
+
+add_executable(test_ssd_calculator
+    dose/test_ssd_calculator.cpp
+)
+target_include_directories(test_ssd_calculator PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_ssd_calculator PRIVATE optirad_dose optirad_geometry GTest::gtest GTest::gtest_main)
+add_test(NAME SSDCalculatorTest COMMAND test_ssd_calculator)
+
+add_executable(test_rad_depth_calculator
+    dose/test_rad_depth_calculator.cpp
+)
+target_include_directories(test_rad_depth_calculator PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_rad_depth_calculator PRIVATE optirad_dose optirad_geometry GTest::gtest GTest::gtest_main)
+add_test(NAME RadDepthCalculatorTest COMMAND test_rad_depth_calculator)
+
+add_executable(test_dose_engine
+    dose/test_dose_engine.cpp
+)
+target_include_directories(test_dose_engine PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_dose_engine PRIVATE optirad_dose optirad_geometry optirad_core GTest::gtest GTest::gtest_main)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(test_dose_engine PRIVATE OpenMP::OpenMP_CXX)
+endif()
+add_test(NAME DoseEngineTest COMMAND test_dose_engine)
