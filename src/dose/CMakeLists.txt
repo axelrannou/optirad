@@ -12,6 +12,7 @@ add_library(optirad_dose
 
 target_include_directories(optirad_dose PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(optirad_dose PUBLIC optirad_geometry optirad_core)
+target_compile_definitions(optirad_dose PRIVATE OPTIRAD_DATA_DIR="${OPTIRAD_DATA_DIR}")
 
 # OpenMP for parallel dose computation (optional)
 find_package(OpenMP QUIET)
