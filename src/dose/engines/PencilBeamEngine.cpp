@@ -40,12 +40,16 @@ void PencilBeamEngine::initDoseCalc(const Plan& plan, const Grid& doseGrid) {
     m_kernelPos = data.kernelPos;
     m_kernelEntries = data.kernel;
 
-    // Lateral cutoff: kernel extent + bixel width safety margin
+    // Store full kernel extent (for convolution grid)
     if (!m_kernelPos.empty()) {
-        m_lateralCutOff = m_kernelPos.back() + m_bixelWidth;
+        m_kernelCutOff = m_kernelPos.back();
     } else {
-        m_lateralCutOff = 50.0 + m_bixelWidth;
+        m_kernelCutOff = 50.0;
     }
+
+    // Effective lateral cutoff: geometric cutoff + field width diagonal contribution
+    // Matches matRad: effectiveLateralCutOff = geometricLateralCutOff + fieldWidth/sqrt(2)
+    m_lateralCutOff = m_geometricLateralCutOff + m_bixelWidth / std::sqrt(2.0);
 
     Logger::info("PencilBeamEngine init: betas=[" +
         std::to_string(m_betas[0]) + "," + std::to_string(m_betas[1]) + "," + std::to_string(m_betas[2]) +
@@ -53,7 +57,9 @@ void PencilBeamEngine::initDoseCalc(const Plan& plan, const Grid& doseGrid) {
         ", SAD=" + std::to_string(m_SAD) +
         ", penumbraFWHM=" + std::to_string(m_penumbraFWHM) +
         ", kernelEntries=" + std::to_string(m_kernelEntries.size()) +
-        ", lateralCutOff=" + std::to_string(m_lateralCutOff));
+        ", kernelCutOff=" + std::to_string(m_kernelCutOff) +
+        ", geometricLateralCutOff=" + std::to_string(m_geometricLateralCutOff) +
+        ", effectiveLateralCutOff=" + std::to_string(m_lateralCutOff));
 }
 
 // ────────────────────────────────────────────────
@@ -116,12 +122,51 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
         bd.geoDistances[i] = geoDist;
     }
 
+    // 1b. Beam-level pre-filter: only keep voxels within reach of ANY ray in this beam.
+    // The beam field spans from the outermost ray positions, so the effective beam-level
+    // cutoff is: maxRayOffset + lateralCutOff (projected at isocenter plane).
+    // This matches matRad's implicit filtering from matRad_rayTracing coverage.
+    {
+        // Compute maximum ray offset from beam axis at isocenter plane
+        double maxRayOffset = 0.0;
+        for (size_t r = 0; r < beam.getNumOfRays(); ++r) {
+            const auto* ray = beam.getRay(r);
+            if (!ray) continue;
+            Vec3 rp = ray->getRayPosBev();
+            double rayOff = std::sqrt(rp[0] * rp[0] + rp[2] * rp[2]);
+            if (rayOff > maxRayOffset) maxRayOffset = rayOff;
+        }
+        double beamCutoff = maxRayOffset + m_lateralCutOff;
+        double cutoffRatioSq = (beamCutoff / m_SAD) * (beamCutoff / m_SAD);
+
+        size_t writeIdx = 0;
+        for (size_t i = 0; i < nVox; ++i) {
+            const Vec3& bev = bd.bevCoords[i];
+            double depth = m_SAD + bev[1]; // distance from source along beam direction
+            if (depth > 1.0) {
+                double latDistSq = bev[0] * bev[0] + bev[2] * bev[2];
+                if (latDistSq <= cutoffRatioSq * depth * depth) {
+                    if (writeIdx != i) {
+                        bd.bevCoords[writeIdx] = bd.bevCoords[i];
+                        bd.geoDistances[writeIdx] = bd.geoDistances[i];
+                        bd.voxelIndices[writeIdx] = bd.voxelIndices[i];
+                    }
+                    writeIdx++;
+                }
+            }
+        }
+        bd.bevCoords.resize(writeIdx);
+        bd.geoDistances.resize(writeIdx);
+        bd.voxelIndices.resize(writeIdx);
+    }
+
     // 2. Compute radiological depths via ray tracing (parallelised)
-    bd.radDepths.resize(nVox, 0.0);
+    const size_t nFiltered = bd.voxelIndices.size();
+    bd.radDepths.resize(nFiltered, 0.0);
 
     if (edData) {
         #pragma omp parallel for schedule(dynamic, 256)
-        for (size_t i = 0; i < nVox; ++i) {
+        for (size_t i = 0; i < nFiltered; ++i) {
             size_t idx = bd.voxelIndices[i];
             size_t iz = idx / (nx * ny);
             size_t rem = idx % (nx * ny);
@@ -179,15 +224,45 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
 
     const auto& selectedKernel = m_kernelEntries[bestKernelIdx];
 
-    // Build 2D kernel grids by interpolating 1D radial kernels onto 2D grid
-    // Kernel grid: from -lateralCutOff to +lateralCutOff with convResolution spacing
-    double gridExtent = m_lateralCutOff;
-    size_t kernGridN = static_cast<size_t>(2.0 * gridExtent / m_convResolution) + 1;
-    double kernGridMin = -gridExtent;
-    double kernGridMax = gridExtent;
-
-    // Gaussian filter for penumbra: sigma = FWHM / sqrt(8 ln 2)
+    // ─── Build 2D kernel interpolators (matching matRad exactly) ───
+    // matRad grid convention: -N*res : res : (N-1)*res  → 2N elements (even size)
+    double res = m_convResolution;  // 0.5 mm
     double sigma = m_penumbraFWHM / std::sqrt(8.0 * std::log(2.0));
+
+    // Grid limits (in units of res pixels)
+    int fieldLimit = static_cast<int>(std::ceil(m_bixelWidth / (2.0 * res)));  // 7
+    int gaussLimit = static_cast<int>(std::ceil(5.0 * sigma / res));           // 22
+    int kernelLimit = static_cast<int>(std::ceil(m_kernelCutOff / res));       // 359
+    int kernelConvLimit = fieldLimit + gaussLimit + kernelLimit;                // 388
+
+    // Sizes (all even, matching matRad's 2*limit convention)
+    size_t fieldN = static_cast<size_t>(std::floor(m_bixelWidth / res));       // 14
+    size_t gaussConvN = static_cast<size_t>(2 * (fieldLimit + gaussLimit));     // 58
+    size_t kernelN = static_cast<size_t>(2 * kernelLimit);                     // 718
+    size_t kernelConvN = static_cast<size_t>(2 * kernelConvLimit);             // 776
+
+    // Build Gaussian filter on grid: -gaussLimit*res : res : (gaussLimit-1)*res → 2*gaussLimit elements
+    size_t gaussN = static_cast<size_t>(2 * gaussLimit);  // 44
+    std::vector<double> gaussFilter(gaussN * gaussN, 0.0);
+    double gaussNorm = 1.0 / (2.0 * M_PI * sigma * sigma / (res * res));
+    for (size_t ri = 0; ri < gaussN; ++ri) {
+        for (size_t ci = 0; ci < gaussN; ++ci) {
+            double gx = (static_cast<double>(ri) - gaussLimit) * res;
+            double gz = (static_cast<double>(ci) - gaussLimit) * res;
+            gaussFilter[ri * gaussN + ci] = gaussNorm * std::exp(-(gx * gx + gz * gz) / (2.0 * sigma * sigma));
+        }
+    }
+
+    // Build uniform fluence field: ones(fieldN, fieldN)
+    std::vector<double> Fpre(fieldN * fieldN, 1.0);
+
+    // Convolve fluence with Gaussian using FFT (pad to gaussConvN×gaussConvN)
+    // Matches: Fpre = real(ifft2(fft2(Fpre,gaussConvN,gaussConvN).*fft2(gaussFilter,gaussConvN,gaussConvN)))
+    Fpre = FFT2D::convolve2DPadded(Fpre, fieldN, fieldN, gaussFilter, gaussN, gaussN, gaussConvN);
+
+    // Convolution output grid: -kernelConvLimit*res : res : (kernelConvLimit-1)*res
+    double convGridMin = -static_cast<double>(kernelConvLimit) * res;
+    double convGridMax = (static_cast<double>(kernelConvLimit) - 1.0) * res;
 
     // For each kernel component, create 2D convolved profile
     for (int k = 0; k < 3; ++k) {
@@ -195,37 +270,25 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
                                (k == 1) ? selectedKernel.kernel2 : selectedKernel.kernel3;
 
         if (kernel1d.empty() || m_kernelPos.empty()) {
-            // No kernel data: create simple Gaussian falloff
-            std::vector<double> kernData(kernGridN * kernGridN, 0.0);
-            for (size_t ri = 0; ri < kernGridN; ++ri) {
-                for (size_t ci = 0; ci < kernGridN; ++ci) {
-                    double x = kernGridMin + ri * m_convResolution;
-                    double z = kernGridMin + ci * m_convResolution;
-                    double r = std::sqrt(x * x + z * z);
-                    // Simple exponential falloff
-                    double val = std::exp(-r * m_betas[k]);
-                    // Apply Gaussian penumbra
-                    val *= std::exp(-(x * x + z * z) / (2.0 * sigma * sigma));
-                    kernData[ri * kernGridN + ci] = val;
-                }
-            }
-            bd.kernelInterps[k].setGrid(kernGridMin, kernGridMax, kernGridN,
-                                         kernGridMin, kernGridMax, kernGridN, kernData);
+            // Fallback: simple zero interpolator
+            std::vector<double> kernData(kernelConvN * kernelConvN, 0.0);
+            bd.kernelInterps[k].setGrid(convGridMin, convGridMax, kernelConvN,
+                                         convGridMin, convGridMax, kernelConvN, kernData);
             continue;
         }
 
-        // Interpolate 1D radial kernel onto 2D grid
-        std::vector<double> kernel2d(kernGridN * kernGridN, 0.0);
-        for (size_t ri = 0; ri < kernGridN; ++ri) {
-            for (size_t ci = 0; ci < kernGridN; ++ci) {
-                double x = kernGridMin + ri * m_convResolution;
-                double z = kernGridMin + ci * m_convResolution;
+        // Interpolate 1D radial kernel onto 2D grid: kernelN×kernelN
+        // Grid: -kernelLimit*res : res : (kernelLimit-1)*res
+        std::vector<double> kernel2d(kernelN * kernelN, 0.0);
+        for (size_t ri = 0; ri < kernelN; ++ri) {
+            for (size_t ci = 0; ci < kernelN; ++ci) {
+                double x = (static_cast<double>(ri) - kernelLimit) * res;
+                double z = (static_cast<double>(ci) - kernelLimit) * res;
                 double r = std::sqrt(x * x + z * z);
 
-                // Linear interpolation on radial kernel
+                // Linear interpolation on radial kernel (extrapolate to 0 outside range)
                 double kVal = 0.0;
                 if (r <= m_kernelPos.back()) {
-                    // Find bracketing interval
                     size_t lo = 0;
                     for (size_t pi = 0; pi + 1 < m_kernelPos.size(); ++pi) {
                         if (m_kernelPos[pi + 1] >= r) { lo = pi; break; }
@@ -237,39 +300,17 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
                     t = std::clamp(t, 0.0, 1.0);
                     kVal = (1.0 - t) * kernel1d[lo] + t * kernel1d[std::min(lo + 1, kernel1d.size() - 1)];
                 }
-                kernel2d[ri * kernGridN + ci] = kVal;
+                kernel2d[ri * kernelN + ci] = kVal;
             }
         }
 
-        // Build Gaussian filter for convolution
-        int gHalf = static_cast<int>(std::ceil(3.0 * sigma / m_convResolution));
-        size_t gSize = 2 * gHalf + 1;
-        std::vector<double> gauss2d(gSize * gSize, 0.0);
-        double gSum = 0.0;
-        for (int gi = -gHalf; gi <= gHalf; ++gi) {
-            for (int gj = -gHalf; gj <= gHalf; ++gj) {
-                double gx = gi * m_convResolution;
-                double gz = gj * m_convResolution;
-                double gVal = std::exp(-(gx * gx + gz * gz) / (2.0 * sigma * sigma));
-                gauss2d[(gi + gHalf) * gSize + (gj + gHalf)] = gVal;
-                gSum += gVal;
-            }
-        }
-        // Normalize
-        for (auto& v : gauss2d) v /= gSum;
+        // Convolve Fpre with kernel using FFT (pad to kernelConvN×kernelConvN)
+        // This matches: convMx = real(ifft2(fft2(Fpre,kernelConvN,kernelConvN).*fft2(kernelMx,kernelConvN,kernelConvN)))
+        auto kernelConv = FFT2D::convolve2DPadded(Fpre, gaussConvN, gaussConvN,
+                                                    kernel2d, kernelN, kernelN, kernelConvN);
 
-        // Build field function (uniform for now)
-        size_t fieldSize = static_cast<size_t>(std::ceil(m_bixelWidth / m_convResolution)) | 1; // ensure odd
-        std::vector<double> field(fieldSize * fieldSize, 1.0);
-
-        // Convolve field with Gaussian
-        auto fieldConv = FFT2D::convolve2DSame(field, fieldSize, fieldSize, gauss2d, gSize, gSize);
-
-        // Convolve result with kernel
-        auto kernelConv = FFT2D::convolve2DSame(kernel2d, kernGridN, kernGridN, fieldConv, fieldSize, fieldSize);
-
-        bd.kernelInterps[k].setGrid(kernGridMin, kernGridMax, kernGridN,
-                                     kernGridMin, kernGridMax, kernGridN, kernelConv);
+        bd.kernelInterps[k].setGrid(convGridMin, convGridMax, kernelConvN,
+                                     convGridMin, convGridMax, kernelConvN, kernelConv);
     }
 
     return bd;
@@ -424,7 +465,7 @@ DoseInfluenceMatrix PencilBeamEngine::calculateDij(
     // Map to dose grid voxel indices
     std::vector<size_t> doseVoxelIndices;
     if (!ctIndicesVec.empty()) {
-        doseVoxelIndices = Grid::mapVoxelIndices(ctGrid, doseGrid, ctIndicesVec);
+        doseVoxelIndices = Grid::resampleMaskNearestToGrid(ctGrid, doseGrid, ctIndicesVec);
     }
 
     if (doseVoxelIndices.empty()) {
@@ -559,7 +600,7 @@ DoseInfluenceMatrix PencilBeamEngine::calculateDij(
 
         totalEntriesBefore += beamEntriesBefore;
         totalEntriesAfter += beamEntriesAfter;
-
+        
         double pctKept = beamEntriesBefore > 0
             ? 100.0 * static_cast<double>(beamEntriesAfter) / static_cast<double>(beamEntriesBefore)
             : 0.0;

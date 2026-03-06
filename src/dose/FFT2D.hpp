@@ -105,6 +105,50 @@ public:
         return result;
     }
 
+    /// Convolve two grids using FFT with explicit zero-padding to padSize×padSize.
+    /// Replicates MATLAB: real(ifft2(fft2(a,N,N).*fft2(b,N,N))) where N=padSize.
+    /// padSize must be >= aRows + bRows - 1 for correct linear convolution.
+    static std::vector<double> convolve2DPadded(
+        const std::vector<double>& a, size_t aRows, size_t aCols,
+        const std::vector<double>& b, size_t bRows, size_t bCols,
+        size_t padSize)
+    {
+        // Pad to power of 2 for Cooley-Tukey FFT
+        size_t fftN = nextPow2(padSize);
+
+        std::vector<Complex> A(fftN * fftN, {0.0, 0.0});
+        std::vector<Complex> B(fftN * fftN, {0.0, 0.0});
+
+        // Zero-pad a into top-left corner
+        for (size_t r = 0; r < aRows; ++r)
+            for (size_t c = 0; c < aCols; ++c)
+                A[r * fftN + c] = {a[r * aCols + c], 0.0};
+
+        // Zero-pad b into top-left corner
+        for (size_t r = 0; r < bRows; ++r)
+            for (size_t c = 0; c < bCols; ++c)
+                B[r * fftN + c] = {b[r * bCols + c], 0.0};
+
+        // Forward FFT
+        fft2(A, fftN, fftN, false);
+        fft2(B, fftN, fftN, false);
+
+        // Point-wise multiply
+        for (size_t i = 0; i < A.size(); ++i)
+            A[i] *= B[i];
+
+        // Inverse FFT
+        fft2(A, fftN, fftN, true);
+
+        // Extract padSize × padSize result
+        std::vector<double> result(padSize * padSize);
+        for (size_t r = 0; r < padSize; ++r)
+            for (size_t c = 0; c < padSize; ++c)
+                result[r * padSize + c] = A[r * fftN + c].real();
+
+        return result;
+    }
+
     static size_t nextPow2(size_t n) {
         size_t p = 1;
         while (p < n) p <<= 1;

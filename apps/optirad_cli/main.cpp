@@ -19,6 +19,7 @@
 #include "dose/DijSerializer.hpp"
 #include "dose/DoseCalcOptions.hpp"
 #include "optimization/OptimizerFactory.hpp"
+#include "optimization/optimizers/LBFGSOptimizer.hpp"
 #include "optimization/objectives/SquaredDeviation.hpp"
 #include "optimization/objectives/SquaredOverdose.hpp"
 #include "optimization/objectives/SquaredUnderdose.hpp"
@@ -117,6 +118,16 @@ int loadDicom(const std::string& path, AppState& state) {
 
     // Store in shared state - move unique_ptr into shared_ptr
     state.patientData = std::move(patientData);
+
+    // Invalidate derived state to avoid stale reuse across patients
+    state.plan.reset();
+    state.stfProps.reset();
+    state.stf.reset();
+    state.dij.reset();
+    state.doseGrid.reset();
+    state.optimizedWeights.clear();
+    state.doseResult.reset();
+    state.phaseSpaceSources.clear();
 
     // Display patient info
     if (auto* patient = state.patientData->getPatient()) {
@@ -264,6 +275,15 @@ int createPlan(const std::vector<std::string>& args, AppState& state) {
 
     // Store in state
     state.plan = plan;
+
+    // New plan invalidates previously generated steering/dose artifacts
+    state.stfProps.reset();
+    state.stf.reset();
+    state.dij.reset();
+    state.doseGrid.reset();
+    state.optimizedWeights.clear();
+    state.doseResult.reset();
+    state.phaseSpaceSources.clear();
 
     // Print summary
     plan->printSummary();
@@ -800,6 +820,29 @@ int optimize(const std::vector<std::string>& args, AppState& state) {
     auto optimizer = OptimizerFactory::create("LBFGS");
     optimizer->setMaxIterations(maxIter);
     optimizer->setTolerance(tolerance);
+
+    // Configure LBFGS-specific parameters
+    if (auto* lbfgs = dynamic_cast<LBFGSOptimizer*>(optimizer.get())) {
+        // maxFluence must be large enough for the optimizer to reach the prescribed dose.
+        // Estimate: targetDose / maxBixelDose. Use a generous margin.
+        double maxBixelDose = state.dij->getMaxValue();
+        double estimatedMaxFluence = (maxBixelDose > 1e-10)
+            ? targetDose / maxBixelDose * 2.0  // 2x headroom
+            : 1000.0;
+        lbfgs->setMaxFluence(estimatedMaxFluence);
+        lbfgs->setPrescriptionDose(targetDose);
+        lbfgs->setHotspotThreshold(1.1);    // penalise > 110% of Rx
+        lbfgs->setHotspotPenalty(800.0);
+
+        std::cout << "\n  LBFGS parameters:\n";
+        std::cout << "    Max fluence:      " << estimatedMaxFluence
+                  << " (estimated from maxBixelDose=" << maxBixelDose << ")\n";
+        std::cout << "    Prescription:     " << targetDose << " Gy\n";
+        std::cout << "    Hotspot limit:    " << targetDose * 1.1 << " Gy (110%)\n";
+        std::cout << "    Hotspot penalty:  800\n";
+    } else {
+        std::cerr << "Warning: dynamic_cast to LBFGSOptimizer failed!\n";
+    }
 
     auto start = std::chrono::steady_clock::now();
     std::vector<Constraint> constraints;

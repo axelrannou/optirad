@@ -46,6 +46,9 @@ public:
     const std::vector<size_t>&  getColIndices() const { return m_colIndices; }
     const std::vector<size_t>&  getRowPtrs()    const { return m_rowPtrs; }
 
+    /// Return the maximum value across all entries (requires finalized CSR).
+    double getMaxValue() const;
+
     /// Load pre-built CSR arrays directly (deserialization). Marks matrix as finalized.
     void loadCSR(std::vector<size_t> rowPtrs,
                  std::vector<size_t> colIndices,

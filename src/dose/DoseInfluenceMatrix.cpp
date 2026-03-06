@@ -274,6 +274,13 @@ size_t DoseInfluenceMatrix::getNumNonZeros() const {
     return m_finalized ? m_values.size() : m_cooRows.size();
 }
 
+double DoseInfluenceMatrix::getMaxValue() const {
+    if (!m_finalized)
+        throw std::runtime_error("DoseInfluenceMatrix::getMaxValue requires finalize()");
+    if (m_values.empty()) return 0.0;
+    return *std::max_element(m_values.begin(), m_values.end());
+}
+
 // ────────────────────────────────────────────────────────────────
 // Linear algebra (all CSR-based, require finalized)
 // ────────────────────────────────────────────────────────────────

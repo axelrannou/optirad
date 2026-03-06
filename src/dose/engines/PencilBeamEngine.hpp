@@ -79,7 +79,9 @@ private:
     double m_SAD;
     double m_SCD;
     double m_penumbraFWHM;
-    double m_lateralCutOff = 50.0; // mm at isocenter plane
+    double m_geometricLateralCutOff = 50.0; // mm, geometric cutoff for voxel filtering (matRad default)
+    double m_kernelCutOff = 179.5; // mm, full kernel extent (for convolution grid)
+    double m_lateralCutOff = 50.0; // mm, effective lateral cutoff used in ray voxel filtering
     double m_bixelWidth;
 
     // Kernel data from machine

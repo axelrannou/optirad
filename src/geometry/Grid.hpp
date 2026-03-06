@@ -54,6 +54,12 @@ public:
     static std::vector<size_t> mapVoxelIndices(const Grid& fromGrid, const Grid& toGrid,
                                                 const std::vector<size_t>& fromIndices);
 
+    /// Resample a binary voxel mask from source grid to target grid using nearest-neighbor
+    /// in target-to-source direction (matRad-like interp3 nearest behavior).
+    /// Returns target-grid flat indices where the resampled mask is non-zero.
+    static std::vector<size_t> resampleMaskNearestToGrid(const Grid& sourceGrid, const Grid& targetGrid,
+                                                         const std::vector<size_t>& sourceMaskIndices);
+
 private:
     void updateMatricesIfNeeded() const;
     
