@@ -40,6 +40,8 @@ OptimizationResult LBFGSOptimizer::optimize(
     
     // Initialize
     resetHistory();
+    m_stallCount = 0;
+    m_resetCount = 0;
     
     int n = static_cast<int>(dij.getNumBixels());
     double lb = 0.0;
@@ -120,10 +122,60 @@ OptimizationResult LBFGSOptimizer::optimize(
         // Project search direction for bound constraints
         projectSearchDirection(x, dir, lb, ub);
         
+        // Compute appropriate initial step size.
+        // On first iteration (steepest descent), the direction is unscaled,
+        // so we must normalize by direction magnitude to get a reasonable step.
+        // On later iterations, the L-BFGS Hessian approximation already scales
+        // the direction appropriately, so alpha=1.0 is typically correct.
+        double stepInit = m_initialStepSize;
+        if (m_currentMemorySize == 0) {
+            // No L-BFGS history yet — use 1/||dir||_inf as initial step
+            double dirInfNorm = 0.0;
+            for (int i = 0; i < n; ++i) {
+                dirInfNorm = std::max(dirInfNorm, std::abs(dir[i]));
+            }
+            if (dirInfNorm > 1e-10) {
+                stepInit = std::min(1.0, 1.0 / dirInfNorm);
+            }
+        }
+        
         // Line search
         int lsIter = 0;
+        double fval_before = fval;
         double alpha = lineSearch(x, fval, grad, dir, lb, ub, dij, objectives, 
-                                  x_new, fval, grad_new, lsIter);
+                                  x_new, fval, grad_new, lsIter, stepInit);
+        
+        // Stall recovery: when line search fails, reset L-BFGS history so the
+        // next iteration uses steepest descent instead of the same bad direction.
+        if (alpha <= 0) {
+            if (m_currentMemorySize > 0 && m_resetCount < kMaxResets) {
+                resetHistory();
+                m_resetCount++;
+                if (m_verbose) {
+                    std::cout << "         (L-BFGS history reset " << m_resetCount 
+                              << "/" << kMaxResets << " after LS failure)\n";
+                }
+                // Don't count as stall — the reset may recover
+            } else {
+                m_stallCount++;
+            }
+        } else if (std::abs(fval_before - fval) < 1e-10 * (std::abs(fval_before) + 1e-10)) {
+            m_stallCount++;
+        } else {
+            m_stallCount = 0;
+        }
+        
+        // Early termination on persistent stall
+        if (m_stallCount >= kStallLimit) {
+            result.converged = true;
+            if (m_verbose) {
+                std::cout << std::setw(8) << iter 
+                          << std::setw(16) << std::scientific << fval 
+                          << std::setw(16) << projGradNorm 
+                          << "  (Converged - stalled)\n";
+            }
+            break;
+        }
         
         // Display progress
         if (m_verbose && (iter % m_progressEvery == 0 || iter == 1)) {
@@ -162,15 +214,18 @@ OptimizationResult LBFGSOptimizer::optimize(
         
         objectiveHistory.push_back(fval);
         
-        // Adaptive restart if progress stalls
-        if (iter > 10) {
+        // Adaptive restart if progress stalls (with limited resets)
+        if (iter > kRestartLookback && m_resetCount < kMaxResets) {
             size_t histSize = objectiveHistory.size();
-            double recentObj = objectiveHistory[std::max(size_t(0), histSize - 6)];
+            size_t lookback = std::min(static_cast<size_t>(kRestartLookback + 1), histSize);
+            double recentObj = objectiveHistory[histSize - lookback];
             double recentProgress = std::abs(recentObj - fval) / (std::abs(recentObj) + 1e-10);
-            if (recentProgress < 1e-6) {
+            if (recentProgress < 1e-9) {
                 resetHistory();
+                m_resetCount++;
                 if (m_verbose) {
-                    std::cout << "         (L-BFGS history reset due to slow progress)\n";
+                    std::cout << "         (L-BFGS history reset " << m_resetCount 
+                              << "/" << kMaxResets << " due to slow progress)\n";
                 }
             }
         }
@@ -319,10 +374,11 @@ double LBFGSOptimizer::lineSearch(
     std::vector<double>& x_new,
     double& fval_new,
     std::vector<double>& grad_new,
-    int& lsIter
+    int& lsIter,
+    double stepInit
 ) {
     int n = static_cast<int>(x.size());
-    double alpha = m_initialStepSize;
+    double alpha = stepInit;
     double alphaLow = 0;
     double alphaHigh = std::numeric_limits<double>::infinity();
     
@@ -336,6 +392,13 @@ double LBFGSOptimizer::lineSearch(
         lsIter = 0;
         return 0;
     }
+    
+    // Track best Armijo-satisfying step as fallback
+    double bestAlpha = 0;
+    double bestF = fval;
+    std::vector<double> bestX = x;
+    std::vector<double> bestGrad = grad;
+    bool foundArmijo = false;
     
     for (lsIter = 1; lsIter <= m_lineSearchMaxIter; ++lsIter) {
         // Compute trial point with projection
@@ -354,12 +417,21 @@ double LBFGSOptimizer::lineSearch(
             continue;
         }
         
+        // This step satisfies Armijo — track as best so far
+        if (fval_new < bestF) {
+            bestF = fval_new;
+            bestAlpha = alpha;
+            bestX = x_new;
+            bestGrad = grad_new;
+            foundArmijo = true;
+        }
+        
         // Check Wolfe curvature condition
         double dirDerivNew = dot(grad_new, dir);
         
         // Strong Wolfe condition
         if (std::abs(dirDerivNew) <= -m_c2 * dirDeriv) {
-            break;  // Found acceptable step
+            return alpha;  // Found ideal step
         }
         
         if (dirDerivNew < 0) {
@@ -375,7 +447,19 @@ double LBFGSOptimizer::lineSearch(
         }
     }
     
-    return alpha;
+    // If no step satisfied both Wolfe conditions, use best Armijo step
+    if (foundArmijo) {
+        x_new = bestX;
+        fval_new = bestF;
+        grad_new = bestGrad;
+        return bestAlpha;
+    }
+    
+    // Complete failure — no improvement found
+    x_new = x;
+    fval_new = fval;
+    grad_new = grad;
+    return 0;
 }
 
 void LBFGSOptimizer::updateHistory(const std::vector<double>& s, const std::vector<double>& y) {

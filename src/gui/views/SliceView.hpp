@@ -72,8 +72,8 @@ private:
     const Grid* m_doseGrid = nullptr;
     unsigned int m_doseTextureID = 0;
     bool m_showDose = true;
-    float m_doseAlpha = 0.4f;
-    float m_doseThresholdPct = 5.0f; // % of max dose below which dose is not shown
+    float m_doseAlpha = 0.8f;
+    float m_doseThresholdPct = 0.5f; // % of max dose below which dose is not shown
     bool m_doseNeedsUpdate = true;
 };
 

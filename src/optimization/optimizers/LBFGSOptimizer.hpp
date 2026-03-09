@@ -31,7 +31,7 @@ public:
 
 private:
     // Parameters
-    int m_maxIterations = 500;
+    int m_maxIterations = 400;
     double m_tolerance = 1e-5;
     int m_memorySize = 10;
     double m_maxFluence = 10.0;
@@ -46,8 +46,15 @@ private:
     
     // NTO parameters (Eclipse-style hotspot control)
     double m_prescriptionDose = 0.0;   // 0 = disabled
-    double m_hotspotThreshold = 1.0;   // fraction of Rx
-    double m_hotspotPenalty = 10000.0;  // penalty weight
+    double m_hotspotThreshold = 1.04;  // fraction of Rx (104%)
+    double m_hotspotPenalty = 2000.0;  // penalty weight
+    
+    // Convergence tracking
+    int m_stallCount = 0;              // consecutive stalled iterations
+    int m_resetCount = 0;              // total L-BFGS history resets
+    static constexpr int kMaxResets = 5;       // stop resetting after this many
+    static constexpr int kStallLimit = 15;     // terminate after this many stalled iters
+    static constexpr int kRestartLookback = 15; // lookback window for adaptive restart
     
     // L-BFGS history
     std::deque<std::vector<double>> m_sHistory;
@@ -85,7 +92,8 @@ private:
         std::vector<double>& x_new,
         double& fval_new,
         std::vector<double>& grad_new,
-        int& lsIter
+        int& lsIter,
+        double stepInit = 1.0
     );
     
     // Update L-BFGS history

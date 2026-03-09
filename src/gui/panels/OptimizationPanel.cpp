@@ -37,35 +37,56 @@ void OptimizationPanel::render() {
         return;
     }
 
-    // ── Initialize objectives from structures ──
+    // ── Initialize objectives from curated structure list ──
+    // Only include clinically relevant structures with protocol-appropriate defaults.
+    // User can still add/remove objectives via the table UI.
     if (!m_objectivesInitialized && m_state.patientData && m_state.patientData->getStructureSet()) {
         const auto* ss = m_state.patientData->getStructureSet();
-        for (size_t i = 0; i < ss->getCount(); ++i) {
-            const auto* s = ss->getStructure(i);
-            if (!s) continue;
-            ObjectiveConfig obj;
-            obj.structureName = s->getName();
-            std::string type = s->getType();
-            std::string name = s->getName();
-            bool isTarget = (type.find("TARGET") != std::string::npos ||
-                           type.find("PTV") != std::string::npos ||
-                           type.find("CTV") != std::string::npos ||
-                           type.find("GTV") != std::string::npos ||
-                           name.find("PTV") != std::string::npos ||
-                           name.find("CTV") != std::string::npos ||
-                           name.find("GTV") != std::string::npos);
-            if (isTarget) {
-                obj.typeIdx = 0; // SquaredDeviation
-                obj.doseValue = 60.0f;
-                obj.weight = 100.0f;
-                obj.volumePct = 95.0f;
-            } else {
-                obj.typeIdx = 1; // SquaredOverdose (OAR)
-                obj.doseValue = 30.0f;
-                obj.weight = 1.0f;
-                obj.volumePct = 5.0f;
+        
+        // Curated default objectives: structure name pattern -> {typeIdx, dose, weight, volPct}
+        struct DefaultObjective {
+            std::string namePattern;  // exact match or substring
+            bool exactMatch;          // true = exact, false = contains
+            int typeIdx;              // 0=SqDev 1=SqOver 2=SqUnder 3=MinDVH 4=MaxDVH
+            float doseValue;
+            float weight;
+            float volumePct;
+        };
+        
+        std::vector<DefaultObjective> defaults = {
+            // PTVs: MinDVH D98% at 66 Gy (RTEP7 protocol)
+            // Only PTV N and PTVT — PTV ok / PTV_66dosi are just unions of these.
+            {"PTV N",             true,  3,  66.0f, 100.0f, 98.0f},
+            {"PTVT",              true,  3,  66.0f, 100.0f, 98.0f},
+            // Lungs: SquaredOverdose at MLD 20 Gy
+            {"Poumon_D",          true,  1,  20.0f,  10.0f,  5.0f},
+            {"Poumon_G",          true,  1,  20.0f,  10.0f,  5.0f},
+            // Heart: MaxDVH V40 < 30%
+            {"Coeur",             true,  4,  40.0f,  30.0f, 30.0f},
+            // Esophagus: MaxDVH V50 < 30%
+            {"Oesophage",         true,  4,  50.0f,  50.0f, 30.0f},
+            // Spinal cord: MaxDVH V10Gy <= 0%
+            {"Canal_Medullaire",  true,  4,  10.0f, 200.0f,  0.0f},
+        };
+        
+        for (const auto& def : defaults) {
+            for (size_t i = 0; i < ss->getCount(); ++i) {
+                const auto* s = ss->getStructure(i);
+                if (!s) continue;
+                std::string name = s->getName();
+                bool match = def.exactMatch 
+                    ? (name == def.namePattern)
+                    : (name.find(def.namePattern) != std::string::npos);
+                if (match) {
+                    ObjectiveConfig obj;
+                    obj.structureName = name;
+                    obj.typeIdx = def.typeIdx;
+                    obj.doseValue = def.doseValue;
+                    obj.weight = def.weight;
+                    obj.volumePct = def.volumePct;
+                    m_objectives.push_back(obj);
+                }
             }
-            m_objectives.push_back(obj);
         }
         m_objectivesInitialized = true;
     }

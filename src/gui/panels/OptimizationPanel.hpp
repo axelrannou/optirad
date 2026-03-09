@@ -35,13 +35,13 @@ private:
     bool m_objectivesInitialized = false;
 
     // Optimizer settings
-    int m_maxIterations = 500;
+    int m_maxIterations = 400;
     float m_tolerance = 1e-5f;
 
     // NTO (Normal Tissue Objective) / hotspot control
     bool m_ntoEnabled = true;
-    float m_ntoThresholdPct = 100.0f;  // % of prescription dose
-    float m_ntoPenalty = 10000.0f;
+    float m_ntoThresholdPct = 104.0f;  // % of prescription dose
+    float m_ntoPenalty = 2000.0f;
 
     // Async state
     std::atomic<bool> m_isOptimizing{false};

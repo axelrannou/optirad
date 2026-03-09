@@ -695,9 +695,9 @@ int optimize(const std::vector<std::string>& args, AppState& state) {
         return 1;
     }
 
-    int maxIter = 500;
+    int maxIter = 400;
     double tolerance = 1e-5;
-    double targetDose = 60.0;
+    double targetDose = 66.0;
     double oarMaxDose = 30.0;
 
     for (size_t i = 0; i < args.size(); ++i) {
@@ -738,75 +738,98 @@ int optimize(const std::vector<std::string>& args, AppState& state) {
     std::cout << "  Objectives:\n";
     std::cout << "  ──────────────────────────────────────────────────────────────\n";
 
-    for (size_t si = 0; si < ss->getCount(); ++si) {
-        const auto* structure = ss->getStructure(si);
-        if (!structure || structure->getVoxelIndices().empty()) continue;
-
-        // Map CT-grid voxel indices → dose-grid voxel indices
-        auto doseIndices = Grid::mapVoxelIndices(ctGrid, doseGrid, structure->getVoxelIndices());
-
-        std::string type = structure->getType();
-        std::string name = structure->getName();
-        bool isTarget = (type.find("TARGET") != std::string::npos ||
-                        type.find("PTV") != std::string::npos ||
-                        type.find("CTV") != std::string::npos ||
-                        type.find("GTV") != std::string::npos ||
-                        name.find("PTV") != std::string::npos ||
-                        name.find("CTV") != std::string::npos ||
-                        name.find("GTV") != std::string::npos);
-
-        if (isTarget) {
-            // Target: SquaredDeviation + MinDVH(D95) + MaxDVH(D2)
-            {
-                auto obj = std::make_unique<SquaredDeviation>();
-                obj->setPrescribedDose(targetDose);
-                obj->setWeight(100.0);
-                obj->setStructure(structure);
-                obj->setVoxelIndices(doseIndices);
-                std::cout << "  Target: " << name << " -> SquaredDeviation @ " << targetDose
-                          << " Gy (w=100, " << doseIndices.size() << " voxels)\n";
-                objPtrs.push_back(obj.get());
-                ownedObjs.push_back(std::move(obj));
+    // Helper lambda to find a structure by name (exact) or pattern (substring)
+    auto findStructures = [&](const std::string& pattern, bool exact) 
+        -> std::vector<std::pair<const Structure*, std::vector<size_t>>> {
+        std::vector<std::pair<const Structure*, std::vector<size_t>>> results;
+        for (size_t si = 0; si < ss->getCount(); ++si) {
+            const auto* structure = ss->getStructure(si);
+            if (!structure || structure->getVoxelIndices().empty()) continue;
+            std::string name = structure->getName();
+            bool match = exact ? (name == pattern) : (name.find(pattern) != std::string::npos);
+            if (match) {
+                auto doseIndices = Grid::mapVoxelIndices(ctGrid, doseGrid, structure->getVoxelIndices());
+                results.push_back({structure, std::move(doseIndices)});
             }
-            // MinDVH: D95 >= prescribed dose (95% of target should get at least prescribed dose)
-            {
-                auto obj = std::make_unique<DVHObjective>();
-                obj->setType(DVHObjective::Type::MIN_DVH);
-                obj->setDoseThreshold(targetDose);
-                obj->setVolumeFraction(0.95);
-                obj->setWeight(50.0);
-                obj->setStructure(structure);
-                obj->setVoxelIndices(doseIndices);
-                std::cout << "  Target: " << name << " -> MinDVH D95% >= " << targetDose
-                          << " Gy (w=50, " << doseIndices.size() << " voxels)\n";
-                objPtrs.push_back(obj.get());
-                ownedObjs.push_back(std::move(obj));
-            }
-            // MaxDVH: D2 <= 1.07*prescribed (hot spot control)
-            {
-                auto obj = std::make_unique<DVHObjective>();
-                obj->setType(DVHObjective::Type::MAX_DVH);
-                obj->setDoseThreshold(targetDose * 1.07);
-                obj->setVolumeFraction(0.02);
-                obj->setWeight(30.0);
-                obj->setStructure(structure);
-                obj->setVoxelIndices(doseIndices);
-                std::cout << "  Target: " << name << " -> MaxDVH D2% <= " << targetDose * 1.07
-                          << " Gy (w=30, " << doseIndices.size() << " voxels)\n";
-                objPtrs.push_back(obj.get());
-                ownedObjs.push_back(std::move(obj));
-            }
-        } else {
-            auto obj = std::make_unique<SquaredOverdose>();
-            obj->setMaxDose(oarMaxDose);
-            obj->setWeight(1.0);
-            obj->setStructure(structure);
-            obj->setVoxelIndices(doseIndices);
-            std::cout << "  OAR:    " << name << " -> SquaredOverdose @ " << oarMaxDose
-                      << " Gy (w=1, " << doseIndices.size() << " voxels)\n";
-            objPtrs.push_back(obj.get());
-            ownedObjs.push_back(std::move(obj));
         }
+        return results;
+    };
+
+    // Helper lambda to add an objective
+    auto addObjective = [&](std::unique_ptr<ObjectiveFunction> obj, 
+                            const Structure* structure,
+                            const std::vector<size_t>& doseIndices,
+                            const std::string& desc) {
+        obj->setStructure(structure);
+        obj->setVoxelIndices(doseIndices);
+        std::cout << "  " << desc << " (" << doseIndices.size() << " voxels)\n";
+        objPtrs.push_back(obj.get());
+        ownedObjs.push_back(std::move(obj));
+    };
+
+    // ── PTVs: MinDVH D98% at targetDose (only PTV N and PTVT) ──
+    // PTV ok and PTV_66dosi are unions of PTV N + PTVT, so we only optimize the individual PTVs.
+    for (const std::string& ptvName : {"PTV N", "PTVT"}) {
+        for (auto& [structure, doseIndices] : findStructures(ptvName, true)) {
+            auto obj = std::make_unique<DVHObjective>();
+            obj->setType(DVHObjective::Type::MIN_DVH);
+            obj->setDoseThreshold(targetDose);
+            obj->setVolumeFraction(0.98);
+            obj->setWeight(100.0);
+            addObjective(std::move(obj), structure, doseIndices,
+                "Target: " + ptvName + " -> MinDVH D98% >= " + std::to_string(targetDose) + " Gy (w=100)");
+        }
+    }
+
+    // ── Poumon_D: SquaredOverdose at MLD 20 Gy ──
+    for (auto& [structure, doseIndices] : findStructures("Poumon_D", true)) {
+        auto obj = std::make_unique<SquaredOverdose>();
+        obj->setMaxDose(20.0);
+        obj->setWeight(10.0);
+        addObjective(std::move(obj), structure, doseIndices,
+            "OAR:    Poumon_D -> SquaredOverdose @ 20 Gy (w=10)");
+    }
+
+    // ── Poumon_G: SquaredOverdose at MLD 20 Gy ──
+    for (auto& [structure, doseIndices] : findStructures("Poumon_G", true)) {
+        auto obj = std::make_unique<SquaredOverdose>();
+        obj->setMaxDose(20.0);
+        obj->setWeight(10.0);
+        addObjective(std::move(obj), structure, doseIndices,
+            "OAR:    Poumon_G -> SquaredOverdose @ 20 Gy (w=10)");
+    }
+
+    // ── Coeur: MaxDVH V40 < 30% ──
+    for (auto& [structure, doseIndices] : findStructures("Coeur", true)) {
+        auto obj = std::make_unique<DVHObjective>();
+        obj->setType(DVHObjective::Type::MAX_DVH);
+        obj->setDoseThreshold(40.0);
+        obj->setVolumeFraction(0.30);
+        obj->setWeight(30.0);
+        addObjective(std::move(obj), structure, doseIndices,
+            "OAR:    Coeur -> MaxDVH V40Gy <= 30% (w=30)");
+    }
+
+    // ── Oesophage: MaxDVH V50 < 30% ──
+    for (auto& [structure, doseIndices] : findStructures("Oesophage", true)) {
+        auto obj = std::make_unique<DVHObjective>();
+        obj->setType(DVHObjective::Type::MAX_DVH);
+        obj->setDoseThreshold(50.0);
+        obj->setVolumeFraction(0.30);
+        obj->setWeight(50.0);
+        addObjective(std::move(obj), structure, doseIndices,
+            "OAR:    Oesophage -> MaxDVH V50Gy <= 30% (w=50)");
+    }
+
+    // ── Canal_Medullaire: MaxDVH V10Gy <= 0% ──
+    for (auto& [structure, doseIndices] : findStructures("Canal_Medullaire", true)) {
+        auto obj = std::make_unique<DVHObjective>();
+        obj->setType(DVHObjective::Type::MAX_DVH);
+        obj->setDoseThreshold(10.0);
+        obj->setVolumeFraction(0.0);
+        obj->setWeight(200.0);
+        addObjective(std::move(obj), structure, doseIndices,
+            "OAR:    Canal_Medullaire -> MaxDVH V10Gy <= 0% (w=200)");
     }
 
     if (objPtrs.empty()) {
@@ -831,15 +854,15 @@ int optimize(const std::vector<std::string>& args, AppState& state) {
             : 1000.0;
         lbfgs->setMaxFluence(estimatedMaxFluence);
         lbfgs->setPrescriptionDose(targetDose);
-        lbfgs->setHotspotThreshold(1.1);    // penalise > 110% of Rx
-        lbfgs->setHotspotPenalty(800.0);
+        lbfgs->setHotspotThreshold(1.04);   // penalise > 104% of Rx
+        lbfgs->setHotspotPenalty(2000.0);
 
         std::cout << "\n  LBFGS parameters:\n";
         std::cout << "    Max fluence:      " << estimatedMaxFluence
                   << " (estimated from maxBixelDose=" << maxBixelDose << ")\n";
         std::cout << "    Prescription:     " << targetDose << " Gy\n";
-        std::cout << "    Hotspot limit:    " << targetDose * 1.1 << " Gy (110%)\n";
-        std::cout << "    Hotspot penalty:  800\n";
+        std::cout << "    Hotspot limit:    " << targetDose * 1.04 << " Gy (104%)\n";
+        std::cout << "    Hotspot penalty:  2000\n";
     } else {
         std::cerr << "Warning: dynamic_cast to LBFGSOptimizer failed!\n";
     }
