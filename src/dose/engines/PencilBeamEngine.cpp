@@ -111,7 +111,7 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
 
         // Translate to isocenter-centered coordinates then rotate
         Vec3 centered = vecSub(lps, iso);
-        Vec3 bev = rotMat * centered;
+        Vec3 bev = rotMatInv * centered;
 
         // Geometric distance from source to voxel
         Vec3 srcToVox = vecSub(lps, sourcePoint);

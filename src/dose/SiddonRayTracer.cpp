@@ -134,9 +134,10 @@ RayTraceResult SiddonRayTracer::trace(
             continue;
         }
 
-        // Linear index (column-major: i + j*nx + k*nx*ny)
-        size_t linearIdx = static_cast<size_t>(ix) +
-                           static_cast<size_t>(iy) * nx +
+        // Linear index (row-major to match DICOM pixel storage: row*cols + col + slice*rows*cols)
+        // ix = row index (dims[0] = Rows), iy = col index (dims[1] = Columns)
+        size_t linearIdx = static_cast<size_t>(ix) * ny +
+                           static_cast<size_t>(iy) +
                            static_cast<size_t>(iz) * nx * ny;
 
         result.voxelIndices.push_back(linearIdx);
