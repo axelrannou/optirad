@@ -128,4 +128,147 @@ std::vector<double> Grid::getZCoordinates() const {
     return z;
 }
 
+Grid Grid::createDoseGrid(const Grid& ctGrid, const Vec3& doseResolution) {
+    auto ctDims = ctGrid.getDimensions();
+    auto ctSpacing = ctGrid.getSpacing();
+    auto ctOrigin = ctGrid.getOrigin();
+
+    // Match matRad behavior:
+    // - anchor dose grid at first CT voxel
+    // - sample with step = dose resolution up to CT max extent
+    // This corresponds to x = ct.x(1):dx:ct.x(end), same for y/z.
+    // Therefore: N = floor((ctMax - ctMin)/doseRes) + 1.
+    double extentX = static_cast<double>(ctDims[0] - 1) * ctSpacing[0];
+    double extentY = static_cast<double>(ctDims[1] - 1) * ctSpacing[1];
+    double extentZ = static_cast<double>(ctDims[2] - 1) * ctSpacing[2];
+
+    size_t doseNx = std::max(size_t(1), static_cast<size_t>(std::floor(extentX / doseResolution[0])) + 1);
+    size_t doseNy = std::max(size_t(1), static_cast<size_t>(std::floor(extentY / doseResolution[1])) + 1);
+    size_t doseNz = std::max(size_t(1), static_cast<size_t>(std::floor(extentZ / doseResolution[2])) + 1);
+
+    Grid doseGrid;
+    doseGrid.setDimensions(doseNx, doseNy, doseNz);
+    doseGrid.setSpacing(doseResolution[0], doseResolution[1], doseResolution[2]);
+    doseGrid.setPatientPosition(ctGrid.getPatientPosition());
+    doseGrid.setImageOrientation(ctGrid.getImageOrientation());
+    doseGrid.setSliceThickness(doseResolution[2]);
+
+    // Anchor to CT origin (first voxel world coordinate)
+    doseGrid.setOrigin(ctOrigin);
+
+    return doseGrid;
+}
+
+std::vector<size_t> Grid::mapVoxelIndices(const Grid& fromGrid, const Grid& toGrid,
+                                           const std::vector<size_t>& fromIndices) {
+    auto fromDims = fromGrid.getDimensions();
+    auto toDims = toGrid.getDimensions();
+    size_t fromNx = fromDims[0], fromNy = fromDims[1];
+    size_t toNx = toDims[0], toNy = toDims[1], toNz = toDims[2];
+
+    std::vector<size_t> mapped;
+    mapped.reserve(fromIndices.size());
+
+    // Use a set to avoid duplicates
+    std::vector<bool> seen(toGrid.getNumVoxels(), false);
+
+    for (size_t idx : fromIndices) {
+        // Convert flat index to ijk in source grid
+        size_t iz = idx / (fromNx * fromNy);
+        size_t rem = idx % (fromNx * fromNy);
+        size_t iy = rem / fromNx;
+        size_t ix = rem % fromNx;
+
+        // Convert to patient coordinates
+        Vec3 lps = fromGrid.voxelToPatient({
+            static_cast<double>(ix),
+            static_cast<double>(iy),
+            static_cast<double>(iz)
+        });
+
+        // Convert to target grid voxel coordinates
+        Vec3 ijk = toGrid.patientToVoxel(lps);
+        int tix = static_cast<int>(std::round(ijk[0]));
+        int tiy = static_cast<int>(std::round(ijk[1]));
+        int tiz = static_cast<int>(std::round(ijk[2]));
+
+        // Bounds check
+        if (tix < 0 || tix >= static_cast<int>(toNx) ||
+            tiy < 0 || tiy >= static_cast<int>(toNy) ||
+            tiz < 0 || tiz >= static_cast<int>(toNz)) {
+            continue;
+        }
+
+        size_t toIdx = static_cast<size_t>(tix) +
+                       static_cast<size_t>(tiy) * toNx +
+                       static_cast<size_t>(tiz) * toNx * toNy;
+
+        if (!seen[toIdx]) {
+            seen[toIdx] = true;
+            mapped.push_back(toIdx);
+        }
+    }
+
+    return mapped;
+}
+
+std::vector<size_t> Grid::resampleMaskNearestToGrid(const Grid& sourceGrid, const Grid& targetGrid,
+                                                    const std::vector<size_t>& sourceMaskIndices) {
+    auto sourceDims = sourceGrid.getDimensions();
+    auto targetDims = targetGrid.getDimensions();
+
+    const size_t sourceNx = sourceDims[0];
+    const size_t sourceNy = sourceDims[1];
+    const size_t sourceNz = sourceDims[2];
+
+    const size_t targetNx = targetDims[0];
+    const size_t targetNy = targetDims[1];
+    const size_t targetNz = targetDims[2];
+
+    std::vector<unsigned char> sourceMask(sourceGrid.getNumVoxels(), 0);
+    for (size_t idx : sourceMaskIndices) {
+        if (idx < sourceMask.size()) {
+            sourceMask[idx] = 1;
+        }
+    }
+
+    std::vector<size_t> mapped;
+    mapped.reserve(targetGrid.getNumVoxels() / 8);
+
+    for (size_t tz = 0; tz < targetNz; ++tz) {
+        for (size_t ty = 0; ty < targetNy; ++ty) {
+            for (size_t tx = 0; tx < targetNx; ++tx) {
+                const size_t targetIdx = tx + ty * targetNx + tz * targetNx * targetNy;
+
+                Vec3 lps = targetGrid.voxelToPatient({
+                    static_cast<double>(tx),
+                    static_cast<double>(ty),
+                    static_cast<double>(tz)
+                });
+
+                Vec3 sourceIJK = sourceGrid.patientToVoxel(lps);
+                int sx = static_cast<int>(std::round(sourceIJK[0]));
+                int sy = static_cast<int>(std::round(sourceIJK[1]));
+                int sz = static_cast<int>(std::round(sourceIJK[2]));
+
+                if (sx < 0 || sx >= static_cast<int>(sourceNx) ||
+                    sy < 0 || sy >= static_cast<int>(sourceNy) ||
+                    sz < 0 || sz >= static_cast<int>(sourceNz)) {
+                    continue;
+                }
+
+                const size_t sourceIdx = static_cast<size_t>(sx) +
+                                         static_cast<size_t>(sy) * sourceNx +
+                                         static_cast<size_t>(sz) * sourceNx * sourceNy;
+
+                if (sourceMask[sourceIdx]) {
+                    mapped.push_back(targetIdx);
+                }
+            }
+        }
+    }
+
+    return mapped;
+}
+
 } // namespace optirad

@@ -9,11 +9,15 @@ namespace optirad {
 SliceView::SliceView(SliceOrientation orientation) 
     : m_orientation(orientation) {
     glGenTextures(1, &m_textureID);
+    glGenTextures(1, &m_doseTextureID);
 }
 
 SliceView::~SliceView() {
     if (m_textureID) {
         glDeleteTextures(1, &m_textureID);
+    }
+    if (m_doseTextureID) {
+        glDeleteTextures(1, &m_doseTextureID);
     }
 }
 
@@ -77,6 +81,7 @@ void SliceView::setSliceIndex(size_t index) {
     if (index <= m_maxSlice) {
         m_currentSlice = index;
         m_needsUpdate = true;
+        m_doseNeedsUpdate = true;
     }
 }
 
@@ -194,6 +199,21 @@ void SliceView::renderControls() {
     if (m_showContours) {
         ImGui::SetNextItemWidth(100);
         ImGui::SliderFloat("Contour Thickness", &m_contourThickness, 0.5f, 5.0f);
+    }
+
+    // Dose overlay controls
+    if (m_doseData) {
+        bool doseChanged = false;
+        ImGui::Checkbox("Show Dose", &m_showDose);
+        if (m_showDose) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            if (ImGui::SliderFloat("Opacity", &m_doseAlpha, 0.0f, 1.0f)) doseChanged = true;
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            if (ImGui::SliderFloat("Threshold %", &m_doseThresholdPct, 0.0f, 50.0f)) doseChanged = true;
+        }
+        if (doseChanged) m_doseNeedsUpdate = true;
     }
     
     // Window/Level controls
@@ -354,6 +374,18 @@ void SliceView::renderSlice() {
     ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(m_textureID)),
                 ImVec2(displayWidth, displayHeight));
     
+    // Dose overlay
+    if (m_showDose && m_doseData && m_doseGrid) {
+        if (m_doseNeedsUpdate || m_needsUpdate) {
+            updateDoseTexture();
+            m_doseNeedsUpdate = false;
+        }
+        // Draw dose texture on top with alpha blending
+        ImGui::SetCursorPos(imagePos);
+        ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(m_doseTextureID)),
+                    ImVec2(displayWidth, displayHeight));
+    }
+
     // Overlay contours if enabled
     if (m_showContours && m_patientData && m_patientData->getStructureSet()) {
         renderContours();
@@ -432,6 +464,99 @@ void SliceView::renderContours()
 
 void SliceView::update() {
     // No per-frame update needed
+}
+
+void SliceView::setDoseData(const DoseMatrix* dose, const Grid* doseGrid) {
+    m_doseData = dose;
+    m_doseGrid = doseGrid;
+    m_doseNeedsUpdate = true;
+}
+
+void SliceView::jetColormap(float t, unsigned char& r, unsigned char& g, unsigned char& b) {
+    // Standard jet colormap: blue → cyan → green → yellow → red
+    t = std::clamp(t, 0.0f, 1.0f);
+    float r4 = std::clamp(1.5f - std::abs(t - 0.75f) * 4.0f, 0.0f, 1.0f);
+    float g4 = std::clamp(1.5f - std::abs(t - 0.50f) * 4.0f, 0.0f, 1.0f);
+    float b4 = std::clamp(1.5f - std::abs(t - 0.25f) * 4.0f, 0.0f, 1.0f);
+    r = static_cast<unsigned char>(r4 * 255);
+    g = static_cast<unsigned char>(g4 * 255);
+    b = static_cast<unsigned char>(b4 * 255);
+}
+
+void SliceView::updateDoseTexture() {
+    if (!m_doseData || !m_doseGrid || !m_patientData || !m_patientData->getCTVolume()) return;
+
+    const auto& ctGrid = m_patientData->getCTVolume()->getGrid();
+    auto ctDims = ctGrid.getDimensions();
+    auto ctSpacing = ctGrid.getSpacing();
+    auto ctOrigin = ctGrid.getOrigin();
+
+    auto doseDims = m_doseGrid->getDimensions();
+    auto doseSpacing = m_doseGrid->getSpacing();
+    auto doseOrigin = m_doseGrid->getOrigin();
+
+    double maxDose = m_doseData->getMax();
+    if (maxDose <= 0.0) return;
+    double threshold = maxDose * (m_doseThresholdPct / 100.0f);
+
+    // Create RGBA pixels on CT grid dimensions (same as CT texture)
+    std::vector<unsigned char> pixels(m_textureWidth * m_textureHeight * 4, 0);
+
+    for (int y = 0; y < m_textureHeight; ++y) {
+        for (int x = 0; x < m_textureWidth; ++x) {
+            // Map CT texture pixel (x,y) + current slice to CT voxel coordinates.
+            // Note: Volume::at(i,j,k) with dims[0]=rows stores data as
+            // data[i + j*rows], so at(x,y,slice) for a square image gives
+            // DICOM pixel(row=y, col=x). To get the correct LPS position via
+            // voxelToPatient (where i→colDir=row direction, j→rowDir=col direction),
+            // we must swap i↔j to match the actual DICOM row/column being displayed.
+            double ctI = 0, ctJ = 0, ctK = 0;
+            switch (m_orientation) {
+                case SliceOrientation::Axial:
+                    ctI = y; ctJ = x; ctK = m_currentSlice;
+                    break;
+                case SliceOrientation::Sagittal:
+                    ctI = x; ctJ = m_currentSlice; ctK = m_textureHeight - 1 - y;
+                    break;
+                case SliceOrientation::Coronal:
+                    ctI = ctDims[1] - 1 - m_currentSlice; ctJ = x; ctK = m_textureHeight - 1 - y;
+                    break;
+            }
+
+            // Convert CT voxel to patient LPS
+            Vec3 lps = ctGrid.voxelToPatient({ctI, ctJ, ctK});
+
+            // Convert LPS to dose grid voxel
+            Vec3 doseVox = m_doseGrid->patientToVoxel(lps);
+            int di = static_cast<int>(std::round(doseVox[0]));
+            int dj = static_cast<int>(std::round(doseVox[1]));
+            int dk = static_cast<int>(std::round(doseVox[2]));
+
+            if (di < 0 || di >= (int)doseDims[0] ||
+                dj < 0 || dj >= (int)doseDims[1] ||
+                dk < 0 || dk >= (int)doseDims[2]) continue;
+
+            double dose = m_doseData->at(di, dj, dk);
+            if (dose < threshold) continue;
+
+            float t = static_cast<float>(dose / maxDose);
+            unsigned char r, g, b;
+            jetColormap(t, r, g, b);
+
+            size_t idx = 4 * (y * m_textureWidth + x);
+            pixels[idx + 0] = r;
+            pixels[idx + 1] = g;
+            pixels[idx + 2] = b;
+            pixels[idx + 3] = static_cast<unsigned char>(m_doseAlpha * 255);
+        }
+    }
+
+    glBindTexture(GL_TEXTURE_2D, m_doseTextureID);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_textureWidth, m_textureHeight,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 } // namespace optirad

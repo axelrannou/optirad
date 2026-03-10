@@ -45,6 +45,21 @@ public:
     std::vector<double> getYCoordinates() const;
     std::vector<double> getZCoordinates() const;
 
+    /// Create a dose calculation grid from a CT grid with different resolution.
+    /// The dose grid covers the same physical extent but with coarser spacing.
+    static Grid createDoseGrid(const Grid& ctGrid, const Vec3& doseResolution);
+
+    /// Map flat voxel indices from one grid to another via nearest-neighbor.
+    /// Returns dose-grid flat indices corresponding to ctVoxelIndices.
+    static std::vector<size_t> mapVoxelIndices(const Grid& fromGrid, const Grid& toGrid,
+                                                const std::vector<size_t>& fromIndices);
+
+    /// Resample a binary voxel mask from source grid to target grid using nearest-neighbor
+    /// in target-to-source direction (matRad-like interp3 nearest behavior).
+    /// Returns target-grid flat indices where the resampled mask is non-zero.
+    static std::vector<size_t> resampleMaskNearestToGrid(const Grid& sourceGrid, const Grid& targetGrid,
+                                                         const std::vector<size_t>& sourceMaskIndices);
+
 private:
     void updateMatricesIfNeeded() const;
     

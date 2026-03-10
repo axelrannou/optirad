@@ -23,9 +23,18 @@ public:
 
     void setStructure(const Structure* structure);
 
+    /// Set pre-mapped voxel indices (e.g., dose-grid indices).
+    /// When set, these are used instead of m_structure->getVoxelIndices().
+    void setVoxelIndices(const std::vector<size_t>& indices);
+
 protected:
+    /// Return the voxel indices to iterate over.
+    /// Uses m_mappedIndices if non-empty, otherwise falls back to m_structure.
+    const std::vector<size_t>& getActiveIndices() const;
+
     double m_weight = 1.0;
     const Structure* m_structure = nullptr;
+    std::vector<size_t> m_mappedIndices;  ///< dose-grid indices (set by caller)
 };
 
 } // namespace optirad

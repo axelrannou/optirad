@@ -24,9 +24,14 @@ public:
     void setMaxFluence(double maxFluence);
     void setVerbose(bool verbose);
 
+    // Normal Tissue Objective (NTO) / Eclipse-style hotspot control
+    void setPrescriptionDose(double dose);
+    void setHotspotThreshold(double threshold);  // fraction of Rx (e.g. 1.0 = 100%)
+    void setHotspotPenalty(double penalty);
+
 private:
     // Parameters
-    int m_maxIterations = 500;
+    int m_maxIterations = 400;
     double m_tolerance = 1e-5;
     int m_memorySize = 10;
     double m_maxFluence = 10.0;
@@ -38,6 +43,18 @@ private:
     double m_c1 = 1e-4;      // Armijo condition
     double m_c2 = 0.9;       // Wolfe curvature condition
     double m_initialStepSize = 1.0;
+    
+    // NTO parameters (Eclipse-style hotspot control)
+    double m_prescriptionDose = 0.0;   // 0 = disabled
+    double m_hotspotThreshold = 1.04;  // fraction of Rx (104%)
+    double m_hotspotPenalty = 2000.0;  // penalty weight
+    
+    // Convergence tracking
+    int m_stallCount = 0;              // consecutive stalled iterations
+    int m_resetCount = 0;              // total L-BFGS history resets
+    static constexpr int kMaxResets = 5;       // stop resetting after this many
+    static constexpr int kStallLimit = 15;     // terminate after this many stalled iters
+    static constexpr int kRestartLookback = 15; // lookback window for adaptive restart
     
     // L-BFGS history
     std::deque<std::vector<double>> m_sHistory;
@@ -75,7 +92,8 @@ private:
         std::vector<double>& x_new,
         double& fval_new,
         std::vector<double>& grad_new,
-        int& lsIter
+        int& lsIter,
+        double stepInit = 1.0
     );
     
     // Update L-BFGS history

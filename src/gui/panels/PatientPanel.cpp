@@ -2,18 +2,18 @@
 #include "utils/Logger.hpp"
 #include <imgui.h>
 #include <filesystem>
+#include <algorithm>
+
+#ifndef OPTIRAD_DATA_DIR
+#define OPTIRAD_DATA_DIR "."
+#endif
 
 namespace optirad {
 
 PatientPanel::PatientPanel() {
-    // Initialize with user's home directory or last used path
-    const char* home = std::getenv("HOME");
-    if (home) {
-        snprintf(m_dicomPath, sizeof(m_dicomPath), "%s", home);
-        m_dicomPath[sizeof(m_dicomPath) - 1] = '\0';  // Ensure null termination
-    } else {
-        m_dicomPath[0] = '\0';  // Initialize to empty string if no HOME
-    }
+    // Default to project data/ directory
+    snprintf(m_dicomPath, sizeof(m_dicomPath), "%s", OPTIRAD_DATA_DIR);
+    m_dicomPath[sizeof(m_dicomPath) - 1] = '\0';
 }
 
 void PatientPanel::render() {
@@ -48,18 +48,23 @@ void PatientPanel::renderImportDialog() {
     
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(600, 500), ImGuiCond_Appearing);
     
-    if (ImGui::BeginPopupModal("Import DICOM", &m_showImportDialog, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal("Import DICOM", &m_showImportDialog)) {
         ImGui::Text("Select DICOM directory:");
         ImGui::Spacing();
         
         ImGui::InputText("Path", m_dicomPath, sizeof(m_dicomPath));
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...")) {
-            // TODO: Add file browser (or use native dialog)
-            Logger::info("File browser not yet implemented");
-        }
         
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Inline file browser
+        renderFileBrowser();
+        
+        ImGui::Spacing();
+        ImGui::Separator();
         ImGui::Spacing();
         
         if (m_isImporting) {
@@ -77,6 +82,63 @@ void PatientPanel::renderImportDialog() {
         
         ImGui::EndPopup();
     }
+}
+
+void PatientPanel::renderFileBrowser() {
+    namespace fs = std::filesystem;
+
+    std::string currentPath(m_dicomPath);
+    if (currentPath.empty() || !fs::exists(currentPath)) {
+        currentPath = OPTIRAD_DATA_DIR;
+        snprintf(m_dicomPath, sizeof(m_dicomPath), "%s", currentPath.c_str());
+    }
+
+    // If path points to a file, browse its parent
+    if (fs::exists(currentPath) && !fs::is_directory(currentPath)) {
+        currentPath = fs::path(currentPath).parent_path().string();
+    }
+
+    // Navigate up
+    if (ImGui::Button("^ Parent Directory")) {
+        fs::path parent = fs::path(currentPath).parent_path();
+        if (!parent.empty()) {
+            snprintf(m_dicomPath, sizeof(m_dicomPath), "%s", parent.string().c_str());
+        }
+    }
+
+    // Directory listing
+    ImGui::BeginChild("FileBrowser", ImVec2(0, 280), true);
+    try {
+        std::vector<fs::directory_entry> dirs, files;
+        for (const auto& entry : fs::directory_iterator(currentPath)) {
+            if (entry.is_directory())
+                dirs.push_back(entry);
+            else
+                files.push_back(entry);
+        }
+        std::sort(dirs.begin(), dirs.end(),
+            [](const fs::directory_entry& a, const fs::directory_entry& b) {
+                return a.path().filename() < b.path().filename();
+            });
+        std::sort(files.begin(), files.end(),
+            [](const fs::directory_entry& a, const fs::directory_entry& b) {
+                return a.path().filename() < b.path().filename();
+            });
+
+        for (const auto& dir : dirs) {
+            std::string label = "[DIR]  " + dir.path().filename().string();
+            if (ImGui::Selectable(label.c_str())) {
+                snprintf(m_dicomPath, sizeof(m_dicomPath), "%s",
+                         dir.path().string().c_str());
+            }
+        }
+        for (const auto& file : files) {
+            ImGui::TextDisabled("       %s", file.path().filename().string().c_str());
+        }
+    } catch (const std::exception& e) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", e.what());
+    }
+    ImGui::EndChild();
 }
 
 void PatientPanel::renderPatientInfo() {

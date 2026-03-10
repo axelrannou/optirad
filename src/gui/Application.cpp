@@ -3,6 +3,8 @@
 #include "panels/PlanningPanel.hpp"
 #include "panels/StfPanel.hpp"
 #include "panels/PhaseSpacePanel.hpp"
+#include "panels/OptimizationPanel.hpp"
+#include "panels/DoseStatsPanel.hpp"
 #include "views/SliceView.hpp"
 #include "views/View3D.hpp"
 #include "views/renderers/PhaseSpaceRenderer.hpp"
@@ -29,13 +31,19 @@ bool Application::init() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4); // 4x MSAA
-    m_window = glfwCreateWindow(1920, 1080, "OptiRad TPS", nullptr, nullptr);
+
+    // Detect primary monitor resolution (supports 4K etc.)
+    const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
+    int initW = mode ? mode->width  : 1920;
+    int initH = mode ? mode->height : 1080;
+    m_window = glfwCreateWindow(initW, initH, "OptiRad TPS", nullptr, nullptr);
     if (!m_window) {
         Logger::error("Failed to create GLFW window");
         glfwTerminate();
         return false;
     }
     
+    glfwMaximizeWindow(m_window);
     glfwMakeContextCurrent(m_window);
     glfwSwapInterval(1); // VSync
 
@@ -90,6 +98,8 @@ bool Application::init() {
     m_planningPanel = std::make_unique<PlanningPanel>(m_appState);
     m_stfPanel = std::make_unique<StfPanel>(m_appState);
     m_phaseSpacePanel = std::make_unique<PhaseSpacePanel>(m_appState);
+    m_optimizationPanel = std::make_unique<OptimizationPanel>(m_appState);
+    m_doseStatsPanel = std::make_unique<DoseStatsPanel>(m_appState);
     
     // Create slice views
     m_axialView = std::make_unique<SliceView>(SliceOrientation::Axial);
@@ -145,7 +155,7 @@ void Application::run() {
             m_view3D->setPhaseSpaceSources(sources);
             m_phaseSpacePanel->setPhaseSpaceRenderer(m_view3D->getPhaseSpaceRenderer());
         }
-        
+
         // Render 3D view
         m_view3D->render();
         
@@ -157,11 +167,26 @@ void Application::run() {
         // Render main menu
         renderMenuBar();
         
-        // Render panels
+        // Render panels (these may modify state, e.g. resetOptimization)
         m_patientPanel->render();
         m_planningPanel->render();
         m_stfPanel->render();
         m_phaseSpacePanel->render();
+        m_optimizationPanel->render();
+        m_doseStatsPanel->render();
+        
+        // Pass dose data to slice views AFTER panels render.
+        // Panels may call resetOptimization() which destroys doseResult;
+        // setting raw pointers before panels would leave dangling pointers.
+        if (m_appState.optimizationDone() && m_appState.doseResult && m_appState.doseGrid) {
+            m_axialView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
+            m_sagittalView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
+            m_coronalView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
+        } else {
+            m_axialView->setDoseData(nullptr, nullptr);
+            m_sagittalView->setDoseData(nullptr, nullptr);
+            m_coronalView->setDoseData(nullptr, nullptr);
+        }
         
         // Render views
         m_axialView->render();
@@ -208,6 +233,8 @@ void Application::renderMenuBar() {
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("Patient Panel", nullptr, true);
             ImGui::MenuItem("Phase Space Panel", nullptr, true);
+            ImGui::MenuItem("Optimization Panel", nullptr, true);
+            ImGui::MenuItem("Dose Statistics", nullptr, true);
             ImGui::MenuItem("Axial View", nullptr, true);
             ImGui::MenuItem("Sagittal View", nullptr, true);
             ImGui::MenuItem("Coronal View", nullptr, true);

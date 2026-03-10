@@ -45,6 +45,8 @@ build/
 
 #data files
 data/dicom/*/
+data/nrrd/*/
+data/dij_cache/
 
 # machine data (too large to be stored in git)
 data/machines/Varian_TrueBeam6MV

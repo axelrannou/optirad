@@ -68,6 +68,9 @@ target_link_libraries(optirad_gui PUBLIC
     GLEW::GLEW
 )
 
+# Make OPTIRAD_DATA_DIR available for file browser default path
+target_compile_definitions(optirad_gui PRIVATE OPTIRAD_DATA_DIR="${OPTIRAD_DATA_DIR}")
+
 # OpenMP (needed for header-only steering module used by StfPanel)
 find_package(OpenMP QUIET)
 if(OpenMP_CXX_FOUND)

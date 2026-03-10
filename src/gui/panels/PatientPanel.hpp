@@ -22,6 +22,7 @@ public:
     
 private:
     void renderImportDialog();
+    void renderFileBrowser();
     void renderPatientInfo();
     void renderStructureList();
     

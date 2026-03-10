@@ -5,6 +5,8 @@ target_link_libraries(optirad_cli PRIVATE
     optirad_io 
     optirad_core 
     optirad_geometry
+    optirad_dose
+    optirad_optimization
     optirad_phsp
     optirad_utils
 )
