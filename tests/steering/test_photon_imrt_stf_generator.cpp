@@ -358,6 +358,142 @@ TEST_F(PhotonIMRTStfGeneratorTest, FallbackToGridWhenNoTargetCoords) {
     }
 }
 
+// ============================================================================
+// Couch angle support
+// ============================================================================
+
+TEST_F(PhotonIMRTStfGeneratorTest, CouchStartStepStop) {
+    // 4 gantry angles: 0, 90, 180, 270
+    PhotonIMRTStfGenerator gen(0.0, 90.0, 360.0, 7.0, {0.0, 0.0, 0.0});
+    gen.setMachine(machine);
+
+    // 2 couch angles: 0, 15 → Cartesian product: 4 gantry × 2 couch = 8 beams
+    gen.setCouchAngles(0.0, 15.0, 30.0);
+
+    Stf stf = gen.generateStf();
+    ASSERT_EQ(stf.getCount(), 8u);
+
+    // Arc 1 (couch=0): gantry 0, 90, 180, 270
+    EXPECT_DOUBLE_EQ(stf.getBeam(0)->getGantryAngle(), 0.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(0)->getCouchAngle(), 0.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(1)->getGantryAngle(), 90.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(1)->getCouchAngle(), 0.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(2)->getGantryAngle(), 180.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(2)->getCouchAngle(), 0.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(3)->getGantryAngle(), 270.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(3)->getCouchAngle(), 0.0);
+
+    // Arc 2 (couch=15): gantry 0, 90, 180, 270
+    EXPECT_DOUBLE_EQ(stf.getBeam(4)->getGantryAngle(), 0.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(4)->getCouchAngle(), 15.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(5)->getGantryAngle(), 90.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(5)->getCouchAngle(), 15.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(6)->getGantryAngle(), 180.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(6)->getCouchAngle(), 15.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(7)->getGantryAngle(), 270.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(7)->getCouchAngle(), 15.0);
+}
+
+TEST_F(PhotonIMRTStfGeneratorTest, CouchStartStepStopProps) {
+    // Also verify the generate() path (StfProperties) does Cartesian product
+    PhotonIMRTStfGenerator gen(0.0, 90.0, 360.0, 7.0, {0.0, 0.0, 0.0});
+    gen.setMachine(machine);
+    gen.setCouchAngles(0.0, 10.0, 30.0);  // 3 couch: 0, 10, 20 → 4×3 = 12 beams
+
+    auto props = gen.generate();
+    ASSERT_EQ(props->numOfBeams, 12u);
+    ASSERT_EQ(props->gantryAngles.size(), 12u);
+    ASSERT_EQ(props->couchAngles.size(), 12u);
+    EXPECT_TRUE(props->isValid());
+
+    // First arc: gantry=[0,90,180,270] couch=0
+    for (size_t i = 0; i < 4; ++i) {
+        EXPECT_DOUBLE_EQ(props->couchAngles[i], 0.0);
+    }
+    // Second arc: gantry=[0,90,180,270] couch=10
+    for (size_t i = 4; i < 8; ++i) {
+        EXPECT_DOUBLE_EQ(props->couchAngles[i], 10.0);
+    }
+    // Third arc: gantry=[0,90,180,270] couch=20
+    for (size_t i = 8; i < 12; ++i) {
+        EXPECT_DOUBLE_EQ(props->couchAngles[i], 20.0);
+    }
+}
+
+TEST_F(PhotonIMRTStfGeneratorTest, CouchAnglesPairedWithGantry) {
+    PhotonIMRTStfGenerator gen(0.0, 90.0, 360.0, 7.0, {0.0, 0.0, 0.0});
+    gen.setMachine(machine);
+
+    // Explicit couch angle list (must be same length as gantry)
+    gen.setCouchAngles({10.0, 20.0, 30.0, 40.0});
+
+    Stf stf = gen.generateStf();
+    ASSERT_EQ(stf.getCount(), 4u);
+
+    // Verify paired: beam[i] = (gantry[i], couch[i])
+    EXPECT_DOUBLE_EQ(stf.getBeam(0)->getGantryAngle(), 0.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(0)->getCouchAngle(), 10.0);
+
+    EXPECT_DOUBLE_EQ(stf.getBeam(1)->getGantryAngle(), 90.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(1)->getCouchAngle(), 20.0);
+
+    EXPECT_DOUBLE_EQ(stf.getBeam(2)->getGantryAngle(), 180.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(2)->getCouchAngle(), 30.0);
+
+    EXPECT_DOUBLE_EQ(stf.getBeam(3)->getGantryAngle(), 270.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(3)->getCouchAngle(), 40.0);
+}
+
+TEST_F(PhotonIMRTStfGeneratorTest, UniformCouchAngle) {
+    // When couch step=0, all beams get the same couch angle
+    PhotonIMRTStfGenerator gen(0.0, 90.0, 360.0, 7.0, {0.0, 0.0, 0.0});
+    gen.setMachine(machine);
+
+    // Single couch angle = 25.0 for all beams
+    gen.setCouchAngles(25.0, 0.0, 0.0);
+
+    Stf stf = gen.generateStf();
+    ASSERT_EQ(stf.getCount(), 4u);
+
+    for (size_t i = 0; i < stf.getCount(); ++i) {
+        EXPECT_DOUBLE_EQ(stf.getBeam(i)->getCouchAngle(), 25.0);
+    }
+}
+
+TEST_F(PhotonIMRTStfGeneratorTest, GeneratePropsWithCouchAngles) {
+    PhotonIMRTStfGenerator gen(0.0, 90.0, 360.0, 7.0, {0.0, 0.0, 0.0});
+    gen.setMachine(machine);
+    gen.setCouchAngles({5.0, 10.0, 15.0, 20.0});
+
+    auto props = gen.generate();
+    ASSERT_EQ(props->gantryAngles.size(), 4u);
+    ASSERT_EQ(props->couchAngles.size(), 4u);
+
+    EXPECT_DOUBLE_EQ(props->couchAngles[0], 5.0);
+    EXPECT_DOUBLE_EQ(props->couchAngles[1], 10.0);
+    EXPECT_DOUBLE_EQ(props->couchAngles[2], 15.0);
+    EXPECT_DOUBLE_EQ(props->couchAngles[3], 20.0);
+    EXPECT_TRUE(props->isValid());
+}
+
+TEST_F(PhotonIMRTStfGeneratorTest, CouchAnglesResizedToMatchGantry) {
+    // If couch list is shorter, it gets padded with last value
+    PhotonIMRTStfGenerator gen(0.0, 90.0, 360.0, 7.0, {0.0, 0.0, 0.0});
+    gen.setMachine(machine);
+
+    // Only 2 couch angles for 4 gantry angles
+    gen.setCouchAngles({10.0, 20.0});
+
+    Stf stf = gen.generateStf();
+    ASSERT_EQ(stf.getCount(), 4u);
+
+    EXPECT_DOUBLE_EQ(stf.getBeam(0)->getCouchAngle(), 10.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(1)->getCouchAngle(), 20.0);
+    // Padded with last value (20.0)
+    EXPECT_DOUBLE_EQ(stf.getBeam(2)->getCouchAngle(), 20.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(3)->getCouchAngle(), 20.0);
+}
+
 } // namespace optirad::tests
 
 int main(int argc, char** argv) {

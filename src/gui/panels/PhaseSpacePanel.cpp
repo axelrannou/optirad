@@ -42,7 +42,7 @@ void PhaseSpacePanel::render() {
 
     // Show gantry angles from plan
     const auto& stfProps = m_state.plan->getStfProperties();
-    ImGui::Text("Beams: %zu gantry angles", stfProps.gantryAngles.size());
+    ImGui::Text("Beams: %zu gantry/couch angle pairs", stfProps.gantryAngles.size());
 
     ImGui::Separator();
 
@@ -86,7 +86,22 @@ void PhaseSpacePanel::renderLoadControls() {
         }
 
         ImGui::DragFloat("Collimator (deg)", &m_collimatorAngle, 1.0f, -180.0f, 180.0f, "%.1f");
-        ImGui::DragFloat("Couch (deg)", &m_couchAngle, 1.0f, -90.0f, 90.0f, "%.1f");
+
+        // Couch angles: read-only, from plan's stfProps (paired with gantry)
+        if (!stfProps.couchAngles.empty()) {
+            ImGui::Text("Couch angles (from plan):");
+            ImGui::SameLine();
+            std::string couchStr;
+            for (size_t i = 0; i < std::min(size_t(6), stfProps.couchAngles.size()); ++i) {
+                if (i > 0) couchStr += ", ";
+                couchStr += std::to_string(static_cast<int>(stfProps.couchAngles[i]));
+            }
+            if (stfProps.couchAngles.size() > 6) {
+                couchStr += " ... (" + std::to_string(stfProps.couchAngles.size()) + " total)";
+            }
+            ImGui::TextWrapped("%s", couchStr.c_str());
+        }
+
         ImGui::Spacing();
         ImGui::DragInt("Max particles/beam (K)", &m_maxParticlesK, 100, 100, 50000);
         ImGui::DragInt("Viz sample/beam (K)", &m_vizSampleSizeK, 10, 10, 500);
@@ -123,6 +138,7 @@ void PhaseSpacePanel::renderLoadControls() {
                 try {
                     const auto& stfP = m_state.plan->getStfProperties();
                     const auto& gantryAngles = stfP.gantryAngles;
+                    const auto& couchAngles = stfP.couchAngles;
 
                     // Get isocenter from plan
                     std::array<double, 3> iso = {0.0, 0.0, 0.0};
@@ -137,10 +153,11 @@ void PhaseSpacePanel::renderLoadControls() {
                     #pragma omp parallel for schedule(dynamic)
                     for (int i = 0; i < numBeams; ++i) {
                         auto source = std::make_shared<PhaseSpaceBeamSource>();
+                        double beamCouch = (static_cast<size_t>(i) < couchAngles.size() ? couchAngles[i] : 0.0);
                         source->configure(m_state.plan->getMachine(),
                                            gantryAngles[i],
                                            m_collimatorAngle,
-                                           m_couchAngle,
+                                           beamCouch,
                                            iso);
                         source->build(static_cast<int64_t>(m_maxParticlesK) * 1000,
                                        static_cast<int64_t>(m_vizSampleSizeK) * 1000);
@@ -196,15 +213,19 @@ void PhaseSpacePanel::renderBeamVisibility() {
             if (i < m_state.phaseSpaceSources.size()) {
                 gantryAngle = m_state.phaseSpaceSources[i]->getGantryAngle();
             }
+            double couchAngle = 0.0;
+            if (i < m_state.phaseSpaceSources.size()) {
+                couchAngle = m_state.phaseSpaceSources[i]->getCouchAngle();
+            }
             size_t numParticles = 0;
             if (i < m_state.phaseSpaceSources.size()) {
                 numParticles = m_state.phaseSpaceSources[i]->getVisualizationSample().size();
             }
 
             bool visible = m_phaseSpaceRenderer->isBeamVisible(i);
-            char label[64];
-            snprintf(label, sizeof(label), "Beam %zu (%.0f deg, %zu pts)",
-                     i, gantryAngle, numParticles);
+            char label[80];
+            snprintf(label, sizeof(label), "Beam %zu (G%.0f C%.0f, %zu pts)",
+                     i, gantryAngle, couchAngle, numParticles);
             if (ImGui::Checkbox(label, &visible)) {
                 m_phaseSpaceRenderer->setBeamVisible(i, visible);
             }

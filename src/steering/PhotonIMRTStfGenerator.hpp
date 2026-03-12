@@ -27,6 +27,27 @@ public:
                            double bixelWidth = 7.0, const std::array<double, 3>& iso = {0.0, 0.0, 0.0})
         : m_start(start), m_step(step), m_stop(stop), m_bixelWidth(bixelWidth), m_iso(iso) {}
 
+    /// Set couch angle range (start/step/stop in degrees).
+    /// Step <= 0 means a single couch angle equal to start for every beam.
+    void setCouchAngles(double start, double step, double stop) {
+        m_couchStart = start;
+        m_couchStep = step;
+        m_couchStop = stop;
+        m_couchAnglesList.clear();
+    }
+
+    /// Set couch angles from an explicit paired list (like matRad).
+    /// Takes precedence over start/step/stop if non-empty.
+    void setCouchAngles(const std::vector<double>& angles) {
+        m_couchAnglesList = angles;
+    }
+
+    /// Set gantry angles from an explicit list.
+    /// Takes precedence over start/step/stop if non-empty.
+    void setGantryAngles(const std::vector<double>& angles) {
+        m_gantryAnglesList = angles;
+    }
+
     /// Set the machine (used for SAD, SCD, energy)
     void setMachine(const Machine& machine) { m_machine = machine; m_hasMachine = true; }
 
@@ -53,7 +74,22 @@ public:
     std::unique_ptr<StfProperties> generate() const override {
         auto props = std::make_unique<StfProperties>();
         props->bixelWidth = m_bixelWidth;
-        props->setGantryAngles(m_start, m_step, m_stop);
+        if (!m_gantryAnglesList.empty()) {
+            props->setGantryAngles(m_gantryAnglesList);
+        } else {
+            props->setGantryAngles(m_start, m_step, m_stop);
+        }
+
+        // Apply couch angles: explicit list takes precedence
+        if (!m_couchAnglesList.empty()) {
+            props->setCouchAngles(m_couchAnglesList);
+        } else if (m_couchStep > 0.0) {
+            props->setCouchAngles(m_couchStart, m_couchStep, m_couchStop);
+        } else {
+            props->setUniformCouchAngle(m_couchStart);
+        }
+        props->ensureConsistentAngles();
+
         props->setUniformIsoCenter(m_iso);
         return props;
     }
@@ -76,9 +112,49 @@ public:
         Vec3 ctRes = m_ctResolution;
 
         // Collect gantry angles
-        std::vector<double> angles;
-        for (double angle = m_start; angle < m_stop; angle += m_step) {
-            angles.push_back(angle);
+        std::vector<double> gantryBase;
+        if (!m_gantryAnglesList.empty()) {
+            gantryBase = m_gantryAnglesList;
+        } else {
+            for (double angle = m_start; angle < m_stop; angle += m_step) {
+                gantryBase.push_back(angle);
+            }
+        }
+
+        // Collect couch angles and combine with gantry
+        std::vector<double> angles;    // final gantry angles (after expansion)
+        std::vector<double> couchAngles; // final couch angles (paired 1:1)
+
+        if (!m_couchAnglesList.empty()) {
+            // Explicit list: paired 1:1
+            angles = gantryBase;
+            couchAngles = m_couchAnglesList;
+            // Resize if needed (pad with last value)
+            if (couchAngles.size() != angles.size()) {
+                double last = couchAngles.empty() ? 0.0 : couchAngles.back();
+                couchAngles.resize(angles.size(), last);
+            }
+        } else if (m_couchStep > 0.0) {
+            // Cartesian product: for each couch angle, ALL gantry angles (multi-arc)
+            std::vector<double> couchRange;
+            for (double a = m_couchStart; a < m_couchStop; a += m_couchStep) {
+                couchRange.push_back(a);
+            }
+            if (couchRange.size() <= 1) {
+                angles = gantryBase;
+                couchAngles.assign(gantryBase.size(), couchRange.empty() ? m_couchStart : couchRange[0]);
+            } else {
+                for (double c : couchRange) {
+                    for (double g : gantryBase) {
+                        angles.push_back(g);
+                        couchAngles.push_back(c);
+                    }
+                }
+            }
+        } else {
+            // Single couch angle for all beams
+            angles = gantryBase;
+            couchAngles.assign(gantryBase.size(), m_couchStart);
         }
 
         // Generate beams in parallel
@@ -96,7 +172,7 @@ public:
             Beam& beam = beams[i];
             
             beam.setGantryAngle(angle);
-            beam.setCouchAngle(0.0);
+            beam.setCouchAngle(couchAngles[i]);
             beam.setIsocenter(m_iso);
             beam.setBixelWidth(m_bixelWidth);
             beam.setRadiationMode(m_radiationMode);
@@ -207,6 +283,13 @@ private:
     Vec3 m_ctResolution = {1.0, 1.0, 1.0};
     const Grid* m_grid = nullptr;
     const StructureSet* m_structureSet = nullptr;
+
+    // Couch angle configuration (paired 1:1 with gantry angles)
+    double m_couchStart = 0.0;
+    double m_couchStep = 0.0;   // 0 = single couch angle (m_couchStart) for all beams
+    double m_couchStop = 0.0;
+    std::vector<double> m_couchAnglesList;  // explicit list, takes precedence if non-empty
+    std::vector<double> m_gantryAnglesList;  // explicit list, takes precedence if non-empty
 };
 
 } // namespace optirad

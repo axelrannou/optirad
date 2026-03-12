@@ -46,9 +46,8 @@ private:
     std::thread m_loadThread;
     std::string m_statusMessage;
 
-    // Configuration (collimator/couch shared across all beams)
+    // Configuration (collimator shared across all beams; couch comes from plan)
     float m_collimatorAngle = 0.0f;
-    float m_couchAngle = 0.0f;
     int m_maxParticlesK = 1000;    // thousands (per beam)
     int m_vizSampleSizeK = 100;    // thousands (per beam)
 

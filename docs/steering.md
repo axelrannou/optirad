@@ -27,21 +27,62 @@ struct StfProperties {
     double bixelWidth = 7.0;                   // mm
     std::vector<std::array<double, 3>> isoCenters;
 
-    // Helper: generate uniform gantry angles
+    // Gantry angles: start/step/stop or explicit list
     void setGantryAngles(double start, double step, double stopExclusive);
+    void setGantryAngles(const std::vector<double>& angles);
 
-    // Helper: set same isocenter for all beams
+    // Couch angles: start/step/stop, explicit list, or uniform
+    void setCouchAngles(double start, double step, double stopExclusive);
+    void setCouchAngles(const std::vector<double>& angles);
+    void setUniformCouchAngle(double angle);
+
+    // Ensure gantry/couch lists match in size (pads couch if needed)
+    void ensureConsistentAngles();
+    bool isValid() const;
+
     void setUniformIsoCenter(const std::array<double, 3>& iso);
 };
 ```
 
-**Example:** 9 equispaced beams:
+**Two modes for combining angles:**
+
+1. **Explicit lists** (paired 1:1, like matRad): `beam[i] = (gantryAngles[i], couchAngles[i])`.
+   Both vectors must have the same length.
+2. **Start/step/stop** (Cartesian product, multi-arc): `setCouchAngles(start, step, stop)` with step > 0 
+   performs a Cartesian product against the existing gantry angles.
+   Total beams = numGantry × numCouch.
+
+**Example:** 9 equispaced beams with uniform couch angle:
 ```cpp
 StfProperties props;
 props.setGantryAngles(0, 40, 360);  // 0°, 40°, 80°, ..., 320°
+props.setUniformCouchAngle(0.0);     // couch = 0° for all beams
 props.bixelWidth = 7.0;
 props.setUniformIsoCenter(isocenter);
 // numOfBeams = 9
+```
+
+**Example:** 4 beams with explicit paired lists:
+```cpp
+StfProperties props;
+props.setGantryAngles({0.0, 90.0, 180.0, 270.0});
+props.setCouchAngles({0.0, 10.0, 20.0, 30.0});
+props.bixelWidth = 7.0;
+props.setUniformIsoCenter(isocenter);
+// beam 0: gantry=0°, couch=0°
+// beam 1: gantry=90°, couch=10°
+// ...
+```
+
+**Example:** Multi-arc with Cartesian product (start/step/stop):
+```cpp
+props.setGantryAngles(0, 4, 360);       // 90 gantry entries
+props.setCouchAngles(-5.0, 5.0, 10.0);  // 3 couch entries: -5, 0, 5
+// Cartesian product: 90 × 3 = 270 beams
+// Arc 1: gantry=[0,4,...,356] couch=-5
+// Arc 2: gantry=[0,4,...,356] couch=0
+// Arc 3: gantry=[0,4,...,356] couch=5
+props.setUniformIsoCenter(isocenter);
 ```
 
 ### IStfGenerator
@@ -75,6 +116,10 @@ class PhotonIMRTStfGenerator : public IStfGenerator {
     void setCTResolution(const Vec3& res);
     void setGrid(const Grid& grid);
     void setStructureSet(const StructureSet& ss);
+
+    // Couch angle configuration (paired 1:1 with gantry)
+    void setCouchAngles(double start, double step, double stop);
+    void setCouchAngles(const std::vector<double>& angles);
 
     // IStfGenerator override — basic properties only
     std::unique_ptr<StfProperties> generate() const override;
@@ -118,6 +163,10 @@ PhotonIMRTStfGenerator gen(0.0, 40.0, 360.0, 7.0, isocenter);
 gen.setMachine(machine);
 gen.setFieldSize({100.0, 100.0});
 gen.setRadiationMode("photons");
+
+// Optional: set couch angles (paired with gantry)
+gen.setCouchAngles({0, 0, 10, 10, 20, 20, 30, 30, 0});  // explicit list
+// Or: gen.setCouchAngles(0.0, 5.0, 45.0);                // start/step/stop
 
 // Set target voxels for target-aware ray generation
 std::vector<Vec3> targetCoords;

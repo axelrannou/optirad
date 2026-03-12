@@ -522,8 +522,9 @@ DoseInfluenceMatrix PencilBeamEngine::calculateDij(
 
         Logger::info("PencilBeamEngine: Processing beam " + std::to_string(bi + 1) +
             "/" + std::to_string(numBeams) +
-            " (gantry=" + std::to_string(beam->getGantryAngle()) + " deg, " +
-            std::to_string(numRays) + " rays)");
+            " (gantry=" + std::to_string(beam->getGantryAngle()) +
+            " deg, couch=" + std::to_string(beam->getCouchAngle()) +
+            " deg, " + std::to_string(numRays) + " rays)");
 
         if (m_progressCallback) {
             m_progressCallback(static_cast<int>(bi), static_cast<int>(numBeams),

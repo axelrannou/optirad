@@ -59,6 +59,9 @@ public:
     /// Get gantry angle
     double getGantryAngle() const { return m_gantryAngle; }
 
+    /// Get couch angle
+    double getCouchAngle() const { return m_couchAngle; }
+
     /// Get the IAEA header info (available after build)
     const IAEAHeaderInfo& getHeaderInfo() const { return m_headerInfo; }
 

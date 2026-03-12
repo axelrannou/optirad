@@ -64,12 +64,13 @@ void StfPanel::render() {
 
         // Per-beam details in a scrollable table
         if (ImGui::CollapsingHeader("Beam Details")) {
-            if (ImGui::BeginTable("BeamTable", 4,
+            if (ImGui::BeginTable("BeamTable", 5,
                     ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                     ImGuiTableFlags_ScrollY, ImVec2(0, 200))) {
 
                 ImGui::TableSetupColumn("Beam");
                 ImGui::TableSetupColumn("Gantry");
+                ImGui::TableSetupColumn("Couch");
                 ImGui::TableSetupColumn("Rays");
                 ImGui::TableSetupColumn("Energy");
                 ImGui::TableHeadersRow();
@@ -81,6 +82,7 @@ void StfPanel::render() {
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn(); ImGui::Text("%zu", i);
                     ImGui::TableNextColumn(); ImGui::Text("%.1f", beam->getGantryAngle());
+                    ImGui::TableNextColumn(); ImGui::Text("%.1f", beam->getCouchAngle());
                     ImGui::TableNextColumn(); ImGui::Text("%zu", beam->getNumOfRays());
                     ImGui::TableNextColumn();
                     if (beam->getNumOfRays() > 0) {
@@ -113,9 +115,9 @@ void StfPanel::render() {
                     if (!beam) continue;
 
                     bool visible = m_beamRenderer->isBeamVisible(i);
-                    char label[64];
-                    snprintf(label, sizeof(label), "Beam %zu (%.0f deg, %zu rays)",
-                             i, beam->getGantryAngle(), beam->getNumOfRays());
+                    char label[80];
+                    snprintf(label, sizeof(label), "Beam %zu (G%.0f C%.0f, %zu rays)",
+                             i, beam->getGantryAngle(), beam->getCouchAngle(), beam->getNumOfRays());
                     if (ImGui::Checkbox(label, &visible)) {
                         m_beamRenderer->setBeamVisible(i, visible);
                     }
