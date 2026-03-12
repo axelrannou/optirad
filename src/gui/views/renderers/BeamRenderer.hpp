@@ -48,6 +48,7 @@ private:
         size_t vertexCount = 0;
         glm::vec3 sourcePos{0.0f};
         float gantryAngle = 0.0f;
+        float couchAngle = 0.0f;
         size_t numRays = 0;
     };
     std::vector<BeamRayData> m_beamRays;

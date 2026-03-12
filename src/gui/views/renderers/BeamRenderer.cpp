@@ -168,6 +168,7 @@ void BeamRenderer::rebuildGeometry() {
         BeamRayData bd;
         bd.sourcePos = sourceGL;
         bd.gantryAngle = static_cast<float>(beam.getGantryAngle());
+        bd.couchAngle = static_cast<float>(beam.getCouchAngle());
         bd.vertexCount = lineVerts.size() / 3;
         bd.numRays = rays.size();
 
@@ -241,7 +242,8 @@ void BeamRenderer::render(const glm::mat4& view, const glm::mat4& projection,
 
     // ── Per-beam ray lines (green) ──
     glLineWidth(1.0f);
-    for (size_t i = 0; i < m_beamRays.size(); ++i) {
+    size_t totalBeams = m_beamRays.size();
+    for (size_t i = 0; i < totalBeams; ++i) {
         if (i < m_beamVisible.size() && !m_beamVisible[i]) continue;
 
         const auto& bd = m_beamRays[i];

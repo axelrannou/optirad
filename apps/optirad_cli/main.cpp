@@ -82,6 +82,11 @@ void printUsage(const char* progName) {
               << "  --gantry-start <deg>             Gantry start angle (default: 0)\n"
               << "  --gantry-step <deg>              Gantry angle step (default: 4)\n"
               << "  --gantry-stop <deg>              Gantry stop angle exclusive (default: 360)\n"
+              << "  --gantry-angles <a1 a2 ...>      Explicit gantry angle list (space-separated)\n"
+              << "  --couch-start <deg>              Couch start angle (default: 0)\n"
+              << "  --couch-step <deg>               Couch angle step (default: 0 = single angle)\n"
+              << "  --couch-stop <deg>               Couch stop angle exclusive (default: 0)\n"
+              << "  --couch-angles <a1 a2 ...>       Explicit couch angle list (space-separated)\n"
               << "  --bixel-width <mm>               Bixel width (default: 7)\n\n"
               << "Dose calc options:\n"
               << "  --dose-resolution <mm>           Dose grid resolution (default: 2.5)\n"
@@ -93,9 +98,9 @@ void printUsage(const char* progName) {
               << "  --oar-max-dose <Gy>              Max dose for OARs (default: 30)\n\n"
               << "Phase-space options:\n"
               << "  --collimator <deg>               Collimator angle (default: 0)\n"
-              << "  --couch <deg>                    Couch angle (default: 0)\n"
               << "  --max-particles <n>              Max particles per beam (default: 1000000)\n"
-              << "  --viz-sample <n>                 Visualization sample per beam (default: 100000)\n";
+              << "  --viz-sample <n>                 Visualization sample per beam (default: 100000)\n"
+              << "  (Couch angles come from plan's --couch-start/step/stop or --couch-angles)\n";
 }
 
 int loadDicom(const std::string& path, AppState& state) {
@@ -226,7 +231,12 @@ int createPlan(const std::vector<std::string>& args, AppState& state) {
     double gantryStart = 0.0;
     double gantryStep = 4.0;
     double gantryStop = 360.0;
+    double couchStart = 0.0;
+    double couchStep = 0.0;
+    double couchStop = 0.0;
     double bixelWidth = 7.0;
+    std::vector<double> gantryAnglesList;
+    std::vector<double> couchAnglesList;
 
     // Parse plan options
     for (size_t i = 0; i < args.size(); ++i) {
@@ -242,6 +252,22 @@ int createPlan(const std::vector<std::string>& args, AppState& state) {
             gantryStep = std::stod(args[++i]);
         } else if (args[i] == "--gantry-stop" && i + 1 < args.size()) {
             gantryStop = std::stod(args[++i]);
+        } else if (args[i] == "--couch-start" && i + 1 < args.size()) {
+            couchStart = std::stod(args[++i]);
+        } else if (args[i] == "--couch-step" && i + 1 < args.size()) {
+            couchStep = std::stod(args[++i]);
+        } else if (args[i] == "--couch-stop" && i + 1 < args.size()) {
+            couchStop = std::stod(args[++i]);
+        } else if (args[i] == "--gantry-angles") {
+            // Consume subsequent numeric arguments
+            while (i + 1 < args.size() && args[i + 1][0] != '-') {
+                gantryAnglesList.push_back(std::stod(args[++i]));
+            }
+        } else if (args[i] == "--couch-angles") {
+            // Consume subsequent numeric arguments
+            while (i + 1 < args.size() && args[i + 1][0] != '-') {
+                couchAnglesList.push_back(std::stod(args[++i]));
+            }
         } else if (args[i] == "--bixel-width" && i + 1 < args.size()) {
             bixelWidth = std::stod(args[++i]);
         }
@@ -264,7 +290,19 @@ int createPlan(const std::vector<std::string>& args, AppState& state) {
 
     // Configure STF properties
     StfProperties stf;
-    stf.setGantryAngles(gantryStart, gantryStep, gantryStop);
+    if (!gantryAnglesList.empty()) {
+        stf.setGantryAngles(gantryAnglesList);
+    } else {
+        stf.setGantryAngles(gantryStart, gantryStep, gantryStop);
+    }
+    if (!couchAnglesList.empty()) {
+        stf.setCouchAngles(couchAnglesList);
+    } else if (couchStep > 0.0) {
+        stf.setCouchAngles(couchStart, couchStep, couchStop);
+    } else {
+        stf.setUniformCouchAngle(couchStart);
+    }
+    stf.ensureConsistentAngles();
     stf.bixelWidth = bixelWidth;
 
     // Compute isocenter from Target structures
@@ -343,11 +381,24 @@ int runInteractive(AppState& state) {
                       << "  --gantry-start <deg>          Gantry start angle (default: 0)\n"
                       << "  --gantry-step <deg>           Gantry angle step (default: 4)\n"
                       << "  --gantry-stop <deg>           Gantry stop angle exclusive (default: 360)\n"
+                      << "  --gantry-angles <a1 a2 ...>   Explicit gantry angle list (space-separated)\n"
+                      << "  --couch-start <deg>           Couch start angle (default: 0)\n"
+                      << "  --couch-step <deg>            Couch angle step (default: 0 = single angle)\n"
+                      << "  --couch-stop <deg>            Couch stop angle exclusive (default: 0)\n"
+                      << "  --couch-angles <a1 a2 ...>    Explicit couch angle list (space-separated)\n"
                       << "  --bixel-width <mm>            Bixel width in mm (default: 7)\n\n"
+                      << "Angle semantics:\n"
+                      << "  Explicit lists (--gantry-angles + --couch-angles): paired 1:1\n"
+                      << "    beam[i] = (gantryAngles[i], couchAngles[i])\n"
+                      << "  Start/step/stop with couch-step > 0: Cartesian product (multi-arc)\n"
+                      << "    totalBeams = numGantry x numCouch\n"
+                      << "    Each couch angle sweeps through ALL gantry angles.\n\n"
                       << "Examples:\n"
                       << "  plan --mode photons --gantry-step 60 --bixel-width 7\n"
-                      << "  plan --fractions 25 --machine Generic\n"
-                      << "  plan --gantry-start 0 --gantry-stop 360 --gantry-step 30\n"
+                      << "  plan --gantry-start 0 --gantry-stop 360 --gantry-step 90 --couch-start 10\n"
+                      << "  plan --gantry-angles 0 90 180 270 --couch-angles 0 10 20 30\n"
+                      << "  plan --gantry-step 4 --couch-start -5 --couch-step 5 --couch-stop 10\n"
+                      << "    -> 90 gantry x 3 couch = 270 beams\n"
                       << "=============================\n";
         } else if (cmd == "generateStf") {
             std::vector<std::string> stfArgs(tokens.begin() + 1, tokens.end());
@@ -368,7 +419,8 @@ int runInteractive(AppState& state) {
                 std::cout << "\n=== Phase-Space Sources (" << state.phaseSpaceSources.size() << " beams) ===\n";
                 for (size_t i = 0; i < state.phaseSpaceSources.size(); ++i) {
                     const auto& m = state.phaseSpaceSources[i]->getMetrics();
-                    std::cout << "Beam " << i << " (gantry=" << state.phaseSpaceSources[i]->getGantryAngle() << " deg):\n";
+                    std::cout << "Beam " << i << " (gantry=" << state.phaseSpaceSources[i]->getGantryAngle()
+                              << " couch=" << state.phaseSpaceSources[i]->getCouchAngle() << " deg):\n";
                     std::cout << "  Particles: " << m.totalCount
                               << " (photons=" << m.photonCount
                               << " electrons=" << m.electronCount
@@ -450,16 +502,16 @@ int generateStf(const std::vector<std::string>& args, AppState& state) {
         iso = stfProps.isoCenters[0];
     }
 
-    // Infer parameters from current STF properties
-    double gantryStart = !stfProps.gantryAngles.empty() ? stfProps.gantryAngles[0] : 0.0;
-    double gantryStop = !stfProps.gantryAngles.empty() ? stfProps.gantryAngles.back() + 1.0 : 360.0;
-    double gantryStep = stfProps.gantryAngles.size() > 1 ? stfProps.gantryAngles[1] - stfProps.gantryAngles[0] : 60.0;
     double bixelWidth = stfProps.bixelWidth;
 
-    // Create a PhotonIMRTStfGenerator with machine info
-    PhotonIMRTStfGenerator generator(gantryStart, gantryStep, gantryStop, bixelWidth, iso);
+    // Create generator and pass the already-expanded paired gantry/couch lists.
+    // The plan's StfProperties already performed Cartesian product expansion,
+    // so we pass the full paired lists directly to avoid re-inferring start/step/stop.
+    PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, bixelWidth, iso);
     generator.setMachine(state.plan->getMachine());
     generator.setRadiationMode(radiationMode);
+    generator.setGantryAngles(stfProps.gantryAngles);
+    generator.setCouchAngles(stfProps.couchAngles);
 
     // Extract target voxel world coordinates from patient data
     auto patientData = state.plan->getPatientData();
@@ -506,9 +558,8 @@ int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
         return 1;
     }
 
-    // Default parameters (collimator/couch shared across beams, gantry from plan)
+    // Default parameters (collimator shared across beams, couch from plan)
     double collimatorAngle = 0.0;
-    double couchAngle = 0.0;
     int64_t maxParticles = 1000000;
     int64_t vizSample = 100000;
 
@@ -516,8 +567,6 @@ int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
     for (size_t i = 0; i < args.size(); ++i) {
         if (args[i] == "--collimator" && i + 1 < args.size()) {
             collimatorAngle = std::stod(args[++i]);
-        } else if (args[i] == "--couch" && i + 1 < args.size()) {
-            couchAngle = std::stod(args[++i]);
         } else if (args[i] == "--max-particles" && i + 1 < args.size()) {
             maxParticles = std::stoll(args[++i]);
         } else if (args[i] == "--viz-sample" && i + 1 < args.size()) {
@@ -525,18 +574,18 @@ int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
         }
     }
 
-    // Get gantry angles and isocenter from plan
+    // Get gantry/couch angles and isocenter from plan
     const auto& stfProps = state.plan->getStfProperties();
     const auto& gantryAngles = stfProps.gantryAngles;
+    const auto& couchAngles = stfProps.couchAngles;
     std::array<double, 3> iso = {0.0, 0.0, 0.0};
     if (!stfProps.isoCenters.empty()) {
         iso = stfProps.isoCenters[0];
     }
 
     std::cout << "\n=== Loading Phase-Space Beam Sources ===\n";
-    std::cout << "Beams: " << gantryAngles.size() << " gantry angles\n";
+    std::cout << "Beams: " << gantryAngles.size() << " gantry/couch angle pairs\n";
     std::cout << "Collimator: " << collimatorAngle << " deg\n";
-    std::cout << "Couch: " << couchAngle << " deg\n";
     std::cout << "Max particles/beam: " << maxParticles << "\n";
     std::cout << "Viz sample/beam: " << vizSample << "\n\n";
 
@@ -550,7 +599,9 @@ int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
         for (int i = 0; i < numBeams; ++i) {
             auto source = std::make_shared<PhaseSpaceBeamSource>();
             source->configure(state.plan->getMachine(), gantryAngles[i],
-                              collimatorAngle, couchAngle, iso);
+                              collimatorAngle,
+                              (static_cast<size_t>(i) < couchAngles.size() ? couchAngles[i] : 0.0),
+                              iso);
             source->build(maxParticles, vizSample);
             state.phaseSpaceSources[i] = std::move(source);
         }
@@ -558,7 +609,9 @@ int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
         // Print metrics sequentially
         for (int i = 0; i < numBeams; ++i) {
             const auto& metrics = state.phaseSpaceSources[i]->getMetrics();
-            std::cout << "Beam " << i << " (gantry=" << gantryAngles[i] << " deg): "
+            double beamCouch = (static_cast<size_t>(i) < couchAngles.size() ? couchAngles[i] : 0.0);
+            std::cout << "Beam " << i << " (gantry=" << gantryAngles[i]
+                      << " couch=" << beamCouch << " deg): "
                       << metrics.totalCount << " particles, "
                       << "mean E=" << metrics.meanEnergy << " MeV\n";
         }

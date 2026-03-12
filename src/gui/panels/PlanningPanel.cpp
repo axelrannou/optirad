@@ -7,12 +7,30 @@
 #include <imgui.h>
 #include <cmath>
 #include <chrono>
+#include <sstream>
 
 namespace optirad {
 
 static const char* kRadiationModes[] = { "photons" };
 static const char* kMachines[] = { "Generic", "Varian_TrueBeam6MV" };
 static const bool kIsPhaseSpace[] = { false, true };
+
+// Helper callback for ImGui InputText with std::string
+static int InputTextCallback(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
+        std::string* str = static_cast<std::string*>(data->UserData);
+        str->resize(data->BufTextLen);
+        data->Buf = &(*str)[0];
+    }
+    return 0;
+}
+
+// Helper wrapper for InputTextMultiline with std::string
+static bool InputTextMultilineString(const char* label, std::string* str, const ImVec2& size = ImVec2(0, 0), ImGuiInputTextFlags flags = 0) {
+    flags |= ImGuiInputTextFlags_CallbackResize;
+    str->reserve(256);  // Initial capacity
+    return ImGui::InputTextMultiline(label, &(*str)[0], str->capacity() + 1, size, flags, InputTextCallback, str);
+}
 
 PlanningPanel::PlanningPanel(GuiAppState& state) : m_state(state) {}
 
@@ -57,17 +75,95 @@ void PlanningPanel::render() {
     // ── Gantry Angles ──
     if (ImGui::CollapsingHeader("Gantry Angles", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
-        ImGui::DragFloat("Start (deg)", &m_gantryStart, 1.0f, 0.0f, 360.0f, "%.1f");
-        ImGui::DragFloat("Step (deg)", &m_gantryStep, 0.5f, 0.5f, 90.0f, "%.1f");
-        ImGui::DragFloat("Stop (deg)", &m_gantryStop, 1.0f, 1.0f, 720.0f, "%.1f");
+        ImGui::RadioButton("Range##gantry", &m_gantryMode, 0); ImGui::SameLine();
+        ImGui::RadioButton("List##gantry", &m_gantryMode, 1);
 
-        // Show resulting number of beams
-        int numBeams = 0;
-        if (m_gantryStep > 0.0f && m_gantryStop > m_gantryStart) {
-            numBeams = static_cast<int>(std::ceil((m_gantryStop - m_gantryStart) / m_gantryStep));
+        if (m_gantryMode == 0) {
+            ImGui::DragFloat("Start (deg)##gantry", &m_gantryStart, 1.0f, 0.0f, 360.0f, "%.1f");
+            ImGui::DragFloat("Step (deg)##gantry", &m_gantryStep, 0.5f, 0.5f, 90.0f, "%.1f");
+            ImGui::DragFloat("Stop (deg)##gantry", &m_gantryStop, 1.0f, 1.0f, 720.0f, "%.1f");
+            int numGantry = 0;
+            if (m_gantryStep > 0.0f && m_gantryStop > m_gantryStart) {
+                numGantry = static_cast<int>(std::ceil((m_gantryStop - m_gantryStart) / m_gantryStep));
+            }
+            ImGui::Text("Gantry entries: %d", numGantry);
+        } else {
+            InputTextMultilineString("##gantryList", &m_gantryListBuf, ImVec2(-1, ImGui::GetTextLineHeight() * 4));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Space-separated gantry angles in degrees.\nExample: 0 90 180 270");
+            // Count entries
+            int cnt = 0;
+            { std::istringstream ss(m_gantryListBuf); double v; while (ss >> v) ++cnt; }
+            ImGui::Text("Gantry entries: %d", cnt);
         }
-        ImGui::Text("Number of beams: %d", numBeams);
         ImGui::Unindent();
+    }
+
+    // ── Couch Angles ──
+    if (ImGui::CollapsingHeader("Couch Angles", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Indent();
+        ImGui::RadioButton("Range##couch", &m_couchMode, 0); ImGui::SameLine();
+        ImGui::RadioButton("List##couch", &m_couchMode, 1);
+
+        if (m_couchMode == 0) {
+            ImGui::DragFloat("Start (deg)##couch", &m_couchStart, 1.0f, -90.0f, 90.0f, "%.1f");
+            ImGui::DragFloat("Step (deg)##couch", &m_couchStep, 0.5f, 0.0f, 45.0f, "%.1f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Set to 0 for a single couch angle (= Start) on every beam.\n"
+                                  "Step > 0 creates a multi-arc plan: each couch angle\n"
+                                  "sweeps through ALL gantry angles (Cartesian product).\n"
+                                  "Total beams = gantry_entries x couch_entries.");
+            ImGui::DragFloat("Stop (deg)##couch", &m_couchStop, 1.0f, -90.0f, 90.0f, "%.1f");
+
+            if (m_couchStep <= 0.0f) {
+                ImGui::Text("Single couch angle: %.1f deg (all beams)", m_couchStart);
+            } else {
+                int numCouch = 0;
+                if (m_couchStop > m_couchStart) {
+                    numCouch = static_cast<int>(std::ceil((m_couchStop - m_couchStart) / m_couchStep));
+                }
+                ImGui::Text("Couch entries: %d", numCouch);
+            }
+        } else {
+            InputTextMultilineString("##couchList", &m_couchListBuf, ImVec2(-1, ImGui::GetTextLineHeight() * 4));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Space-separated couch angles in degrees (paired 1:1 with gantry).\nExample: 0 10 20 30");
+            int cnt = 0;
+            { std::istringstream ss(m_couchListBuf); double v; while (ss >> v) ++cnt; }
+            ImGui::Text("Couch entries: %d", cnt);
+        }
+        ImGui::Unindent();
+    }
+
+    // ── Beam count ──
+    {
+        int numGantry = 0;
+        if (m_gantryMode == 0) {
+            if (m_gantryStep > 0.0f && m_gantryStop > m_gantryStart)
+                numGantry = static_cast<int>(std::ceil((m_gantryStop - m_gantryStart) / m_gantryStep));
+        } else {
+            std::istringstream ss(m_gantryListBuf); double v; while (ss >> v) ++numGantry;
+        }
+
+        int numBeams = numGantry;
+        if (m_couchMode == 0 && m_couchStep > 0.0f && m_couchStop > m_couchStart) {
+            int numCouch = static_cast<int>(std::ceil((m_couchStop - m_couchStart) / m_couchStep));
+            if (numCouch > 1) {
+                numBeams = numGantry * numCouch;
+                ImGui::Text("Number of beams: %d  (%d gantry x %d arcs)",
+                            numBeams, numGantry, numCouch);
+            } else {
+                ImGui::Text("Number of beams: %d", numBeams);
+            }
+        } else if (m_couchMode == 1) {
+            // Paired 1:1 — beam count = max of gantry/couch lists
+            int numCouchList = 0;
+            { std::istringstream ss(m_couchListBuf); double v; while (ss >> v) ++numCouchList; }
+            numBeams = std::max(numGantry, numCouchList);
+            ImGui::Text("Number of beams: %d  (paired 1:1)", numBeams);
+        } else {
+            ImGui::Text("Number of beams: %d", numBeams);
+        }
     }
 
     // ── Bixel Width (only for generic machines) ──
@@ -83,10 +179,20 @@ void PlanningPanel::render() {
     ImGui::Spacing();
 
     // ── Validation ──
-    bool paramsValid = (m_gantryStep > 0.0f) &&
-                       (m_gantryStop > m_gantryStart) &&
-                       (kIsPhaseSpace[m_machineIdx] || m_bixelWidth > 0.0f) &&
-                       (m_numFractions > 0);
+    bool paramsValid = false;
+    if (m_gantryMode == 0) {
+        int numGantryV = 0;
+        if (m_gantryStep > 0.0f && m_gantryStop > m_gantryStart)
+            numGantryV = static_cast<int>(std::ceil((m_gantryStop - m_gantryStart) / m_gantryStep));
+        paramsValid = (numGantryV > 0);
+    } else {
+        int cnt = 0;
+        { std::istringstream ss(m_gantryListBuf); double v; while (ss >> v) ++cnt; }
+        paramsValid = (cnt > 0);
+    }
+    paramsValid = paramsValid &&
+                  (kIsPhaseSpace[m_machineIdx] || m_bixelWidth > 0.0f) &&
+                  (m_numFractions > 0);
 
     if (!paramsValid) {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Fix parameter errors above.");
@@ -118,7 +224,33 @@ void PlanningPanel::render() {
 
         // STF properties
         StfProperties stfProps;
-        stfProps.setGantryAngles(m_gantryStart, m_gantryStep, m_gantryStop);
+
+        // --- Parse gantry angles ---
+        if (m_gantryMode == 0) {
+            stfProps.setGantryAngles(m_gantryStart, m_gantryStep, m_gantryStop);
+        } else {
+            std::vector<double> gList;
+            { std::istringstream ss(m_gantryListBuf); double v; while (ss >> v) gList.push_back(v); }
+            stfProps.setGantryAngles(gList);
+        }
+
+        // --- Parse couch angles ---
+        if (m_couchMode == 0) {
+            if (m_couchStep > 0.0f) {
+                stfProps.setCouchAngles(
+                    static_cast<double>(m_couchStart),
+                    static_cast<double>(m_couchStep),
+                    static_cast<double>(m_couchStop));
+            } else {
+                stfProps.setUniformCouchAngle(static_cast<double>(m_couchStart));
+            }
+        } else {
+            std::vector<double> cList;
+            { std::istringstream ss(m_couchListBuf); double v; while (ss >> v) cList.push_back(v); }
+            stfProps.setCouchAngles(cList);
+        }
+
+        stfProps.ensureConsistentAngles();
         stfProps.bixelWidth = m_bixelWidth;
 
         // Compute isocenter from target structures
@@ -130,8 +262,7 @@ void PlanningPanel::render() {
         m_state.plan = plan;
         m_planCreated = true;
 
-        Logger::info("Plan created: " + std::to_string(static_cast<int>(
-            std::ceil((m_gantryStop - m_gantryStart) / m_gantryStep))) +
+        Logger::info("Plan created: " + std::to_string(stfProps.numOfBeams) +
             " beams, bixelWidth=" + std::to_string(m_bixelWidth) + "mm");
     }
 
@@ -195,15 +326,16 @@ void PlanningPanel::render() {
                         iso = stfP.isoCenters[0];
                     }
 
-                    double gantryStart = !stfP.gantryAngles.empty() ? stfP.gantryAngles[0] : 0.0;
-                    double gantryStop = !stfP.gantryAngles.empty() ? stfP.gantryAngles.back() + 1.0 : 360.0;
-                    double gantryStep = stfP.gantryAngles.size() > 1
-                        ? stfP.gantryAngles[1] - stfP.gantryAngles[0] : 60.0;
                     double bixelWidth = stfP.bixelWidth;
 
-                    PhotonIMRTStfGenerator generator(gantryStart, gantryStep, gantryStop, bixelWidth, iso);
+                    // Pass pre-expanded paired gantry/couch lists directly.
+                    // StfProperties already performed Cartesian product expansion,
+                    // so we avoid re-inferring start/step/stop.
+                    PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, bixelWidth, iso);
                     generator.setMachine(m_state.plan->getMachine());
                     generator.setRadiationMode(radiationMode);
+                    generator.setGantryAngles(stfP.gantryAngles);
+                    generator.setCouchAngles(stfP.couchAngles);
 
                     auto patientData = m_state.plan->getPatientData();
                     if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
