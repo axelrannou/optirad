@@ -157,7 +157,7 @@ void View3D::render() {
     float aspect = static_cast<float>(m_viewportWidth) / static_cast<float>(std::max(m_viewportHeight, 1));
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, 0.01f, 100.0f);
     
-    // Render volume first (optional, can disable)
+    // Render volume first (CT) (optional, can disable)
     // m_impl->volumeRenderer->render(view, projection, cameraPos);
     
     // Render structures (semi-transparent)
