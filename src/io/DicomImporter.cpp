@@ -5,6 +5,7 @@
 #include "geometry/StructureSet.hpp"
 #include "geometry/Volume.hpp"
 #include "geometry/Grid.hpp"
+#include "segmentation/BodyContourGenerator.hpp"
 #include "utils/Logger.hpp"
 #include <algorithm>
 
@@ -75,6 +76,15 @@ std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath
     auto structures = importStructuresWithContours();
     if (structures) {
         Logger::info("Loaded " + std::to_string(structures->getCount()) + " structures");
+        
+        // Auto-generate BODY contour if no EXTERNAL structure exists
+        if (!structures->hasStructureOfType("EXTERNAL") && patientData->getCTVolume()) {
+            Logger::info("No BODY/EXTERNAL structure found, auto-generating from CT threshold");
+            auto bodyStructure = BodyContourGenerator::generate(*patientData->getCTVolume());
+            if (bodyStructure) {
+                structures->addStructure(std::move(bodyStructure));
+            }
+        }
         
         // Rasterize contours to voxel indices
         if (patientData->getCTVolume()) {

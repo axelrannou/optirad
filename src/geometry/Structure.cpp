@@ -15,6 +15,11 @@ namespace optirad {
 // such as complex contour processing or voxelization.
 
 void Structure::rasterizeContours(const Grid& ctGrid) {
+    // Skip rasterization if voxel indices were pre-computed (e.g., auto-generated BODY)
+    if (m_preRasterized && !m_voxelIndices.empty()) {
+        return;
+    }
+    
     m_voxelIndices.clear();
     
     if (m_contours.empty()) return;

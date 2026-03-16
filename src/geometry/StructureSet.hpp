@@ -26,6 +26,14 @@ public:
     const Structure* getStructureByName(const std::string& name) const;
     size_t getCount() const { return m_structures.size(); }
     
+    /// Check if any structure has the given type (e.g., "EXTERNAL", "PTV")
+    bool hasStructureOfType(const std::string& type) const {
+        for (const auto& s : m_structures) {
+            if (s && s->getType() == type) return true;
+        }
+        return false;
+    }
+    
     void clear() { m_structures.clear(); }
 
     /// Rasterize all structure contours to voxel indices
