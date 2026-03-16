@@ -1,13 +1,21 @@
 #include "DoseInfluenceMatrix.hpp"
+#include "utils/Logger.hpp"
 #include <algorithm>
 #include <stdexcept>
 #include <numeric>
+#include <utility>
 
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
 namespace optirad {
+
+namespace {
+
+using ColVal = std::pair<size_t, double>;
+
+} // namespace
 
 // ────────────────────────────────────────────────────────────────
 // Construction
@@ -65,151 +73,166 @@ void DoseInfluenceMatrix::setValue(size_t voxel, size_t bixel, double value) {
 void DoseInfluenceMatrix::finalize() {
     if (m_finalized) return;
 
-    size_t nnz = m_cooRows.size();
+    const size_t nnz = m_cooRows.size();
+    const size_t cooBytes = nnz * (2 * sizeof(size_t) + sizeof(double));
+    const size_t bucketBytes = nnz * sizeof(ColVal);
+    const size_t estimatedGB = (cooBytes + bucketBytes) / (1024ull * 1024ull * 1024ull);
 
-    // Sort COO by (row, col) using an index permutation
-    std::vector<size_t> perm(nnz);
-    std::iota(perm.begin(), perm.end(), 0);
-    std::sort(perm.begin(), perm.end(), [&](size_t a, size_t b) {
-        if (m_cooRows[a] != m_cooRows[b]) return m_cooRows[a] < m_cooRows[b];
-        return m_cooCols[a] < m_cooCols[b];
-    });
+    Logger::info("DoseInfluenceMatrix::finalize: Converting " + std::to_string(nnz) +
+        " entries to CSR using row bucketing (estimated peak memory: ~" +
+        std::to_string(estimatedGB) + " GB before CSR allocation)");
 
-    // Build CSR, merging duplicate (row,col) entries by summing values
-    m_rowPtrs.assign(m_numVoxels + 1, 0);
-    m_values.clear();
-    m_colIndices.clear();
-    m_values.reserve(nnz);
-    m_colIndices.reserve(nnz);
-
-    for (size_t pi = 0; pi < nnz; ++pi) {
-        size_t i = perm[pi];
-        size_t row = m_cooRows[i];
-        size_t col = m_cooCols[i];
-        double val = m_cooVals[i];
-
-        // Merge with previous entry if same (row, col)
-        if (!m_values.empty() && !m_colIndices.empty() &&
-            m_colIndices.back() == col &&
-            m_rowPtrs[row + 1] == 0 &&  // still on same row check below
-            pi > 0 && m_cooRows[perm[pi - 1]] == row)
-        {
-            // Simpler merge check: if the last pushed entry has same col and is in same row
-            m_values.back() += val;
-        } else {
-            m_values.push_back(val);
-            m_colIndices.push_back(col);
-        }
+    if (nnz == 0) {
+        Logger::warn("DoseInfluenceMatrix::finalize: No entries to finalize");
+        m_rowPtrs.assign(m_numVoxels + 1, 0);
+        m_finalized = true;
+        return;
     }
 
-    // Actually, the merge logic above is fragile. Let me redo it cleanly.
-    // Rebuild from scratch with a cleaner approach:
-    m_values.clear();
-    m_colIndices.clear();
+    Logger::info("DoseInfluenceMatrix::finalize: Counting entries per row...");
+    m_rowPtrs.assign(m_numVoxels + 1, 0);
+    for (size_t i = 0; i < nnz; ++i) {
+        const size_t row = m_cooRows[i];
+        const size_t col = m_cooCols[i];
+        if (row >= m_numVoxels || col >= m_numBixels) {
+            throw std::runtime_error(
+                "DoseInfluenceMatrix::finalize: index out of bounds at entry " +
+                std::to_string(i) + " (row=" + std::to_string(row) +
+                ", col=" + std::to_string(col) + ")");
+        }
+        ++m_rowPtrs[row + 1];
+    }
+
+    for (size_t row = 0; row < m_numVoxels; ++row) {
+        m_rowPtrs[row + 1] += m_rowPtrs[row];
+    }
+
+    Logger::info("DoseInfluenceMatrix::finalize: Bucketing entries by row...");
+    std::vector<size_t> rowCursor(m_rowPtrs.begin(), m_rowPtrs.begin() + m_numVoxels);
+    std::vector<ColVal> rowBuckets;
+
+    try {
+        rowBuckets.resize(nnz);
+    } catch (const std::bad_alloc& e) {
+        Logger::error("DoseInfluenceMatrix::finalize: Cannot allocate row buckets (~" +
+            std::to_string(bucketBytes / (1024ull * 1024ull * 1024ull)) +
+            " GB)");
+        throw std::runtime_error("Out of memory during row bucketing in sparse matrix finalization.");
+    }
+
+    for (size_t i = 0; i < nnz; ++i) {
+        const size_t row = m_cooRows[i];
+        const size_t pos = rowCursor[row]++;
+        rowBuckets[pos] = ColVal{m_cooCols[i], m_cooVals[i]};
+    }
+
+    m_cooRows.clear();
+    m_cooRows.shrink_to_fit();
+    m_cooCols.clear();
+    m_cooCols.shrink_to_fit();
+    m_cooVals.clear();
+    m_cooVals.shrink_to_fit();
+
+    Logger::info("DoseInfluenceMatrix::finalize: Sorting columns within each row...");
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 256)
+#endif
+    for (size_t row = 0; row < m_numVoxels; ++row) {
+        const size_t begin = m_rowPtrs[row];
+        const size_t end = m_rowPtrs[row + 1];
+        if (end - begin <= 1) {
+            continue;
+        }
+
+        std::sort(rowBuckets.begin() + static_cast<ptrdiff_t>(begin),
+                  rowBuckets.begin() + static_cast<ptrdiff_t>(end),
+                  [](const ColVal& lhs, const ColVal& rhs) {
+                      return lhs.first < rhs.first;
+                  });
+    }
+
+    Logger::info("DoseInfluenceMatrix::finalize: Counting unique entries per row...");
+    std::vector<size_t> bucketRowPtrs = m_rowPtrs;
     m_rowPtrs.assign(m_numVoxels + 1, 0);
 
-    if (nnz > 0) {
-        size_t prevRow = m_cooRows[perm[0]];
-        size_t prevCol = m_cooCols[perm[0]];
-        double accum  = m_cooVals[perm[0]];
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 256)
+#endif
+    for (size_t row = 0; row < m_numVoxels; ++row) {
+        const size_t begin = bucketRowPtrs[row];
+        const size_t end = bucketRowPtrs[row + 1];
+        if (begin == end) {
+            m_rowPtrs[row + 1] = 0;
+            continue;
+        }
 
-        for (size_t pi = 1; pi < nnz; ++pi) {
-            size_t i = perm[pi];
-            size_t row = m_cooRows[i];
-            size_t col = m_cooCols[i];
-
-            if (row == prevRow && col == prevCol) {
-                accum += m_cooVals[i]; // merge duplicate
-            } else {
-                // Flush previous entry
-                m_values.push_back(accum);
-                m_colIndices.push_back(prevCol);
-                // Mark row boundaries
-                for (size_t r = prevRow + 1; r <= row; ++r) {
-                    // rows [prevRow+1 .. row] start at current position
-                }
-                prevRow = row;
-                prevCol = col;
-                accum = m_cooVals[i];
+        size_t uniqueCount = 1;
+        for (size_t pos = begin + 1; pos < end; ++pos) {
+            if (rowBuckets[pos].first != rowBuckets[pos - 1].first) {
+                ++uniqueCount;
             }
         }
-        // Flush last entry
-        m_values.push_back(accum);
-        m_colIndices.push_back(prevCol);
+        m_rowPtrs[row + 1] = uniqueCount;
     }
 
-    // Build row pointers by counting entries per row
-    // (redo with a simple counting approach)
-    m_rowPtrs.assign(m_numVoxels + 1, 0);
-    {
-        // Count entries per row from the deduplicated sorted COO
-        // We have m_values and m_colIndices, but we need to reconstruct row info.
-        // Let me redo completely with a cleaner 2-pass approach.
+    for (size_t row = 0; row < m_numVoxels; ++row) {
+        m_rowPtrs[row + 1] += m_rowPtrs[row];
     }
 
-    // --- CLEAN 2-pass COO → CSR ---
-    m_values.clear();
-    m_colIndices.clear();
-    m_rowPtrs.assign(m_numVoxels + 1, 0);
+    const size_t totalNnz = m_rowPtrs[m_numVoxels];
+    const size_t csrBytes = totalNnz * (sizeof(size_t) + sizeof(double));
+    Logger::info("DoseInfluenceMatrix::finalize: After deduplication: " +
+        std::to_string(totalNnz) + " unique entries (~" +
+        std::to_string(csrBytes / (1024ull * 1024ull * 1024ull)) + " GB)");
 
-    // Pass 1: count entries per row (after dedup)
-    if (nnz > 0) {
-        size_t prevRow = m_cooRows[perm[0]];
-        size_t prevCol = m_cooCols[perm[0]];
-        for (size_t pi = 1; pi < nnz; ++pi) {
-            size_t i = perm[pi];
-            if (m_cooRows[i] != prevRow || m_cooCols[i] != prevCol) {
-                m_rowPtrs[prevRow + 1]++; // count for row prevRow
-                prevRow = m_cooRows[i];
-                prevCol = m_cooCols[i];
-            }
+    try {
+        m_values.resize(totalNnz);
+        m_colIndices.resize(totalNnz);
+    } catch (const std::bad_alloc& e) {
+        Logger::error("DoseInfluenceMatrix::finalize: Memory allocation failed for " +
+            std::to_string(totalNnz) + " entries (~" +
+            std::to_string(csrBytes / (1024ull * 1024ull * 1024ull)) + " GB)");
+        throw std::runtime_error("Out of memory allocating CSR storage.");
+    }
+
+    Logger::info("DoseInfluenceMatrix::finalize: Emitting CSR rows...");
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 256)
+#endif
+    for (size_t row = 0; row < m_numVoxels; ++row) {
+        const size_t begin = bucketRowPtrs[row];
+        const size_t end = bucketRowPtrs[row + 1];
+        size_t dst = m_rowPtrs[row];
+        if (begin == end) {
+            continue;
         }
-        m_rowPtrs[prevRow + 1]++; // last entry
-    }
 
-    // Cumulative sum
-    for (size_t r = 0; r < m_numVoxels; ++r) {
-        m_rowPtrs[r + 1] += m_rowPtrs[r];
-    }
-
-    size_t totalNnz = m_rowPtrs[m_numVoxels];
-    m_values.resize(totalNnz);
-    m_colIndices.resize(totalNnz);
-
-    // Pass 2: fill values and column indices
-    if (nnz > 0) {
-        std::vector<size_t> rowCursor(m_rowPtrs.begin(), m_rowPtrs.begin() + m_numVoxels);
-
-        size_t prevRow = m_cooRows[perm[0]];
-        size_t prevCol = m_cooCols[perm[0]];
-        double accum = m_cooVals[perm[0]];
-
-        for (size_t pi = 1; pi < nnz; ++pi) {
-            size_t i = perm[pi];
-            size_t row = m_cooRows[i];
-            size_t col = m_cooCols[i];
-
-            if (row == prevRow && col == prevCol) {
-                accum += m_cooVals[i];
-            } else {
-                size_t pos = rowCursor[prevRow]++;
-                m_values[pos] = accum;
-                m_colIndices[pos] = prevCol;
-                prevRow = row;
-                prevCol = col;
-                accum = m_cooVals[i];
+        size_t currentCol = rowBuckets[begin].first;
+        double currentVal = rowBuckets[begin].second;
+        for (size_t pos = begin + 1; pos < end; ++pos) {
+            if (rowBuckets[pos].first == currentCol) {
+                currentVal += rowBuckets[pos].second;
+                continue;
             }
+
+            m_colIndices[dst] = currentCol;
+            m_values[dst] = currentVal;
+            ++dst;
+
+            currentCol = rowBuckets[pos].first;
+            currentVal = rowBuckets[pos].second;
         }
-        size_t pos = rowCursor[prevRow]++;
-        m_values[pos] = accum;
-        m_colIndices[pos] = prevCol;
+
+        m_colIndices[dst] = currentCol;
+        m_values[dst] = currentVal;
     }
 
-    // Free COO memory
-    m_cooRows.clear();   m_cooRows.shrink_to_fit();
-    m_cooCols.clear();   m_cooCols.shrink_to_fit();
-    m_cooVals.clear();   m_cooVals.shrink_to_fit();
+    Logger::info("DoseInfluenceMatrix::finalize: Freeing row bucket memory...");
+    rowBuckets.clear();
+    rowBuckets.shrink_to_fit();
 
+    Logger::info("DoseInfluenceMatrix::finalize: CSR conversion complete (nnz=" +
+        std::to_string(totalNnz) + ")");
     m_finalized = true;
 }
 
