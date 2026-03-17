@@ -285,7 +285,7 @@ void SliceView::renderSlice() {
     
     // Dose overlay with same UVs
     if (m_showDose && m_doseData && m_doseGrid) {
-        if (m_doseNeedsUpdate || m_needsUpdate) {
+        if (m_doseNeedsUpdate) {
             updateDoseTexture();
             m_doseNeedsUpdate = false;
         }
@@ -470,9 +470,12 @@ void SliceView::update() {
 }
 
 void SliceView::setDoseData(const DoseMatrix* dose, const Grid* doseGrid) {
+    const bool doseSourceChanged = (m_doseData != dose) || (m_doseGrid != doseGrid);
     m_doseData = dose;
     m_doseGrid = doseGrid;
-    m_doseNeedsUpdate = true;
+    if (doseSourceChanged) {
+        m_doseNeedsUpdate = true;
+    }
 }
 
 void SliceView::jetColormap(float t, unsigned char& r, unsigned char& g, unsigned char& b) {
