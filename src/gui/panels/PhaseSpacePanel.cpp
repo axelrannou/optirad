@@ -206,8 +206,9 @@ void PhaseSpacePanel::renderBeamVisibility() {
 
         ImGui::Separator();
 
-        // Per-beam checkboxes in a scrollable region
-        ImGui::BeginChild("PhspBeamVisScroll", ImVec2(0, 200), true);
+        // Per-beam checkboxes in a scrollable region (fill remaining space)
+        float remainH = ImGui::GetContentRegionAvail().y;
+        ImGui::BeginChild("PhspBeamVisScroll", ImVec2(-1, remainH > 60.0f ? remainH : 200.0f), true);
         for (size_t i = 0; i < m_phaseSpaceRenderer->getBeamCount(); ++i) {
             double gantryAngle = 0.0;
             if (i < m_state.phaseSpaceSources.size()) {

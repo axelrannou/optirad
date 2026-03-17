@@ -21,17 +21,25 @@ public:
     ~View3D();
     
     void init();
-    void render();
+    /// Render the 3D scene into an internal FBO at the given size.
+    /// Call getTextureID() afterwards to display the result in ImGui::Image().
+    void render(int width, int height);
     void cleanup();
     
     void handleMouseInput(GLFWwindow* window);
     void handleScroll(double yOffset);
+    
+    /// Handle mouse input from ImGui hover state (for docked window)
+    void handleImGuiInput();
     
     void setPatientData(PatientData* data);
     void setStf(const Stf* stf);
     void setPhaseSpaceSources(const std::vector<const PhaseSpaceBeamSource*>& sources);
     BeamRenderer* getBeamRenderer();
     PhaseSpaceRenderer* getPhaseSpaceRenderer();
+    
+    /// Get the FBO color texture ID for ImGui::Image()
+    GLuint getTextureID() const { return m_fboTexture; }
 
 private:
     struct Impl;
@@ -39,6 +47,15 @@ private:
     
     void initCubeRendering();
     void renderCube();
+    
+    // FBO for off-screen rendering
+    void initFBO();
+    void resizeFBO(int width, int height);
+    GLuint m_fbo = 0;
+    GLuint m_fboTexture = 0;
+    GLuint m_fboDepthRBO = 0;
+    int m_fboWidth = 0;
+    int m_fboHeight = 0;
     
     // Camera parameters (orbit camera)
     float m_cameraDistance = 3.0f;

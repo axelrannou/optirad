@@ -67,6 +67,17 @@ private:
     float m_contourThickness = 2.0f;
     bool m_showContours = true;
 
+    // Zoom and pan (UV-based)
+    float m_zoom = 1.0f;
+    float m_panU = 0.5f;   // UV center X [0,1]
+    float m_panV = 0.5f;   // UV center Y [0,1]
+
+    // Rendering state (set during renderSlice, used by renderContours)
+    float m_visUvMinX = 0.0f, m_visUvMinY = 0.0f;
+    float m_visUvMaxX = 1.0f, m_visUvMaxY = 1.0f;
+    float m_imgScreenMinX = 0.0f, m_imgScreenMinY = 0.0f;
+    float m_imgScreenMaxX = 0.0f, m_imgScreenMaxY = 0.0f;
+
     // Dose overlay
     const DoseMatrix* m_doseData = nullptr;
     const Grid* m_doseGrid = nullptr;

@@ -156,11 +156,11 @@ void DoseStatsPanel::renderDVH() {
     // DVH max dose slider
     ImGui::SliderFloat("Max Dose (Gy)", &m_dvhMaxDose, 10.0f, 200.0f, "%.0f");
 
-    // DVH Canvas using ImGui draw list
+    // DVH Canvas using ImGui draw list (fills available space)
     ImVec2 canvasPos = ImGui::GetCursorScreenPos();
     ImVec2 canvasSize = ImGui::GetContentRegionAvail();
-    canvasSize.y = std::max(canvasSize.y, 300.0f);
-    canvasSize.x = std::max(canvasSize.x, 400.0f);
+    canvasSize.y = std::max(canvasSize.y, 200.0f);
+    canvasSize.x = std::max(canvasSize.x, 300.0f);
 
     // Margins for axis labels
     const float marginLeft = 50.0f;

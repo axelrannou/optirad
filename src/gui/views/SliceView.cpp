@@ -108,160 +108,45 @@ void SliceView::render() {
 }
 
 void SliceView::renderControls() {
-    // Slice selector
+    // Line 1: Compact slice selector + position
     int sliceInt = static_cast<int>(m_currentSlice);
-    if (ImGui::SliderInt("Slice", &sliceInt, 0, static_cast<int>(m_maxSlice))) {
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 70);
+    if (ImGui::SliderInt("##Slice", &sliceInt, 0, static_cast<int>(m_maxSlice))) {
         setSliceIndex(static_cast<size_t>(sliceInt));
     }
     
-    // Show slice position in mm
     if (m_patientData && m_patientData->getCTVolume()) {
         const auto& grid = m_patientData->getCTVolume()->getGrid();
         auto origin = grid.getOrigin();
         auto spacing = grid.getSpacing();
-        auto patientPos = grid.getPatientPosition();
         auto dims = grid.getDimensions();
         
-        // Calculate position in patient coordinate system
-        // DICOM uses LPS (Left, Posterior, Superior) coordinate system
         double slicePositionMM = 0.0;
-        
         switch (m_orientation) {
             case SliceOrientation::Axial:
-                // Z-axis: shows superior-inferior position
-                // In LPS: larger Z = more superior (toward head)
                 slicePositionMM = origin[2] + m_currentSlice * spacing[2];
                 break;
-                
             case SliceOrientation::Sagittal: {
-                // X-axis: shows left-right position
-                // Need to reverse: slice from left to right
-                // Start from the last slice (most left) and go to right
                 size_t reversedSlice = dims[0] - 1 - m_currentSlice;
                 slicePositionMM = -(origin[0] + reversedSlice * spacing[0]);
                 break;
             }
-                
             case SliceOrientation::Coronal: {
-                // Y-axis: shows anterior-posterior position
-                // Need to reverse: slice from back to front (posterior to anterior)
                 size_t reversedSlice = dims[1] - 1 - m_currentSlice;
                 slicePositionMM = -(origin[1] + reversedSlice * spacing[1]);
                 break;
             }
         }
-        
         ImGui::SameLine();
-        ImGui::Text("(%.1f mm)", slicePositionMM);
-        
-        // Debug tooltip showing both LPS and RAS coordinates
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            
-            switch (m_orientation) {
-                case SliceOrientation::Axial: {
-                    double lpsZ = origin[2] + m_currentSlice * spacing[2];
-                    ImGui::Text("Patient Position: %s", patientPos.c_str());
-                    ImGui::Separator();
-                    ImGui::Text("Z (LPS Superior): %.1f mm", lpsZ);
-                    ImGui::Text("Slice %zu/%zu", m_currentSlice, m_maxSlice);
-                    break;
-                }
-                case SliceOrientation::Sagittal: {
-                    size_t reversedSlice = dims[0] - 1 - m_currentSlice;
-                    double lpsX = origin[0] + reversedSlice * spacing[0];
-                    ImGui::Text("Patient Position: %s", patientPos.c_str());
-                    ImGui::Separator();
-                    ImGui::Text("X (LPS Left): %.1f mm", lpsX);
-                    ImGui::Text("R (RAS Right): %.1f mm", -lpsX);
-                    ImGui::Text("Slice %zu/%zu (reversed: %zu)", m_currentSlice, m_maxSlice, reversedSlice);
-                    break;
-                }
-                case SliceOrientation::Coronal: {
-                    size_t reversedSlice = dims[1] - 1 - m_currentSlice;
-                    double lpsY = origin[1] + reversedSlice * spacing[1];
-                    ImGui::Text("Patient Position: %s", patientPos.c_str());
-                    ImGui::Separator();
-                    ImGui::Text("Y (LPS Posterior): %.1f mm", lpsY);
-                    ImGui::Text("A (RAS Anterior): %.1f mm", -lpsY);
-                    ImGui::Text("Slice %zu/%zu (reversed: %zu)", m_currentSlice, m_maxSlice, reversedSlice);
-                    break;
-                }
-            }
-            
-            ImGui::EndTooltip();
-        }
+        ImGui::Text("%.1f", slicePositionMM);
     }
     
-    // Contour display toggle
-    ImGui::Checkbox("Show Contours", &m_showContours);
-    ImGui::SameLine();
-    if (m_showContours) {
-        ImGui::SetNextItemWidth(100);
-        ImGui::SliderFloat("Contour Thickness", &m_contourThickness, 0.5f, 5.0f);
-    }
-
-    // Dose overlay controls
+    // Line 2: Show Contours + Show Dose on same line
+    ImGui::Checkbox("Contours", &m_showContours);
     if (m_doseData) {
-        bool doseChanged = false;
-        ImGui::Checkbox("Show Dose", &m_showDose);
-        if (m_showDose) {
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(100);
-            if (ImGui::SliderFloat("Opacity", &m_doseAlpha, 0.0f, 1.0f)) doseChanged = true;
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(100);
-            if (ImGui::SliderFloat("Threshold %", &m_doseThresholdPct, 0.0f, 50.0f)) doseChanged = true;
-        }
-        if (doseChanged) m_doseNeedsUpdate = true;
+        ImGui::SameLine();
+        ImGui::Checkbox("Dose", &m_showDose);
     }
-    
-    // Window/Level controls
-    if (ImGui::SliderInt("Window Width", &m_windowWidth, 1, 2000)) {
-        m_needsUpdate = true;
-    }
-    if (ImGui::SliderInt("Window Center", &m_windowCenter, -1000, 1000)) {
-        m_needsUpdate = true;
-    }
-    
-    // Preset buttons
-    if (ImGui::Button("Soft Tissue")) {
-        m_windowCenter = 40;
-        m_windowWidth = 400;
-        m_needsUpdate = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Lung")) {
-        m_windowCenter = -600;
-        m_windowWidth = 1500;
-        m_needsUpdate = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Bone")) {
-        m_windowCenter = 400;
-        m_windowWidth = 1800;
-        m_needsUpdate = true;
-    }
-    
-    // Show geometric info tooltip
-    if (ImGui::IsItemHovered() || ImGui::IsWindowHovered()) {
-        if (m_patientData && m_patientData->getCTVolume()) {
-            const auto& grid = m_patientData->getCTVolume()->getGrid();
-            
-            if (ImGui::BeginTooltip()) {
-                ImGui::Text("Patient Position: %s", grid.getPatientPosition().c_str());
-                ImGui::Text("Slice Thickness: %.2f mm", grid.getSliceThickness());
-                
-                auto spacing = grid.getSpacing();
-                ImGui::Text("Actual Spacing: %.2f x %.2f x %.2f mm", 
-                           spacing[0], spacing[1], spacing[2]);
-                
-                ImGui::EndTooltip();
-            }
-        }
-    }
-    
-    ImGui::Separator();
 }
 
 void SliceView::updateTexture() {
@@ -346,50 +231,158 @@ void SliceView::updateTexture() {
 }
 
 void SliceView::renderSlice() {
-    // Get available space
     ImVec2 avail = ImGui::GetContentRegionAvail();
     
-    // Calculate display size using PHYSICAL aspect ratio (like 3D Slicer)
+    // Reserve space for preset buttons on the right
+    float buttonW = 28.0f;
+    float gap = 4.0f;
+    float imgAreaW = avail.x - buttonW - gap;
+    float imgAreaH = avail.y;
+    
+    if (imgAreaW < 10 || imgAreaH < 10) return;
+    
+    // Calculate display size using PHYSICAL aspect ratio
     float physicalAspect = static_cast<float>(m_physicalWidth / m_physicalHeight);
     
-    float displayWidth = avail.x;
-    float displayHeight = avail.x / physicalAspect;
+    float displayWidth = imgAreaW;
+    float displayHeight = imgAreaW / physicalAspect;
     
-    if (displayHeight > avail.y) {
-        displayHeight = avail.y;
-        displayWidth = avail.y * physicalAspect;
+    if (displayHeight > imgAreaH) {
+        displayHeight = imgAreaH;
+        displayWidth = imgAreaH * physicalAspect;
     }
     
-    // Center the image
+    // Center the image in the image area
     ImVec2 cursor = ImGui::GetCursorPos();
-    ImVec2 imagePos = ImVec2(cursor.x + (avail.x - displayWidth) * 0.5f,
-                             cursor.y + (avail.y - displayHeight) * 0.5f);
+    ImVec2 imagePos = ImVec2(cursor.x + (imgAreaW - displayWidth) * 0.5f,
+                             cursor.y + (imgAreaH - displayHeight) * 0.5f);
+    
+    // Calculate UV coordinates based on zoom and pan
+    float halfU = 0.5f / m_zoom;
+    float halfV = 0.5f / m_zoom;
+    ImVec2 uv0(m_panU - halfU, m_panV - halfV);
+    ImVec2 uv1(m_panU + halfU, m_panV + halfV);
+    
+    // Store for contour rendering
+    m_visUvMinX = uv0.x; m_visUvMinY = uv0.y;
+    m_visUvMaxX = uv1.x; m_visUvMaxY = uv1.y;
+    
     ImGui::SetCursorPos(imagePos);
     
-    // Store image bounds for contour rendering
-    ImVec2 imageMin = ImGui::GetCursorScreenPos();
-    ImVec2 imageMax = ImVec2(imageMin.x + displayWidth, imageMin.y + displayHeight);
+    // Store image screen bounds for contour rendering
+    ImVec2 imageScreenMin = ImGui::GetCursorScreenPos();
+    m_imgScreenMinX = imageScreenMin.x;
+    m_imgScreenMinY = imageScreenMin.y;
+    m_imgScreenMaxX = imageScreenMin.x + displayWidth;
+    m_imgScreenMaxY = imageScreenMin.y + displayHeight;
     
-    // Display texture
+    // Display CT texture with zoom UVs
     ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(m_textureID)),
-                ImVec2(displayWidth, displayHeight));
+                ImVec2(displayWidth, displayHeight), uv0, uv1);
     
-    // Dose overlay
+    // Check hover state on CT image
+    bool imageHovered = ImGui::IsItemHovered();
+    
+    // Dose overlay with same UVs
     if (m_showDose && m_doseData && m_doseGrid) {
         if (m_doseNeedsUpdate || m_needsUpdate) {
             updateDoseTexture();
             m_doseNeedsUpdate = false;
         }
-        // Draw dose texture on top with alpha blending
         ImGui::SetCursorPos(imagePos);
         ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(m_doseTextureID)),
-                    ImVec2(displayWidth, displayHeight));
+                    ImVec2(displayWidth, displayHeight), uv0, uv1);
     }
-
+    
     // Overlay contours if enabled
     if (m_showContours && m_patientData && m_patientData->getStructureSet()) {
         renderContours();
     }
+    
+    // --- Mouse interactions ---
+    
+    // Left-click + drag vertical = zoom (like 3D Slicer)
+    if (imageHovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        float deltaY = ImGui::GetIO().MouseDelta.y;
+        m_zoom *= 1.0f - deltaY * 0.005f;
+        m_zoom = std::clamp(m_zoom, 0.5f, 20.0f);
+    }
+    
+    // Middle-click + drag = pan (when zoomed)
+    if (imageHovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+        ImVec2 delta = ImGui::GetIO().MouseDelta;
+        float uvPerPixelX = (uv1.x - uv0.x) / displayWidth;
+        float uvPerPixelY = (uv1.y - uv0.y) / displayHeight;
+        m_panU -= delta.x * uvPerPixelX;
+        m_panV -= delta.y * uvPerPixelY;
+        m_panU = std::clamp(m_panU, 0.0f, 1.0f);
+        m_panV = std::clamp(m_panV, 0.0f, 1.0f);
+    }
+    
+    // Scroll wheel = change slice
+    if (imageHovered) {
+        float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.0f) {
+            int newSlice = static_cast<int>(m_currentSlice) - static_cast<int>(wheel);
+            newSlice = std::clamp(newSlice, 0, static_cast<int>(m_maxSlice));
+            setSliceIndex(static_cast<size_t>(newSlice));
+        }
+    }
+    
+    // Right-click context menu for W/L and settings
+    if (imageHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        ImGui::OpenPopup("##SliceCtx");
+    }
+    if (ImGui::BeginPopup("##SliceCtx")) {
+        ImGui::Text("Window / Level");
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::SliderInt("Width", &m_windowWidth, 1, 2000)) m_needsUpdate = true;
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::SliderInt("Center", &m_windowCenter, -1000, 1000)) m_needsUpdate = true;
+        ImGui::Separator();
+        if (ImGui::MenuItem("Soft Tissue (W:400 C:40)"))    { m_windowCenter = 40; m_windowWidth = 400; m_needsUpdate = true; }
+        if (ImGui::MenuItem("Lung (W:1500 C:-600)"))        { m_windowCenter = -600; m_windowWidth = 1500; m_needsUpdate = true; }
+        if (ImGui::MenuItem("Bone (W:1800 C:400)"))         { m_windowCenter = 400; m_windowWidth = 1800; m_needsUpdate = true; }
+        if (m_showContours) {
+            ImGui::Separator();
+            ImGui::SetNextItemWidth(120);
+            ImGui::SliderFloat("Contour Size", &m_contourThickness, 0.5f, 5.0f);
+        }
+        if (m_showDose && m_doseData) {
+            ImGui::Separator();
+            ImGui::SetNextItemWidth(120);
+            if (ImGui::SliderFloat("Dose Opacity", &m_doseAlpha, 0.0f, 1.0f)) m_doseNeedsUpdate = true;
+            ImGui::SetNextItemWidth(120);
+            if (ImGui::SliderFloat("Dose Thresh%", &m_doseThresholdPct, 0.0f, 50.0f)) m_doseNeedsUpdate = true;
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Reset Zoom")) { m_zoom = 1.0f; m_panU = 0.5f; m_panV = 0.5f; }
+        ImGui::EndPopup();
+    }
+    
+    // --- Preset buttons vertically on the right ---
+    float btnH = ImGui::GetFrameHeight();
+    float btnSpacing = ImGui::GetStyle().ItemSpacing.y;
+    float totalBtnH = btnH * 3 + btnSpacing * 2;
+    float btnStartY = cursor.y + (imgAreaH - totalBtnH) * 0.5f;
+    float btnX = cursor.x + imgAreaW + gap;
+    
+    ImGui::SetCursorPos(ImVec2(btnX, btnStartY));
+    if (ImGui::Button("ST", ImVec2(buttonW, 0))) {
+        m_windowCenter = 40; m_windowWidth = 400; m_needsUpdate = true;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Soft Tissue (W:400 C:40)");
+    ImGui::SetCursorPosX(btnX);
+    if (ImGui::Button("Lg", ImVec2(buttonW, 0))) {
+        m_windowCenter = -600; m_windowWidth = 1500; m_needsUpdate = true;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lung (W:1500 C:-600)");
+    ImGui::SetCursorPosX(btnX);
+    if (ImGui::Button("Bn", ImVec2(buttonW, 0))) {
+        m_windowCenter = 400; m_windowWidth = 1800; m_needsUpdate = true;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bone (W:1800 C:400)");
 }
 
 void SliceView::renderContours()
@@ -406,14 +399,21 @@ void SliceView::renderContours()
     const auto& grid = m_patientData->getCTVolume()->getGrid();
     auto dims = grid.getDimensions();
 
-    ImVec2 imageMin = ImGui::GetItemRectMin();
-    ImVec2 imageMax = ImGui::GetItemRectMax();
+    ImVec2 imageMin(m_imgScreenMinX, m_imgScreenMinY);
+    ImVec2 imageMax(m_imgScreenMaxX, m_imgScreenMaxY);
     ImVec2 imageSize = ImVec2(imageMax.x - imageMin.x, imageMax.y - imageMin.y);
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
+    
+    // Clip contours to image bounds
+    drawList->PushClipRect(imageMin, imageMax, true);
 
     double sliceIndexVoxel = (double)m_currentSlice;
     constexpr double sliceTol = 0.5;
+    
+    float uvRangeX = m_visUvMaxX - m_visUvMinX;
+    float uvRangeY = m_visUvMaxY - m_visUvMinY;
+    if (uvRangeX <= 0.0f || uvRangeY <= 0.0f) { drawList->PopClipRect(); return; }
 
     for (size_t si = 0; si < structures->getCount(); ++si) {
         const auto* structure = structures->getStructure(si);
@@ -437,16 +437,17 @@ void SliceView::renderContours()
             if (std::abs(z - sliceIndexVoxel) > sliceTol)
                 continue;
 
-            // Project to screen coordinates
+            // Project to screen coordinates (zoom-aware via UV mapping)
             std::vector<ImVec2> poly;
             for (const auto& v : vox) {
                 double u = v[1] / dims[1];
                 double w = v[0] / dims[0];
 
-                poly.push_back({
-                    imageMin.x + (float)(u * imageSize.x),
-                    imageMin.y + (float)(w * imageSize.y)
-                });
+                // Map from full UV [0,1] to visible UV range with zoom
+                float screenX = imageMin.x + (float)((u - m_visUvMinX) / uvRangeX) * imageSize.x;
+                float screenY = imageMin.y + (float)((w - m_visUvMinY) / uvRangeY) * imageSize.y;
+
+                poly.push_back({screenX, screenY});
             }
 
             if (poly.size() >= 2) {
@@ -460,6 +461,8 @@ void SliceView::renderContours()
             }
         }
     }
+    
+    drawList->PopClipRect();
 }
 
 void SliceView::update() {

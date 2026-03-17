@@ -106,8 +106,11 @@ void PatientPanel::renderFileBrowser() {
         }
     }
 
-    // Directory listing
-    ImGui::BeginChild("FileBrowser", ImVec2(0, 280), true);
+    // Directory listing (reserve space for buttons below: spacing + separator + spacing + button row)
+    float reservedH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 3 + 10;
+    float browserH = ImGui::GetContentRegionAvail().y - reservedH;
+    if (browserH < 100.0f) browserH = 100.0f;
+    ImGui::BeginChild("FileBrowser", ImVec2(-1, browserH), true);
     try {
         std::vector<fs::directory_entry> dirs, files;
         for (const auto& entry : fs::directory_iterator(currentPath)) {

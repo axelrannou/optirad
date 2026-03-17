@@ -11,6 +11,7 @@
 #include "utils/Logger.hpp"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
@@ -61,7 +62,37 @@ bool Application::init() {
     // Initialize ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    
     ImGui::StyleColorsDark();
+    
+    // DPI scaling
+    // On Linux/X11, glfwGetWindowContentScale often returns the desktop scale
+    // factor (e.g. 2.0 on 4K) but the framebuffer is already at native resolution,
+    // so we query framebuffer vs window size to detect actual content scaling.
+    float xscale = 1.0f, yscale = 1.0f;
+    glfwGetWindowContentScale(m_window, &xscale, &yscale);
+    int fbW, fbH, winW, winH;
+    glfwGetFramebufferSize(m_window, &fbW, &fbH);
+    glfwGetWindowSize(m_window, &winW, &winH);
+    // If framebuffer == window size, the OS is NOT doing pixel-doubling,
+    // so content scale > 1 likely just means a high-DPI panel at native res.
+    if (winW > 0 && fbW > 0) {
+        float actualScale = static_cast<float>(fbW) / static_cast<float>(winW);
+        if (actualScale < 1.5f) {
+            // No pixel doubling — use 1.0 so we don't double-scale
+            xscale = 1.0f;
+        }
+    }
+    m_dpiScale = xscale;
+    
+    // Use a clean, readable font size
+    float fontSize = 13.0f * m_dpiScale;
+    ImFontConfig fontConfig;
+    fontConfig.SizePixels = fontSize;
+    io.Fonts->AddFontDefault(&fontConfig);
     
     if (!ImGui_ImplGlfw_InitForOpenGL(m_window, true)) {
         Logger::error("Failed to initialize ImGui GLFW backend");
@@ -84,15 +115,6 @@ bool Application::init() {
     m_view3D = std::make_unique<View3D>();
     m_view3D->init();
     
-    // Set up scroll callback for 3D view zoom
-    glfwSetWindowUserPointer(m_window, m_view3D.get());
-    glfwSetScrollCallback(m_window, [](GLFWwindow* win, double xOffset, double yOffset) {
-        auto* view = static_cast<View3D*>(glfwGetWindowUserPointer(win));
-        if (view && !ImGui::GetIO().WantCaptureMouse) {
-            view->handleScroll(yOffset);
-        }
-    });
-    
     // Create panels
     m_patientPanel = std::make_unique<PatientPanel>();
     m_planningPanel = std::make_unique<PlanningPanel>(m_appState);
@@ -100,6 +122,9 @@ bool Application::init() {
     m_phaseSpacePanel = std::make_unique<PhaseSpacePanel>(m_appState);
     m_optimizationPanel = std::make_unique<OptimizationPanel>(m_appState);
     m_doseStatsPanel = std::make_unique<DoseStatsPanel>(m_appState);
+    
+    // Phase Space panel hidden by default
+    m_phaseSpacePanel->setVisible(false);
     
     // Create slice views
     m_axialView = std::make_unique<SliceView>(SliceOrientation::Axial);
@@ -109,28 +134,92 @@ bool Application::init() {
     return true;
 }
 
+void Application::setupDockLayout() {
+    ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
+    
+    // Always clear and rebuild the layout when this is called
+    ImGui::DockBuilderRemoveNode(dockspace_id);
+    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+    
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->WorkSize);
+    ImGui::DockBuilderSetNodePos(dockspace_id, viewport->WorkPos);
+    
+    // Split: left 30% for sidebars | right 70% for views + bottom
+    ImGuiID leftNode, rightNode;
+    ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.30f, &leftNode, &rightNode);
+    
+    // Split left into two sidebars: sidebar1 (50% of left = 15%) | sidebar2 (50% of left = 15%)
+    ImGuiID sidebar1Node, sidebar2Node;
+    ImGui::DockBuilderSplitNode(leftNode, ImGuiDir_Left, 0.50f, &sidebar1Node, &sidebar2Node);
+    
+    // Split right into views (top 75%) and bottom (25% for dose stats/DVH)
+    ImGuiID viewsNode, bottomNode;
+    ImGui::DockBuilderSplitNode(rightNode, ImGuiDir_Down, 0.25f, &bottomNode, &viewsNode);
+    
+    // Split views area into 2x2 grid
+    // First split horizontal: top row | bottom row
+    ImGuiID topRow, bottomRow;
+    ImGui::DockBuilderSplitNode(viewsNode, ImGuiDir_Down, 0.50f, &bottomRow, &topRow);
+    
+    // Split top row: Axial (left) | Sagittal (right)
+    ImGuiID axialNode, sagittalNode;
+    ImGui::DockBuilderSplitNode(topRow, ImGuiDir_Left, 0.50f, &axialNode, &sagittalNode);
+    
+    // Split bottom row: 3D View (left, under Axial) | Coronal (right)
+    ImGuiID view3dNode, coronalNode;
+    ImGui::DockBuilderSplitNode(bottomRow, ImGuiDir_Left, 0.50f, &view3dNode, &coronalNode);
+    
+    // Split sidebar1 vertically: Patient (top 35%) | Planning (bottom 65%)
+    ImGuiID sidebar1Top, sidebar1Bottom;
+    ImGui::DockBuilderSplitNode(sidebar1Node, ImGuiDir_Down, 0.65f, &sidebar1Bottom, &sidebar1Top);
+    
+    // Split sidebar2 vertically: STF (top 40%) | Optimization (bottom 60%)
+    ImGuiID sidebar2Top, sidebar2Bottom;
+    ImGui::DockBuilderSplitNode(sidebar2Node, ImGuiDir_Down, 0.60f, &sidebar2Bottom, &sidebar2Top);
+    
+    // Dock windows into nodes
+    // Sidebar 1: Patient (top) + Planning (bottom)
+    ImGui::DockBuilderDockWindow("Patient Data", sidebar1Top);
+    ImGui::DockBuilderDockWindow("Planning", sidebar1Bottom);
+    
+    // Sidebar 2: STF (top) + Optimization (bottom)
+    ImGui::DockBuilderDockWindow("STF Generation", sidebar2Top);
+    ImGui::DockBuilderDockWindow("Optimization", sidebar2Bottom);
+    
+    // Phase Space (hidden but docked in sidebar2 STF node as a tab)
+    ImGui::DockBuilderDockWindow("Phase Space", sidebar2Top);
+    
+    // Views
+    ImGui::DockBuilderDockWindow("Axial", axialNode);
+    ImGui::DockBuilderDockWindow("Sagittal", sagittalNode);
+    ImGui::DockBuilderDockWindow("Coronal", coronalNode);
+    ImGui::DockBuilderDockWindow("3D View", view3dNode);
+    
+    // Bottom: Dose Statistics & DVH (tabbed)
+    ImGui::DockBuilderDockWindow("Dose Statistics & DVH", bottomNode);
+    
+    ImGui::DockBuilderFinish(dockspace_id);
+}
+
 void Application::run() {
     while (!glfwWindowShouldClose(m_window)) {
         glfwPollEvents();
         
-        m_view3D->handleMouseInput(m_window);
-        
-        // Clear buffers
+        // Clear default framebuffer
         int display_w, display_h;
         glfwGetFramebufferSize(m_window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
-        // Update 3D view with patient data
+        // Update data bridges
         if (m_patientPanel->hasData()) {
             auto* data = m_patientPanel->getPatientData();
 
-            // Bridge PatientPanel data → GuiAppState (shared_ptr from raw ptr)
             if (!m_appState.dicomLoaded()) {
-                // Wrap PatientPanel's data in a non-owning shared_ptr (PatientPanel still owns it)
                 m_appState.patientData = std::shared_ptr<PatientData>(
-                    data, [](PatientData*) {}); // no-op deleter
+                    data, [](PatientData*) {});
             }
 
             m_view3D->setPatientData(data);
@@ -139,13 +228,11 @@ void Application::run() {
             m_coronalView->setPatientData(data);
         }
 
-        // Pass STF to 3D view when available
         if (m_appState.stfGenerated()) {
             m_view3D->setStf(m_appState.stf.get());
             m_stfPanel->setBeamRenderer(m_view3D->getBeamRenderer());
         }
 
-        // Pass phase-space data to 3D view when available
         if (m_appState.phaseSpaceLoaded()) {
             std::vector<const PhaseSpaceBeamSource*> sources;
             sources.reserve(m_appState.phaseSpaceSources.size());
@@ -155,29 +242,58 @@ void Application::run() {
             m_view3D->setPhaseSpaceSources(sources);
             m_phaseSpacePanel->setPhaseSpaceRenderer(m_view3D->getPhaseSpaceRenderer());
         }
-
-        // Render 3D view
-        m_view3D->render();
         
-        // Start ImGui frame (renders on top of 3D scene)
+        // Start ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         
-        // Render main menu
+        // Create fullscreen dockspace host window
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->WorkPos);
+        ImGui::SetNextWindowSize(viewport->WorkSize);
+        ImGui::SetNextWindowViewport(viewport->ID);
+        
+        ImGuiWindowFlags hostFlags = 
+            ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground |
+            ImGuiWindowFlags_MenuBar;
+        
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        
+        ImGui::Begin("DockSpaceHost", nullptr, hostFlags);
+        ImGui::PopStyleVar(3);
+        
+        // Render menu bar inside host window
         renderMenuBar();
         
-        // Render panels (these may modify state, e.g. resetOptimization)
+        // Setup initial layout BEFORE the first DockSpace call
+        ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
+        if (!m_layoutInitialized) {
+            setupDockLayout();
+            m_layoutInitialized = true;
+        }
+        
+        // Create the dockspace
+        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+        
+        ImGui::End(); // DockSpaceHost
+        
+        // Render panels
         m_patientPanel->render();
         m_planningPanel->render();
         m_stfPanel->render();
-        m_phaseSpacePanel->render();
+        if (m_phaseSpacePanel->isVisible()) {
+            m_phaseSpacePanel->render();
+        }
         m_optimizationPanel->render();
         m_doseStatsPanel->render();
         
-        // Pass dose data to slice views AFTER panels render.
-        // Panels may call resetOptimization() which destroys doseResult;
-        // setting raw pointers before panels would leave dangling pointers.
+        // Pass dose data to slice views AFTER panels render
         if (m_appState.optimizationDone() && m_appState.doseResult && m_appState.doseGrid) {
             m_axialView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
             m_sagittalView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
@@ -188,12 +304,15 @@ void Application::run() {
             m_coronalView->setDoseData(nullptr, nullptr);
         }
         
-        // Render views
+        // Render slice views (each creates its own ImGui window)
         m_axialView->render();
         m_sagittalView->render();
         m_coronalView->render();
         
-        // Render ImGui
+        // Render 3D View inside an ImGui window
+        render3DViewWindow();
+        
+        // Finalize ImGui frame
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         
@@ -201,8 +320,36 @@ void Application::run() {
     }
 }
 
+void Application::render3DViewWindow() {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("3D View");
+    ImGui::PopStyleVar();
+    
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    int w = static_cast<int>(avail.x);
+    int h = static_cast<int>(avail.y);
+    
+    if (w > 0 && h > 0) {
+        // Render the 3D scene to FBO
+        m_view3D->render(w, h);
+        
+        // Display the FBO texture (flipped vertically since OpenGL coordinates are bottom-up)
+        ImGui::Image(
+            reinterpret_cast<void*>(static_cast<intptr_t>(m_view3D->getTextureID())),
+            avail,
+            ImVec2(0, 1), ImVec2(1, 0) // UV flipped for OpenGL
+        );
+        
+        // Handle mouse input when 3D view is hovered
+        if (ImGui::IsItemHovered()) {
+            m_view3D->handleImGuiInput();
+        }
+    }
+    
+    ImGui::End();
+}
+
 void Application::shutdown() {
-    // Cleanup 3D view
     if (m_view3D) {
         m_view3D->cleanup();
     }
@@ -218,7 +365,7 @@ void Application::shutdown() {
 }
 
 void Application::renderMenuBar() {
-    if (ImGui::BeginMainMenuBar()) {
+    if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Import DICOM...")) {
                 // Trigger import dialog in patient panel
@@ -231,17 +378,50 @@ void Application::renderMenuBar() {
         }
         
         if (ImGui::BeginMenu("View")) {
-            ImGui::MenuItem("Patient Panel", nullptr, true);
-            ImGui::MenuItem("Phase Space Panel", nullptr, true);
-            ImGui::MenuItem("Optimization Panel", nullptr, true);
-            ImGui::MenuItem("Dose Statistics", nullptr, true);
-            ImGui::MenuItem("Axial View", nullptr, true);
-            ImGui::MenuItem("Sagittal View", nullptr, true);
-            ImGui::MenuItem("Coronal View", nullptr, true);
+            // Toggle panel visibility
+            bool patientVis = m_patientPanel->isVisible();
+            if (ImGui::MenuItem("Patient Panel", nullptr, &patientVis)) {
+                m_patientPanel->setVisible(patientVis);
+            }
+            
+            bool planningVis = m_planningPanel->isVisible();
+            if (ImGui::MenuItem("Planning Panel", nullptr, &planningVis)) {
+                m_planningPanel->setVisible(planningVis);
+            }
+            
+            bool stfVis = m_stfPanel->isVisible();
+            if (ImGui::MenuItem("STF Panel", nullptr, &stfVis)) {
+                m_stfPanel->setVisible(stfVis);
+            }
+            
+            bool phaseVis = m_phaseSpacePanel->isVisible();
+            if (ImGui::MenuItem("Phase Space Panel", nullptr, &phaseVis)) {
+                m_phaseSpacePanel->setVisible(phaseVis);
+            }
+            
+            bool optVis = m_optimizationPanel->isVisible();
+            if (ImGui::MenuItem("Optimization Panel", nullptr, &optVis)) {
+                m_optimizationPanel->setVisible(optVis);
+            }
+            
+            bool doseVis = m_doseStatsPanel->isVisible();
+            if (ImGui::MenuItem("Dose Statistics", nullptr, &doseVis)) {
+                m_doseStatsPanel->setVisible(doseVis);
+            }
+            
+            ImGui::Separator();
+            
+            if (ImGui::MenuItem("Reset Layout")) {
+                m_layoutInitialized = false;
+                // Force rebuild on next frame by removing the existing node
+                ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
+                ImGui::DockBuilderRemoveNode(dockspace_id);
+            }
+            
             ImGui::EndMenu();
         }
         
-        ImGui::EndMainMenuBar();
+        ImGui::EndMenuBar();
     }
 }
 
