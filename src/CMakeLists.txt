@@ -2,6 +2,7 @@
 add_subdirectory(utils)
 add_subdirectory(core)
 add_subdirectory(geometry)
+add_subdirectory(segmentation)
 add_subdirectory(dose)
 add_subdirectory(io)
 add_subdirectory(optimization)

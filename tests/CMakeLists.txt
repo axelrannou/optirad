@@ -252,3 +252,14 @@ if(OpenMP_CXX_FOUND)
     target_link_libraries(test_dose_engine PRIVATE OpenMP::OpenMP_CXX)
 endif()
 add_test(NAME DoseEngineTest COMMAND test_dose_engine)
+
+# ============================================================================
+# UNIT TESTS (GoogleTest) - Segmentation Module
+# ============================================================================
+
+add_executable(test_body_contour_generator
+    segmentation/test_body_contour_generator.cpp
+)
+target_include_directories(test_body_contour_generator PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_body_contour_generator PRIVATE optirad_segmentation optirad_geometry GTest::gtest GTest::gtest_main)
+add_test(NAME BodyContourGeneratorTest COMMAND test_body_contour_generator)

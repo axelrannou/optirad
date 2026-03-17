@@ -6,7 +6,7 @@ add_library(optirad_io
 )
 
 target_include_directories(optirad_io PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(optirad_io PUBLIC optirad_core optirad_geometry nlohmann_json::nlohmann_json)
+target_link_libraries(optirad_io PUBLIC optirad_core optirad_geometry optirad_segmentation nlohmann_json::nlohmann_json)
 target_compile_definitions(optirad_io PRIVATE OPTIRAD_DATA_DIR="${OPTIRAD_DATA_DIR}")
 
 # DCMTK for DICOM handling (optional - stub implementation if not found)

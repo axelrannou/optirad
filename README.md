@@ -29,7 +29,7 @@ A modern, modular C++17 treatment planning system (TPS) for radiotherapy optimiz
 sudo apt-get update
 sudo apt-get install -y \
     build-essential cmake git \
-    libgl1-mesa-dev libglu1-mesa-dev libglfw3-dev libglew-dev \
+    libgl1-mesa-dev libglu1-mesa-dev libglfw3-dev libglew-dev libgtest-dev \
     libomp-dev libglm-dev
 
 # Optional dependencies

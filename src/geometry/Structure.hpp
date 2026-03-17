@@ -62,6 +62,10 @@ public:
     void setVisible(bool visible) { m_visible = visible; }
     bool isVisible() const { return m_visible; }
     
+    /// Mark structure as having pre-computed voxel indices (skip rasterization)
+    void setPreRasterized(bool preRasterized) { m_preRasterized = preRasterized; }
+    bool isPreRasterized() const { return m_preRasterized; }
+    
     /// Rasterize contours to voxel indices using the CT grid
     void rasterizeContours(const Grid& ctGrid);
 
@@ -79,6 +83,7 @@ private:
     double m_alphaX = 0.1;
     double m_betaX = 0.05;
     bool m_visible = true;
+    bool m_preRasterized = false;
 
     /// Helper: rasterize a single contour on a specific slice
     std::vector<size_t> rasterizeContourOnSlice(const Contour& contour, const Grid& ctGrid, int sliceIdx) const;

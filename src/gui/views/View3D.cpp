@@ -50,6 +50,40 @@ void View3D::init() {
     
     m_impl->phaseSpaceRenderer = std::make_unique<PhaseSpaceRenderer>();
     m_impl->phaseSpaceRenderer->init();
+    
+    initFBO();
+}
+
+void View3D::initFBO() {
+    glGenFramebuffers(1, &m_fbo);
+    glGenTextures(1, &m_fboTexture);
+    glGenRenderbuffers(1, &m_fboDepthRBO);
+}
+
+void View3D::resizeFBO(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    if (width == m_fboWidth && height == m_fboHeight) return;
+    
+    m_fboWidth = width;
+    m_fboHeight = height;
+    
+    // Color texture
+    glBindTexture(GL_TEXTURE_2D, m_fboTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    
+    // Depth renderbuffer
+    glBindRenderbuffer(GL_RENDERBUFFER, m_fboDepthRBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    
+    // Attach to FBO
+    glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_fboTexture, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_fboDepthRBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void View3D::handleScroll(double yOffset) {
@@ -141,7 +175,68 @@ PhaseSpaceRenderer* View3D::getPhaseSpaceRenderer() {
     return m_impl->phaseSpaceRenderer.get();
 }
 
-void View3D::render() {
+void View3D::handleImGuiInput() {
+    // This is called when the 3D View ImGui window is hovered.
+    // We read ImGui IO state instead of raw GLFW.
+    ImGuiIO& io = ImGui::GetIO();
+    
+    ImVec2 mousePos = io.MousePos;
+    double mouseX = static_cast<double>(mousePos.x);
+    double mouseY = static_cast<double>(mousePos.y);
+    
+    bool leftPressed = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    bool rightPressed = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+    
+    double deltaX = mouseX - m_lastMouseX;
+    double deltaY = mouseY - m_lastMouseY;
+    
+    if (leftPressed && m_leftMousePressed) {
+        const float sensitivity = 0.005f;
+        m_yaw -= static_cast<float>(deltaX) * sensitivity;
+        m_pitch += static_cast<float>(deltaY) * sensitivity;
+        const float maxPitch = glm::half_pi<float>() - 0.01f;
+        m_pitch = std::clamp(m_pitch, -maxPitch, maxPitch);
+    }
+    
+    if (rightPressed && m_rightMousePressed) {
+        const float panSpeed = 0.002f * m_cameraDistance;
+        glm::vec3 forward(std::sin(m_yaw), 0.0f, std::cos(m_yaw));
+        glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
+        glm::vec3 up(0.0f, 1.0f, 0.0f);
+        m_target -= right * static_cast<float>(deltaX) * panSpeed;
+        m_target += up * static_cast<float>(deltaY) * panSpeed;
+    }
+    
+    // Scroll zoom
+    float scroll = io.MouseWheel;
+    if (scroll != 0.0f) {
+        const float zoomSpeed = 0.1f;
+        m_cameraDistance -= scroll * zoomSpeed * m_cameraDistance;
+        m_cameraDistance = std::clamp(m_cameraDistance, 0.01f, 50.0f);
+    }
+    
+    m_lastMouseX = mouseX;
+    m_lastMouseY = mouseY;
+    m_leftMousePressed = leftPressed;
+    m_rightMousePressed = rightPressed;
+}
+
+void View3D::render(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    
+    m_viewportWidth = width;
+    m_viewportHeight = height;
+    
+    // Ensure FBO is correct size
+    resizeFBO(width, height);
+    
+    // Bind FBO for off-screen rendering
+    glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
+    glViewport(0, 0, width, height);
+    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    
     float cosPitch = std::cos(m_pitch), sinPitch = std::sin(m_pitch);
     float cosYaw = std::cos(m_yaw), sinYaw = std::sin(m_yaw);
     
@@ -154,11 +249,8 @@ void View3D::render() {
     glm::vec3 cameraPos = m_target + cameraOffset;
     glm::mat4 view = glm::lookAt(cameraPos, m_target, glm::vec3(0.0f, 1.0f, 0.0f));
     
-    float aspect = static_cast<float>(m_viewportWidth) / static_cast<float>(std::max(m_viewportHeight, 1));
+    float aspect = static_cast<float>(width) / static_cast<float>(std::max(height, 1));
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), aspect, 0.01f, 100.0f);
-    
-    // Render volume first (optional, can disable)
-    // m_impl->volumeRenderer->render(view, projection, cameraPos);
     
     // Render structures (semi-transparent)
     m_impl->structureRenderer->render(view, projection);
@@ -172,9 +264,15 @@ void View3D::render() {
     // Render orientation cube and labels on top
     m_impl->cubeRenderer->render(view, projection);
     m_impl->axisLabels->render(view, projection);
+    
+    // Unbind FBO - go back to default framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void View3D::cleanup() {
+    if (m_fbo) { glDeleteFramebuffers(1, &m_fbo); m_fbo = 0; }
+    if (m_fboTexture) { glDeleteTextures(1, &m_fboTexture); m_fboTexture = 0; }
+    if (m_fboDepthRBO) { glDeleteRenderbuffers(1, &m_fboDepthRBO); m_fboDepthRBO = 0; }
     m_impl->cubeRenderer->cleanup();
     m_impl->axisLabels->cleanup();
     m_impl->volumeRenderer->cleanup();

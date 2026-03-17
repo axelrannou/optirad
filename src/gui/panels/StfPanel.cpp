@@ -66,7 +66,7 @@ void StfPanel::render() {
         if (ImGui::CollapsingHeader("Beam Details")) {
             if (ImGui::BeginTable("BeamTable", 5,
                     ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                    ImGuiTableFlags_ScrollY, ImVec2(0, 200))) {
+                    ImGuiTableFlags_ScrollY, ImVec2(0, 0))) {
 
                 ImGui::TableSetupColumn("Beam");
                 ImGui::TableSetupColumn("Gantry");
@@ -93,6 +93,7 @@ void StfPanel::render() {
             }
         }
 
+
         // ── Beam visibility controls ──
         if (m_beamRenderer && m_beamRenderer->getBeamCount() > 0) {
             ImGui::Spacing();
@@ -108,8 +109,9 @@ void StfPanel::render() {
 
                 ImGui::Separator();
 
-                // Per-beam checkboxes in a scrollable region
-                ImGui::BeginChild("BeamVisScroll", ImVec2(0, 200), true);
+                // Per-beam checkboxes in a scrollable region (fill remaining space)
+                float remainH = ImGui::GetContentRegionAvail().y;
+                ImGui::BeginChild("BeamVisScroll", ImVec2(-1, remainH > 60.0f ? remainH : 200.0f), true);
                 for (size_t i = 0; i < m_beamRenderer->getBeamCount(); ++i) {
                     const auto* beam = m_state.stf->getBeam(i);
                     if (!beam) continue;

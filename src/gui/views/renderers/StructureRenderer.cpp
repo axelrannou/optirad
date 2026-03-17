@@ -563,7 +563,7 @@ void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projectio
         Logger::warn("Mesh/structure count mismatch during render: " + 
                     std::to_string(m_meshes.size()) + " meshes vs " + 
                     std::to_string(structureCount) + " structures. Rebuilding...");
-        buildMeshes();
+        buildMeshes_unlocked();
         if (m_meshes.size() != structureCount) {
             Logger::error("Failed to fix mesh/structure alignment!");
             return;
@@ -585,8 +585,11 @@ void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projectio
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_DEPTH_TEST);
-    glDepthMask(GL_TRUE); // Keep depth writes enabled
-    glDisable(GL_CULL_FACE); // Two-sided rendering
+    // Disable depth writes so transparent fragments don't block fragments behind them.
+    // Depth testing is still active (structures won't draw in front of opaque objects),
+    // but all transparent layers can now composite regardless of nesting depth.
+    glDepthMask(GL_FALSE);
+    glEnable(GL_CULL_FACE); // We'll do two-pass: back faces then front faces per mesh
 
     glUseProgram(m_shaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(m_shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
@@ -597,25 +600,52 @@ void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projectio
     glUniform3fv(glGetUniformLocation(m_shaderProgram, "lightDir2"), 1, glm::value_ptr(lightDir2));
     glUniform1f(glGetUniformLocation(m_shaderProgram, "opacity"), 0.30f);
 
-    // Render all visible meshes
+    // Sort meshes back-to-front by distance from camera for correct alpha compositing.
+    // Transform each mesh center by the model matrix (the -90° rotation) before computing distance.
+    std::vector<size_t> sortedIndices;
+    sortedIndices.reserve(m_meshes.size());
     for (size_t i = 0; i < m_meshes.size(); ++i) {
-        // Skip empty meshes
         if (m_meshes[i].indexCount == 0) continue;
-        
-        // Check visibility
         const auto* structure = structures->getStructure(i);
         if (!structure || !structure->isVisible()) continue;
-        
-        const auto& mesh = m_meshes[i];
-        glUniform3fv(glGetUniformLocation(m_shaderProgram, "structureColor"), 1, glm::value_ptr(mesh.color));
+        sortedIndices.push_back(i);
+    }
+    std::stable_sort(sortedIndices.begin(), sortedIndices.end(), [&](size_t a, size_t b) {
+        glm::vec3 ca = glm::vec3(model * glm::vec4(m_meshes[a].center, 1.0f));
+        glm::vec3 cb = glm::vec3(model * glm::vec4(m_meshes[b].center, 1.0f));
+        float da = glm::length(ca - viewPos);
+        float db = glm::length(cb - viewPos);
+        // Use epsilon to avoid flickering when centers are nearly equidistant
+        float eps = 1e-4f;
+        if (std::abs(da - db) < eps) return a < b; // stable tiebreaker by index
+        return da > db; // back-to-front: farthest first
+    });
 
+    // Render each visible mesh with two passes:
+    //   Pass 1: back faces (GL_FRONT culled) — renders the far side of each shell
+    //   Pass 2: front faces (GL_BACK culled) — renders the near side
+    // This ensures correct see-through for nested convex structures.
+    GLint colorLoc = glGetUniformLocation(m_shaderProgram, "structureColor");
+    for (size_t idx : sortedIndices) {
+        const auto& mesh = m_meshes[idx];
+        glUniform3fv(colorLoc, 1, glm::value_ptr(mesh.color));
         glBindVertexArray(mesh.vao);
+
+        // Pass 1: draw back faces
+        glCullFace(GL_FRONT);
+        glDrawElements(GL_TRIANGLES, (GLsizei)mesh.indexCount, GL_UNSIGNED_INT, 0);
+
+        // Pass 2: draw front faces
+        glCullFace(GL_BACK);
         glDrawElements(GL_TRIANGLES, (GLsizei)mesh.indexCount, GL_UNSIGNED_INT, 0);
     }
 
     glBindVertexArray(0);
     glUseProgram(0);
+    // Restore GL state for subsequent renderers
+    glDepthMask(GL_TRUE);
     glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
     glDisable(GL_BLEND);
 }
 

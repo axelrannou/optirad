@@ -31,8 +31,16 @@ public:
 
 private:
     void renderMenuBar();
+    void render3DViewWindow();
+    void setupDockLayout();
     
     GLFWwindow* m_window = nullptr;
+    
+    // DPI scale factor
+    float m_dpiScale = 1.0f;
+    
+    // Layout state
+    bool m_layoutInitialized = false;
     
     // Shared state
     GuiAppState m_appState;
