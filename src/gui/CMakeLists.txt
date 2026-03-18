@@ -33,6 +33,8 @@ target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
 # GUI library
 add_library(optirad_gui
     Application.cpp
+    Theme.cpp
+    stb_image_impl.cpp
     Window.cpp
     Renderer.cpp
     panels/PatientPanel.cpp
@@ -55,6 +57,7 @@ add_library(optirad_gui
 )
 
 target_include_directories(optirad_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(optirad_gui PRIVATE ${CMAKE_SOURCE_DIR}/external)
 
 target_link_libraries(optirad_gui PUBLIC
     optirad_core
@@ -70,6 +73,8 @@ target_link_libraries(optirad_gui PUBLIC
 
 # Make OPTIRAD_DATA_DIR available for file browser default path
 target_compile_definitions(optirad_gui PRIVATE OPTIRAD_DATA_DIR="${OPTIRAD_DATA_DIR}")
+# Path to gui image assets (theme icon, logos)
+target_compile_definitions(optirad_gui PRIVATE OPTIRAD_GUI_IMG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/img")
 
 # OpenMP (needed for header-only steering module used by StfPanel)
 find_package(OpenMP QUIET)

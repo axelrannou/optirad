@@ -3,9 +3,11 @@
 #include "Window.hpp"
 #include "Renderer.hpp"
 #include "AppState.hpp"
+#include "Theme.hpp"
 #include "panels/IPanel.hpp"
 #include <vector>
 #include <memory>
+#include <string>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
@@ -33,12 +35,18 @@ private:
     void renderMenuBar();
     void render3DViewWindow();
     void setupDockLayout();
+    /// Load a PNG file into an OpenGL RGBA texture. Returns false on failure.
+    static bool loadTexture(const std::string& path, GLuint* outTexture);
     
     GLFWwindow* m_window = nullptr;
     
     // DPI scale factor
     float m_dpiScale = 1.0f;
-    
+
+    // Theme
+    AppTheme m_theme = AppTheme::Dark;
+    GLuint m_themeIconTexture = 0;
+
     // Layout state
     bool m_layoutInitialized = false;
     

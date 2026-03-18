@@ -1,4 +1,6 @@
 #include "Application.hpp"
+#include "Theme.hpp"
+#include "../../external/stb_image.h"
 #include "panels/PatientPanel.hpp"
 #include "panels/PlanningPanel.hpp"
 #include "panels/StfPanel.hpp"
@@ -19,6 +21,29 @@ namespace optirad {
 
 Application::Application() = default;
 Application::~Application() = default;
+
+bool Application::loadTexture(const std::string& path, GLuint* outTexture) {
+    int w, h, channels;
+    stbi_set_flip_vertically_on_load(false);
+    unsigned char* pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
+    if (!pixels) {
+        Logger::error("loadTexture: failed to load '" + path + "': " +
+                      std::string(stbi_failure_reason()));
+        return false;
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    stbi_image_free(pixels);
+    *outTexture = tex;
+    return true;
+}
 
 bool Application::init() {
     // Initialize GLFW
@@ -66,8 +91,9 @@ bool Application::init() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     
-    ImGui::StyleColorsDark();
-    
+    // Apply initial dark theme
+    applyTheme(m_theme);
+
     // DPI scaling
     // On Linux/X11, glfwGetWindowContentScale often returns the desktop scale
     // factor (e.g. 2.0 on 4K) but the framebuffer is already at native resolution,
@@ -111,9 +137,13 @@ bool Application::init() {
         return false;
     }
     
+    // Load theme toggle icon
+    loadTexture(OPTIRAD_GUI_IMG_DIR "/day-and-night.png", &m_themeIconTexture);
+
     // Create 3D view
     m_view3D = std::make_unique<View3D>();
     m_view3D->init();
+    m_view3D->setDarkMode(m_theme == AppTheme::Dark);
     
     // Create panels
     m_patientPanel = std::make_unique<PatientPanel>();
@@ -247,6 +277,9 @@ void Application::run() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+
+        // Re-apply theme every frame (ImGui immediate-mode best practice)
+        applyTheme(m_theme);
         
         // Create fullscreen dockspace host window
         ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -358,6 +391,10 @@ void Application::shutdown() {
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
     
+    if (m_themeIconTexture) {
+        glDeleteTextures(1, &m_themeIconTexture);
+        m_themeIconTexture = 0;
+    }
     if (m_window) {
         glfwDestroyWindow(m_window);
     }
@@ -420,7 +457,36 @@ void Application::renderMenuBar() {
             
             ImGui::EndMenu();
         }
-        
+
+        // --- Theme toggle (after separator, right side of menu bar) ---
+        ImGui::Separator();
+
+        // Draw the icon button
+        ImVec2 iconSize(20.0f * m_dpiScale, 20.0f * m_dpiScale);
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.3f, 0.3f, 0.4f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.5f, 0.5f, 0.5f, 0.4f));
+        if (m_themeIconTexture) {
+            if (ImGui::ImageButton("##themeToggle",
+                    reinterpret_cast<void*>(static_cast<intptr_t>(m_themeIconTexture)),
+                    iconSize)) {
+                m_theme = (m_theme == AppTheme::Dark) ? AppTheme::Light : AppTheme::Dark;
+                applyTheme(m_theme);
+                m_view3D->setDarkMode(m_theme == AppTheme::Dark);
+            }
+        } else {
+            // Fallback text button if icon didn't load
+            if (ImGui::Button(m_theme == AppTheme::Dark ? "Light" : "Dark")) {
+                m_theme = (m_theme == AppTheme::Dark) ? AppTheme::Light : AppTheme::Dark;
+                applyTheme(m_theme);
+                m_view3D->setDarkMode(m_theme == AppTheme::Dark);
+            }
+        }
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s mode", m_theme == AppTheme::Dark ? "Switch to Light" : "Switch to Dark");
+        }
+
         ImGui::EndMenuBar();
     }
 }
