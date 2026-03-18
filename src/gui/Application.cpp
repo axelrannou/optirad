@@ -89,7 +89,7 @@ bool Application::init() {
     m_dpiScale = xscale;
     
     // Use a clean, readable font size
-    float fontSize = 13.0f * m_dpiScale;
+    float fontSize = 20.0f * m_dpiScale;
     ImFontConfig fontConfig;
     fontConfig.SizePixels = fontSize;
     io.Fonts->AddFontDefault(&fontConfig);
@@ -145,9 +145,9 @@ void Application::setupDockLayout() {
     ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->WorkSize);
     ImGui::DockBuilderSetNodePos(dockspace_id, viewport->WorkPos);
     
-    // Split: left 30% for sidebars | right 70% for views + bottom
+    // Split: left 35% for sidebars | right 65% for views + bottom
     ImGuiID leftNode, rightNode;
-    ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.30f, &leftNode, &rightNode);
+    ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.35f, &leftNode, &rightNode);
     
     // Split left into two sidebars: sidebar1 (50% of left = 15%) | sidebar2 (50% of left = 15%)
     ImGuiID sidebar1Node, sidebar2Node;
@@ -170,9 +170,9 @@ void Application::setupDockLayout() {
     ImGuiID view3dNode, coronalNode;
     ImGui::DockBuilderSplitNode(bottomRow, ImGuiDir_Left, 0.50f, &view3dNode, &coronalNode);
     
-    // Split sidebar1 vertically: Patient (top 35%) | Planning (bottom 65%)
+    // Split sidebar1 vertically: Patient (top 40%) | Planning (bottom 60%)
     ImGuiID sidebar1Top, sidebar1Bottom;
-    ImGui::DockBuilderSplitNode(sidebar1Node, ImGuiDir_Down, 0.65f, &sidebar1Bottom, &sidebar1Top);
+    ImGui::DockBuilderSplitNode(sidebar1Node, ImGuiDir_Down, 0.60f, &sidebar1Bottom, &sidebar1Top);
     
     // Split sidebar2 vertically: STF (top 40%) | Optimization (bottom 60%)
     ImGuiID sidebar2Top, sidebar2Bottom;

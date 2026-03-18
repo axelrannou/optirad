@@ -14,7 +14,7 @@ endif()
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/external/imgui)
 if(NOT EXISTS ${IMGUI_DIR}/imgui.h)
     message(WARNING "Dear ImGui not found at ${IMGUI_DIR}")
-    message(STATUS "To download: cd ${CMAKE_SOURCE_DIR}/external && git clone https://github.com/ocornut/imgui.git")
+    message(STATUS "To download: cd ${CMAKE_SOURCE_DIR}/external && git clone --branch docking --single-branch https://github.com/ocornut/imgui.git")
     return()
 endif()
 

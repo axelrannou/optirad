@@ -182,7 +182,7 @@ void OptimizationPanel::render() {
     // ── Optimizer settings ──
     ImGui::Spacing();
     if (m_isOptimizing) ImGui::BeginDisabled();
-    if (ImGui::CollapsingHeader("Optimizer Settings")) {
+    if (ImGui::CollapsingHeader("Optimizer Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::InputInt("Max Iterations", &m_maxIterations);
         if (m_maxIterations < 1) m_maxIterations = 1;
         ImGui::InputFloat("Tolerance", &m_tolerance, 1e-7f, 1e-4f, "%.7f");
