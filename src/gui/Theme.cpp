@@ -24,7 +24,13 @@ static constexpr ImVec4 kLightBorder  = {0.75f, 0.75f, 0.75f, 1.00f};
 static constexpr ImVec4 kBlackText    = {0.00f, 0.00f, 0.00f, 1.00f};
 static constexpr ImVec4 kDarkGrayText = {0.20f, 0.20f, 0.20f, 1.00f};
 
-// -----------------------------------------------------------------------
+// --- Specific theme colors -----------------------------------------------
+
+static ThemeColors g_colors;
+
+const ThemeColors& getThemeColors() {
+    return g_colors;
+}
 
 void applyTheme(AppTheme theme) {
     ImGuiStyle& s = ImGui::GetStyle();
@@ -46,6 +52,16 @@ void applyTheme(AppTheme theme) {
         c[ImGuiCol_Text]                  = kWhite;
         c[ImGuiCol_TextDisabled]          = kWhiteDim;
 
+        // Text status
+        g_colors.passText = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+        g_colors.failText = ImVec4(1.0f, 0.2f, 0.2f, 1.0f);
+        g_colors.warningText = ImVec4(1.0f, 1.0f, 0.4f, 1.0f);
+        g_colors.progressText = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
+
+        // Generic, phase space specific colours
+        g_colors.phaseSpace = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);
+        g_colors.generic    = ImVec4(0.8f, 0.8f, 0.5f, 1.0f);
+
         // Windows / containers
         c[ImGuiCol_WindowBg]              = kBlack;
         c[ImGuiCol_ChildBg]               = kBlackBg;
@@ -56,7 +72,7 @@ void applyTheme(AppTheme theme) {
         c[ImGuiCol_BorderShadow]          = kBlack;
 
         // Frames (InputText, Combo, etc.)
-        c[ImGuiCol_FrameBg]               = kMarine;
+        c[ImGuiCol_FrameBg]               = kMarineDark;
         c[ImGuiCol_FrameBgHovered]        = kMarineHov;
         c[ImGuiCol_FrameBgActive]         = kMarineAct;
 
@@ -115,7 +131,7 @@ void applyTheme(AppTheme theme) {
         // Plot
         c[ImGuiCol_PlotLines]             = kWhiteDim;
         c[ImGuiCol_PlotLinesHovered]      = kWhite;
-        c[ImGuiCol_PlotHistogram]         = kMarine;
+        c[ImGuiCol_PlotHistogram]         = kMarineHov;
         c[ImGuiCol_PlotHistogramHovered]  = kMarineHov;
 
         // Table
@@ -126,7 +142,7 @@ void applyTheme(AppTheme theme) {
         c[ImGuiCol_TableRowBgAlt]         = {1.00f, 1.00f, 1.00f, 0.05f};
 
         // Text selected / drag-drop
-        c[ImGuiCol_TextSelectedBg]        = {kMarine.x, kMarine.y, kMarine.z, 0.60f};
+        c[ImGuiCol_TextSelectedBg]        = kMarineHov;
         c[ImGuiCol_DragDropTarget]        = kMarineHov;
 
         // Modal / nav
@@ -139,6 +155,17 @@ void applyTheme(AppTheme theme) {
         // Text
         c[ImGuiCol_Text]                  = kBlackText;
         c[ImGuiCol_TextDisabled]          = kDarkGrayText;
+
+        // Text status same as dark but more saturated
+        g_colors.passText = ImVec4(0.0f, 0.8f, 0.0f, 1.0f);
+        g_colors.failText = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
+        g_colors.warningText = ImVec4(0.8f, 0.8f, 0.0f, 1.0f);
+        // brighter yellow but more saturated than dark theme for better visibility on light bg
+        g_colors.progressText = ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
+
+        // Generic, phase space specific colours
+        g_colors.phaseSpace = ImVec4(0.1f, 0.4f, 0.8f, 1.0f);
+        g_colors.generic    = ImVec4(0.5f, 0.5f, 0.1f, 1.0f);
 
         // Windows / containers
         c[ImGuiCol_WindowBg]              = kLightBg;

@@ -200,13 +200,13 @@ void Application::setupDockLayout() {
     ImGuiID view3dNode, coronalNode;
     ImGui::DockBuilderSplitNode(bottomRow, ImGuiDir_Left, 0.50f, &view3dNode, &coronalNode);
     
-    // Split sidebar1 vertically: Patient (top 40%) | Planning (bottom 60%)
+    // Split sidebar1 vertically: Patient (top 35%) | Planning (bottom 65%)
     ImGuiID sidebar1Top, sidebar1Bottom;
-    ImGui::DockBuilderSplitNode(sidebar1Node, ImGuiDir_Down, 0.60f, &sidebar1Bottom, &sidebar1Top);
+    ImGui::DockBuilderSplitNode(sidebar1Node, ImGuiDir_Down, 0.65f, &sidebar1Bottom, &sidebar1Top);
     
-    // Split sidebar2 vertically: STF (top 40%) | Optimization (bottom 60%)
+    // Split sidebar2 vertically: STF (top 35%) | Optimization (bottom 65%)
     ImGuiID sidebar2Top, sidebar2Bottom;
-    ImGui::DockBuilderSplitNode(sidebar2Node, ImGuiDir_Down, 0.60f, &sidebar2Bottom, &sidebar2Top);
+    ImGui::DockBuilderSplitNode(sidebar2Node, ImGuiDir_Down, 0.65f, &sidebar2Bottom, &sidebar2Top);
     
     // Dock windows into nodes
     // Sidebar 1: Patient (top) + Planning (bottom)
