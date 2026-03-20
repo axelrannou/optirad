@@ -49,6 +49,7 @@ private:
 
     // Layout state
     bool m_layoutInitialized = false;
+    bool m_view3DVisible = true;
     
     // Shared state
     GuiAppState m_appState;

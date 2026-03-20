@@ -355,7 +355,11 @@ void Application::run() {
 
 void Application::render3DViewWindow() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::Begin("3D View");
+    if (!m_view3DVisible) {
+        ImGui::PopStyleVar();
+        return;
+    }
+    ImGui::Begin("3D View", &m_view3DVisible);
     ImGui::PopStyleVar();
     
     ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -444,6 +448,28 @@ void Application::renderMenuBar() {
             bool doseVis = m_doseStatsPanel->isVisible();
             if (ImGui::MenuItem("Dose Statistics", nullptr, &doseVis)) {
                 m_doseStatsPanel->setVisible(doseVis);
+            }
+            
+            ImGui::Separator();
+            
+            bool axialVis = m_axialView->isVisible();
+            if (ImGui::MenuItem("Axial View", nullptr, &axialVis)) {
+                m_axialView->setVisible(axialVis);
+            }
+            
+            bool sagVis = m_sagittalView->isVisible();
+            if (ImGui::MenuItem("Sagittal View", nullptr, &sagVis)) {
+                m_sagittalView->setVisible(sagVis);
+            }
+            
+            bool corVis = m_coronalView->isVisible();
+            if (ImGui::MenuItem("Coronal View", nullptr, &corVis)) {
+                m_coronalView->setVisible(corVis);
+            }
+            
+            bool view3DVis = m_view3DVisible;
+            if (ImGui::MenuItem("3D View", nullptr, &view3DVis)) {
+                m_view3DVisible = view3DVis;
             }
             
             ImGui::Separator();

@@ -86,8 +86,10 @@ void SliceView::setSliceIndex(size_t index) {
 }
 
 void SliceView::render() {
+    if (!m_visible) return;
+
     std::string name = getName();
-    ImGui::Begin(name.c_str());
+    ImGui::Begin(name.c_str(), &m_visible);
     
     if (!m_patientData || !m_patientData->getCTVolume()) {
         ImGui::TextDisabled("No CT data loaded");

@@ -51,6 +51,7 @@ void applyTheme(AppTheme theme) {
         // Text
         c[ImGuiCol_Text]                  = kWhite;
         c[ImGuiCol_TextDisabled]          = kWhiteDim;
+        c[ImGuiCol_InputTextCursor] = kWhite;
 
         // Text status
         g_colors.passText = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
@@ -155,6 +156,7 @@ void applyTheme(AppTheme theme) {
         // Text
         c[ImGuiCol_Text]                  = kBlackText;
         c[ImGuiCol_TextDisabled]          = kDarkGrayText;
+        c[ImGuiCol_InputTextCursor] = kBlackText;
 
         // Text status same as dark but more saturated
         g_colors.passText = ImVec4(0.0f, 0.8f, 0.0f, 1.0f);

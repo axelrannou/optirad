@@ -58,7 +58,6 @@ struct AppState {
 };
 
 // Forward declarations
-int generateStf(const std::vector<std::string>& args, AppState& state);
 int loadPhaseSpace(const std::vector<std::string>& args, AppState& state);
 int doseCalc(const std::vector<std::string>& args, AppState& state);
 int optimize(const std::vector<std::string>& args, AppState& state);
@@ -68,9 +67,8 @@ void printUsage(const char* progName) {
     std::cout << "Usage: " << progName << " <command> [options]\n\n"
               << "Commands:\n"
               << "  load <dicom_dir>                Load and inspect DICOM directory\n"
-              << "  plan [options]                   Generate a treatment plan (requires DICOM data first)\n"
-              << "  generateStf                      Generate STF properties (Generic machines only)\n"
-              << "  doseCalc [options]               Calculate Dij (requires STF)\n"
+              << "  plan [options]                   Generate a treatment plan and STF (requires DICOM data first)\n"
+              << "  doseCalc [options]               Calculate Dij (requires plan)\n"
               << "  optimize [options]               Run optimization (requires Dij)\n"
               << "  loadPhaseSpace [options]          Load phase-space beam source (phase-space machines only)\n"
               << "  interactive                      Enter interactive mode\n"
@@ -326,6 +324,41 @@ int createPlan(const std::vector<std::string>& args, AppState& state) {
     // Print summary
     plan->printSummary();
 
+    // Automatically generate STF for generic (non-phase-space) machines
+    if (!plan->getMachine().isPhaseSpace()) {
+        std::cout << "\nGenerating STF...\n";
+
+        const auto& stfPropsRef = plan->getStfProperties();
+        std::array<double, 3> isoRef = {0.0, 0.0, 0.0};
+        if (!stfPropsRef.isoCenters.empty()) {
+            isoRef = stfPropsRef.isoCenters[0];
+        }
+
+        PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, stfPropsRef.bixelWidth, isoRef);
+        generator.setMachine(plan->getMachine());
+        generator.setRadiationMode(plan->getRadiationMode());
+        generator.setGantryAngles(stfPropsRef.gantryAngles);
+        generator.setCouchAngles(stfPropsRef.couchAngles);
+
+        auto patientData = plan->getPatientData();
+        if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
+            const auto* ct = patientData->getCTVolume();
+            const auto* structureSet = patientData->getStructureSet();
+            const auto& grid = ct->getGrid();
+
+            generator.setGrid(grid);
+            generator.setStructureSet(*structureSet);
+            generator.setCTResolution(grid.getSpacing());
+        }
+
+        state.stfProps = generator.generate();
+        state.stf = std::make_shared<Stf>(generator.generateStf());
+
+        state.stf->printSummary();
+    } else {
+        std::cout << "\nPhase-space machine: use 'loadPhaseSpace' to build beam sources.\n";
+    }
+
     return 0;
 }
 
@@ -353,10 +386,9 @@ int runInteractive(AppState& state) {
         } else if (cmd == "help") {
             std::cout << "Commands:\n"
                       << "  load <dicom_dir>              Load DICOM data\n"
-                      << "  plan [options]                Create treatment plan (requires DICOM data)\n"
+                      << "  plan [options]                Create treatment plan and generate STF (requires DICOM data)\n"
                       << "  plan-help                     Show plan options and examples\n"
-                      << "  generateStf                   Generate STF from plan (Generic machines only)\n"
-                      << "  doseCalc [options]            Calculate Dij (requires STF)\n"
+                      << "  doseCalc [options]            Calculate Dij (requires plan)\n"
                       << "  optimize [options]            Run optimization (requires Dij)\n"
                       << "  loadPhaseSpace [options]       Load phase-space beam source (PSF machines only)\n"
                       << "  phsp-info                     Show phase-space source metrics\n"
@@ -400,9 +432,6 @@ int runInteractive(AppState& state) {
                       << "  plan --gantry-step 4 --couch-start -5 --couch-step 5 --couch-stop 10\n"
                       << "    -> 90 gantry x 3 couch = 270 beams\n"
                       << "=============================\n";
-        } else if (cmd == "generateStf") {
-            std::vector<std::string> stfArgs(tokens.begin() + 1, tokens.end());
-            generateStf(stfArgs, state);
         } else if (cmd == "loadPhaseSpace") {
             std::vector<std::string> phspArgs(tokens.begin() + 1, tokens.end());
             loadPhaseSpace(phspArgs, state);
@@ -452,7 +481,8 @@ int runInteractive(AppState& state) {
             } else if (state.plan) {
                 std::cout << "\nPlan Details:\n";
                 state.plan->printSummary();
-                std::cout << "\nTo proceed: use 'generateStf' to generate STF from this plan\n";
+                std::cout << "\nTo proceed: use 'loadPhaseSpace' for phase-space machines,\n";
+                std::cout << "             or check why STF was not generated\n";
             } else if (state.patientData) {
                 std::cout << "\nTo proceed: use 'plan [options]' to generate a treatment plan\n";
                 std::cout << "             or 'plan-help' to see available options\n";
@@ -980,9 +1010,8 @@ int main(int argc, char* argv[]) {
     }
 
     if (command == "generateStf") {
-        std::vector<std::string> stfArgs;
-        for (int i = 2; i < argc; ++i) stfArgs.emplace_back(argv[i]);
-        return generateStf(stfArgs, state);
+        std::cerr << "Error: 'generateStf' has been merged into 'plan'. STF is now generated automatically.\n";
+        return 1;
     }
 
     if (command == "interactive") {

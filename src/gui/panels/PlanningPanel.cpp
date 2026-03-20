@@ -266,106 +266,78 @@ void PlanningPanel::render() {
 
         Logger::info("Plan created: " + std::to_string(stfProps.numOfBeams) +
             " beams, bixelWidth=" + std::to_string(m_bixelWidth) + "mm");
+
+        // Automatically generate STF for generic (non-phase-space) machines
+        if (!kIsPhaseSpace[m_machineIdx]) {
+            m_state.resetStf();
+            m_isGeneratingStf = true;
+            m_stfGenerationDone = false;
+
+            m_stfThread = std::thread([this]() {
+                auto start = std::chrono::steady_clock::now();
+
+                const auto& stfP = m_state.plan->getStfProperties();
+                std::string radiationMode = m_state.plan->getRadiationMode();
+
+                std::array<double, 3> iso = {0.0, 0.0, 0.0};
+                if (!stfP.isoCenters.empty()) {
+                    iso = stfP.isoCenters[0];
+                }
+
+                double bixelWidth = stfP.bixelWidth;
+
+                PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, bixelWidth, iso);
+                generator.setMachine(m_state.plan->getMachine());
+                generator.setRadiationMode(radiationMode);
+                generator.setGantryAngles(stfP.gantryAngles);
+                generator.setCouchAngles(stfP.couchAngles);
+
+                auto patientData = m_state.plan->getPatientData();
+                if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
+                    const auto* ct = patientData->getCTVolume();
+                    const auto* structureSet = patientData->getStructureSet();
+                    const auto& grid = ct->getGrid();
+
+                    generator.setGrid(grid);
+                    generator.setStructureSet(*structureSet);
+                    generator.setCTResolution(grid.getSpacing());
+                }
+
+                m_state.stfProps = generator.generate();
+                m_state.stf = std::make_shared<Stf>(generator.generateStf());
+
+                auto end = std::chrono::steady_clock::now();
+                double elapsed = std::chrono::duration<double>(end - start).count();
+                m_stfStatusMessage = "STF generated in " + std::to_string(elapsed).substr(0, 5) + "s";
+
+                m_stfGenerationDone = true;
+            });
+        }
     }
 
     if (!paramsValid) ImGui::EndDisabled();
 
+    // Handle async STF generation completion
+    if (m_isGeneratingStf) {
+        ImGui::TextColored(getThemeColors().progressText, "Creating plan...");
+        ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(-1, 0));
+
+        if (m_stfGenerationDone) {
+            m_stfThread.join();
+            m_isGeneratingStf = false;
+            m_stfGenerationDone = false;
+        }
+    }
+
     // Show plan status
     if (m_state.planCreated()) {
         ImGui::Spacing();
-        ImGui::TextColored(getThemeColors().passText, "Plan created.");
-
-        const auto& stfProps = m_state.plan->getStfProperties();
-        ImGui::Text("  Beams: %zu", stfProps.gantryAngles.size());
-        ImGui::Text("  Iso: (%.1f, %.1f, %.1f) mm",
-                    stfProps.isoCenters[0][0],
-                    stfProps.isoCenters[0][1],
-                    stfProps.isoCenters[0][2]);
-    }
-
-    // ── Generate STF ──
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    if (ImGui::CollapsingHeader("STF Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
-        bool canGenerateStf = m_state.planCreated() &&
-                              !m_state.isPhaseSpaceMachine();
-
-        if (!m_state.planCreated()) {
-            ImGui::TextDisabled("Create a plan first to generate STF.");
-        } else if (m_state.isPhaseSpaceMachine()) {
+        if (m_state.isPhaseSpaceMachine()) {
+            ImGui::TextColored(getThemeColors().passText, "Plan created.");
             ImGui::TextColored(getThemeColors().phaseSpace,
-                "Phase-space machine: use the Phase Space panel instead.");
-        }
-
-        if (m_isGeneratingStf) {
-            ImGui::TextColored(getThemeColors().progressText, "Generating STF...");
-            ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(-1, 0));
-
-            if (m_stfGenerationDone) {
-                m_stfThread.join();
-                m_isGeneratingStf = false;
-                m_stfGenerationDone = false;
-                Logger::info("STF generation complete");
-            }
-        } else {
-            if (!canGenerateStf) ImGui::BeginDisabled();
-
-            if (ImGui::Button("Generate STF", ImVec2(-1, 30))) {
-                m_state.resetStf();
-                m_isGeneratingStf = true;
-                m_stfGenerationDone = false;
-
-                m_stfThread = std::thread([this]() {
-                    auto start = std::chrono::steady_clock::now();
-
-                    const auto& stfP = m_state.plan->getStfProperties();
-                    std::string radiationMode = m_state.plan->getRadiationMode();
-
-                    std::array<double, 3> iso = {0.0, 0.0, 0.0};
-                    if (!stfP.isoCenters.empty()) {
-                        iso = stfP.isoCenters[0];
-                    }
-
-                    double bixelWidth = stfP.bixelWidth;
-
-                    // Pass pre-expanded paired gantry/couch lists directly.
-                    // StfProperties already performed Cartesian product expansion,
-                    // so we avoid re-inferring start/step/stop.
-                    PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, bixelWidth, iso);
-                    generator.setMachine(m_state.plan->getMachine());
-                    generator.setRadiationMode(radiationMode);
-                    generator.setGantryAngles(stfP.gantryAngles);
-                    generator.setCouchAngles(stfP.couchAngles);
-
-                    auto patientData = m_state.plan->getPatientData();
-                    if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
-                        const auto* ct = patientData->getCTVolume();
-                        const auto* structureSet = patientData->getStructureSet();
-                        const auto& grid = ct->getGrid();
-
-                        generator.setGrid(grid);
-                        generator.setStructureSet(*structureSet);
-                        generator.setCTResolution(grid.getSpacing());
-                    }
-
-                    m_state.stfProps = generator.generate();
-                    m_state.stf = std::make_shared<Stf>(generator.generateStf());
-
-                    auto end = std::chrono::steady_clock::now();
-                    double elapsed = std::chrono::duration<double>(end - start).count();
-                    m_stfStatusMessage = "Generated in " + std::to_string(elapsed).substr(0, 5) + "s";
-
-                    m_stfGenerationDone = true;
-                });
-            }
-
-            if (!canGenerateStf) ImGui::EndDisabled();
-        }
-
-        // Show STF status
-        if (m_state.stfGenerated()) {
+                "Phase-space machine: use the Phase Space panel to load beam data.");
+        } else if (m_state.stfGenerated()) {
+            ImGui::TextColored(getThemeColors().passText, "Plan created.");
             if (!m_stfStatusMessage.empty()) {
                 ImGui::TextColored(getThemeColors().passText, "%s", m_stfStatusMessage.c_str());
             }
@@ -373,7 +345,16 @@ void PlanningPanel::render() {
                         m_state.stf->getCount(),
                         m_state.stf->getTotalNumOfRays(),
                         m_state.stf->getTotalNumOfBixels());
-        }
+        } //else {
+        //     ImGui::TextColored(getThemeColors().passText, "Plan created.");
+        // }
+
+        const auto& stfProps = m_state.plan->getStfProperties();
+        ImGui::Text("  Beams: %zu", stfProps.gantryAngles.size());
+        ImGui::Text("  Iso: (%.1f, %.1f, %.1f) mm",
+                    stfProps.isoCenters[0][0],
+                    stfProps.isoCenters[0][1],
+                    stfProps.isoCenters[0][2]);
     }
 
     // ── Dose Calculation ──
@@ -385,7 +366,7 @@ void PlanningPanel::render() {
         bool canCalcDose = m_state.stfGenerated() && !m_state.isPhaseSpaceMachine();
 
         if (!m_state.stfGenerated()) {
-            ImGui::TextDisabled("Generate STF first to calculate dose.");
+            ImGui::TextDisabled("Create plan first to calculate dose.");
         }
 
         // Dose grid resolution

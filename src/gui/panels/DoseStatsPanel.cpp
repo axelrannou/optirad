@@ -21,7 +21,7 @@ void DoseStatsPanel::computeStats() {
 
     // Compute DVH curves
     double maxDose = m_state.doseResult->getMax();
-    m_dvhMaxDose = static_cast<float>(std::ceil(maxDose / 10.0) * 10.0);
+    m_dvhMaxDose = static_cast<float>(maxDose);
     m_dvhCurves = PlanAnalysis::computeDVHCurves(m_stats, m_dvhMaxDose);
 
     // Initialize visibility flags

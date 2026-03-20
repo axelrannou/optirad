@@ -17,7 +17,9 @@ PatientPanel::PatientPanel() {
 }
 
 void PatientPanel::render() {
-    ImGui::Begin("Patient Data");
+    if (!m_visible) return;
+
+    ImGui::Begin("Patient Data", &m_visible);
     
     // Import button
     if (ImGui::Button("Import DICOM Directory", ImVec2(-1, 0))) {

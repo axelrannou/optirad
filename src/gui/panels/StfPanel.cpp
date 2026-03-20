@@ -14,9 +14,9 @@ void StfPanel::render() {
 
     ImGui::Begin("STF Generation", &m_visible);
 
-    // Gate: need plan first
-    if (!m_state.planCreated()) {
-        ImGui::TextDisabled("Create a plan first in the Planning panel.");
+    // Gate: need STF data
+    if (!m_state.stfGenerated()) {
+        ImGui::TextDisabled("Create a plan first (STF is generated automatically).");
         ImGui::End();
         return;
     }
@@ -45,9 +45,6 @@ void StfPanel::render() {
     ImGui::Spacing();
 
     // ── Show STF results ──
-    if (!m_state.stfGenerated()) {
-        ImGui::TextDisabled("Generate STF from the Planning panel.");
-    }
     if (m_state.stfGenerated()) {
         ImGui::Spacing();
         ImGui::Separator();
