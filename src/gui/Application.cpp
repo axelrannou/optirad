@@ -468,6 +468,11 @@ void Application::renderMenuBar() {
             if (ImGui::MenuItem("Dose Statistics", nullptr, &doseVis)) {
                 m_doseStatsPanel->setVisible(doseVis);
             }
+
+            bool dvhVis = m_dvhPanel->isVisible();
+            if (ImGui::MenuItem("DVH", nullptr, &dvhVis)) {
+                m_dvhPanel->setVisible(dvhVis);
+            }
             
             ImGui::Separator();
             
@@ -495,6 +500,18 @@ void Application::renderMenuBar() {
             
             if (ImGui::MenuItem("Reset Layout")) {
                 m_layoutInitialized = false;
+                //make all panels visible again
+                m_patientPanel->setVisible(true);
+                m_planningPanel->setVisible(true);
+                m_stfPanel->setVisible(true);
+                m_phaseSpacePanel->setVisible(false);
+                m_optimizationPanel->setVisible(true);
+                m_doseStatsPanel->setVisible(true);
+                m_dvhPanel->setVisible(true);
+                m_axialView->setVisible(true);
+                m_sagittalView->setVisible(true);
+                m_coronalView->setVisible(true);
+                m_view3DVisible = true;
                 // Force rebuild on next frame by removing the existing node
                 ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
                 ImGui::DockBuilderRemoveNode(dockspace_id);

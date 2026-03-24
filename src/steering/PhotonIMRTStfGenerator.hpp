@@ -252,15 +252,12 @@ private:
         worldCoords.reserve(expandedIndices.size());
 
         for (size_t voxelIdx : expandedIndices) {
-            if (voxelIdx == 0 || voxelIdx > totalVoxels) continue;
-
-            // Convert 1-based index to 0-based
-            size_t idx0 = voxelIdx - 1;
+            if (voxelIdx >= totalVoxels) continue;
 
             // Column-major: index = row + col*ny + slice*ny*nx
-            size_t row   = idx0 % dims[0];
-            size_t col   = (idx0 / dims[0]) % dims[1];
-            size_t slice = idx0 / (dims[0] * dims[1]);
+            size_t row   = voxelIdx % dims[0];
+            size_t col   = (voxelIdx / dims[0]) % dims[1];
+            size_t slice = voxelIdx / (dims[0] * dims[1]);
 
             Vec3 ijk = {static_cast<double>(row), static_cast<double>(col), static_cast<double>(slice)};
             Vec3 worldPos = m_grid->voxelToPatient(ijk);

@@ -288,8 +288,8 @@ std::vector<size_t> BodyContourGenerator::collectSliceVoxelIndices(const std::ve
                 // The mask uses Volume layout (transposed from DICOM row-major).
                 // Volume::at(row, col) = DICOM(DICOM_row=col, DICOM_col=row)
                 // Flat index must use DICOM order: i + j * nRows where i=DICOM_row, j=DICOM_col
-                // Therefore: voxelIdx = col + row * nRows + slice * nRows * nCols + 1
-                size_t voxelIdx = col + row * nRows + sliceIdx * sliceStride + 1;
+                // Therefore: voxelIdx = col + row * nRows + slice * nRows * nCols
+                size_t voxelIdx = col + row * nRows + sliceIdx * sliceStride;
                 indices.push_back(voxelIdx);
             }
         }

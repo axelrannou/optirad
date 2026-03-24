@@ -82,20 +82,17 @@ std::array<double, 3> Plan::computeIsoCenter() const {
     
     size_t totalVoxels = dims[0] * dims[1] * dims[2];
     for (size_t voxelIdx : ptvVoxels) {
-        if (voxelIdx == 0 || voxelIdx > totalVoxels) {
+        if (voxelIdx >= totalVoxels) {
             Logger::warn("Plan::computeIsoCenter: voxel index " + std::to_string(voxelIdx) + 
-                        " out of bounds (valid range: 1 to " + std::to_string(totalVoxels) + "), skipping");
+                        " out of bounds (valid range: 0 to " + std::to_string(totalVoxels - 1) + "), skipping");
             continue;
         }
         
-        // Convert 1-based index to 0-based
-        size_t idx0 = voxelIdx - 1;
-        
         // Convert linear index to 3D coordinates (column-major: dims = [ny, nx, nz])
-        // index_0based = i + j*ny + k*ny*nx where i=y-index, j=x-index, k=z-index
-        size_t k = idx0 / (dims[0] * dims[1]);  // z-index (slice)
-        size_t j = (idx0 % (dims[0] * dims[1])) / dims[0];  // x-index (column)
-        size_t i = idx0 % dims[0];  // y-index (row)
+        // index = i + j*ny + k*ny*nx where i=y-index, j=x-index, k=z-index
+        size_t k = voxelIdx / (dims[0] * dims[1]);  // z-index (slice)
+        size_t j = (voxelIdx % (dims[0] * dims[1])) / dims[0];  // x-index (column)
+        size_t i = voxelIdx % dims[0];  // y-index (row)
         
         // Convert to world coordinates using the Grid's transformation
         Vec3 worldPos = grid.voxelToPatient({static_cast<double>(i), static_cast<double>(j), static_cast<double>(k)});

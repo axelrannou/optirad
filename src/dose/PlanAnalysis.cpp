@@ -10,12 +10,15 @@ namespace optirad {
 
 double PlanAnalysis::computeDx(const std::vector<double>& sortedDoses, double percentile) {
     if (sortedDoses.empty()) return 0.0;
+    size_t N = sortedDoses.size();
+    if (N == 1) return sortedDoses[0];
     // Dx% = dose such that x% of the volume receives at least that dose.
-    // In a sorted ascending array, D95 is at index (1-0.95)*N = 0.05*N
-    double frac = 1.0 - percentile / 100.0;
-    size_t idx = static_cast<size_t>(std::floor(frac * sortedDoses.size()));
-    idx = std::min(idx, sortedDoses.size() - 1);
-    return sortedDoses[idx];
+    // Use linear interpolation between ranks (matches MATLAB prctile / numpy percentile).
+    double pos = (1.0 - percentile / 100.0) * static_cast<double>(N - 1);
+    size_t lo = static_cast<size_t>(pos);
+    if (lo >= N - 1) return sortedDoses[N - 1];
+    double frac = pos - static_cast<double>(lo);
+    return sortedDoses[lo] + frac * (sortedDoses[lo + 1] - sortedDoses[lo]);
 }
 
 double PlanAnalysis::computeVx(const std::vector<double>& sortedDoses, double doseThreshold) {
@@ -42,6 +45,16 @@ std::vector<StructureDoseStats> PlanAnalysis::computeStats(
     const double* doseData = dose.data();
     size_t doseSize = dose.size();
 
+    // Dose grid dimensions for bounds checking
+    auto doseDims = doseGrid.getDimensions();
+    double dNx = static_cast<double>(doseDims[0]);
+    double dNy = static_cast<double>(doseDims[1]);
+    double dNz = static_cast<double>(doseDims[2]);
+
+    // CT grid dimensions for index decomposition
+    auto ctDims = ctGrid.getDimensions();
+    size_t ctNx = ctDims[0], ctNy = ctDims[1];
+
     // For CI: count total voxels receiving >= prescribed dose
     size_t totalVoxelsAboveRx = 0;
     {
@@ -54,17 +67,35 @@ std::vector<StructureDoseStats> PlanAnalysis::computeStats(
         const auto* structure = ss->getStructure(si);
         if (!structure || structure->getVoxelIndices().empty()) continue;
 
-        // Map CT-grid voxels → dose-grid voxels
-        auto doseIndices = Grid::mapVoxelIndices(ctGrid, doseGrid, structure->getVoxelIndices());
-        if (doseIndices.empty()) continue;
+        const auto& ctVoxels = structure->getVoxelIndices();
 
-        // Collect dose values
+        // Collect dose values via trilinear interpolation at each CT-voxel center.
+        // This preserves the fine CT-resolution structure boundary instead of
+        // rounding to nearest dose voxel (which dilates the boundary).
         std::vector<double> doseValues;
-        doseValues.reserve(doseIndices.size());
-        for (size_t idx : doseIndices) {
-            if (idx < doseSize) {
-                doseValues.push_back(doseData[idx]);
+        doseValues.reserve(ctVoxels.size());
+        for (size_t idx : ctVoxels) {
+            // Decompose flat CT index to (ix, iy, iz)
+            size_t iz = idx / (ctNx * ctNy);
+            size_t rem = idx % (ctNx * ctNy);
+            size_t iy = rem / ctNx;
+            size_t ix = rem % ctNx;
+
+            // CT voxel center → patient LPS → fractional dose voxel
+            Vec3 lps = ctGrid.voxelToPatient({
+                static_cast<double>(ix),
+                static_cast<double>(iy),
+                static_cast<double>(iz)});
+            Vec3 fijk = doseGrid.patientToVoxel(lps);
+
+            // Skip if outside dose grid (with small margin)
+            if (fijk[0] < -0.5 || fijk[0] > dNx - 0.5 ||
+                fijk[1] < -0.5 || fijk[1] > dNy - 0.5 ||
+                fijk[2] < -0.5 || fijk[2] > dNz - 0.5) {
+                continue;
             }
+
+            doseValues.push_back(dose.interpolateAt(fijk[0], fijk[1], fijk[2]));
         }
         if (doseValues.empty()) continue;
 

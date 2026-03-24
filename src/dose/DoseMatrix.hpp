@@ -17,6 +17,12 @@ public:
     double getMax() const;
     double getMean() const;
 
+    /// Trilinear interpolation at fractional voxel coordinates in the dose grid.
+    /// Returns 0 if the point is outside the grid.
+    double interpolateAt(double fi, double fj, double fk) const;
+
+    const Grid& getGrid() const { return m_grid; }
+
     double* data();
     const double* data() const;
     size_t size() const;
