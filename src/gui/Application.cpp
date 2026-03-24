@@ -7,6 +7,7 @@
 #include "panels/PhaseSpacePanel.hpp"
 #include "panels/OptimizationPanel.hpp"
 #include "panels/DoseStatsPanel.hpp"
+#include "panels/DVHPanel.hpp"
 #include "views/SliceView.hpp"
 #include "views/View3D.hpp"
 #include "views/renderers/PhaseSpaceRenderer.hpp"
@@ -146,12 +147,13 @@ bool Application::init() {
     m_view3D->setDarkMode(m_theme == AppTheme::Dark);
     
     // Create panels
-    m_patientPanel = std::make_unique<PatientPanel>();
+    m_patientPanel = std::make_unique<PatientPanel>(m_appState);
     m_planningPanel = std::make_unique<PlanningPanel>(m_appState);
     m_stfPanel = std::make_unique<StfPanel>(m_appState);
     m_phaseSpacePanel = std::make_unique<PhaseSpacePanel>(m_appState);
     m_optimizationPanel = std::make_unique<OptimizationPanel>(m_appState);
     m_doseStatsPanel = std::make_unique<DoseStatsPanel>(m_appState);
+    m_dvhPanel = std::make_unique<DVHPanel>(m_appState);
     
     // Phase Space panel hidden by default
     m_phaseSpacePanel->setVisible(false);
@@ -225,9 +227,10 @@ void Application::setupDockLayout() {
     ImGui::DockBuilderDockWindow("Sagittal", sagittalNode);
     ImGui::DockBuilderDockWindow("Coronal", coronalNode);
     ImGui::DockBuilderDockWindow("3D View", view3dNode);
+    ImGui::DockBuilderDockWindow("DVH", view3dNode);  // tabbed with 3D View
     
-    // Bottom: Dose Statistics & DVH (tabbed)
-    ImGui::DockBuilderDockWindow("Dose Statistics & DVH", bottomNode);
+    // Bottom: Dose Statistics
+    ImGui::DockBuilderDockWindow("Dose Statistics", bottomNode);
     
     ImGui::DockBuilderFinish(dockspace_id);
 }
@@ -250,6 +253,16 @@ void Application::run() {
             if (!m_appState.dicomLoaded()) {
                 m_appState.patientData = std::shared_ptr<PatientData>(
                     data, [](PatientData*) {});
+
+                // Add imported RT Dose to DoseManager (once)
+                if (!m_importedDoseAdded && data->hasImportedDose()) {
+                    m_appState.doseManager.addDose(
+                        "Imported (DICOM)",
+                        data->getImportedDose(),
+                        data->getImportedDoseGrid());
+                    m_appState.syncSelectedDose();
+                    m_importedDoseAdded = true;
+                }
             }
 
             m_view3D->setPatientData(data);
@@ -325,9 +338,10 @@ void Application::run() {
         }
         m_optimizationPanel->render();
         m_doseStatsPanel->render();
+        m_dvhPanel->render();
         
         // Pass dose data to slice views AFTER panels render
-        if (m_appState.optimizationDone() && m_appState.doseResult && m_appState.doseGrid) {
+        if (m_appState.doseAvailable() && m_appState.doseResult && m_appState.doseGrid) {
             m_axialView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
             m_sagittalView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
             m_coronalView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
@@ -345,6 +359,11 @@ void Application::run() {
         // Render 3D View inside an ImGui window
         render3DViewWindow();
         
+        // Auto-switch to DVH tab when optimization finishes
+        if (m_appState.optimizationJustFinished.exchange(false)) {
+            ImGui::SetWindowFocus("DVH");
+        }
+
         // Finalize ImGui frame
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

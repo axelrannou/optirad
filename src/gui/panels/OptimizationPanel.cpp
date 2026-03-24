@@ -223,19 +223,32 @@ void OptimizationPanel::render() {
             m_optThread.join();
             m_isOptimizing = false;
             m_optimizationDone = false;
+            m_state.taskRunning = false;
 
             // Compute forward dose
             if (!m_state.optimizedWeights.empty()) {
                 try {
                     auto engine = DoseEngineFactory::create("PencilBeam");
-                    auto dose = engine->calculateDose(*m_state.dij, m_state.optimizedWeights, *m_state.doseGrid);
-                    m_state.doseResult = std::make_shared<DoseMatrix>(std::move(dose));
+                    auto dose = engine->calculateDose(*m_state.dij, m_state.optimizedWeights, *m_state.computeGrid);
+                    auto dosePtr = std::make_shared<DoseMatrix>(std::move(dose));
                     Logger::info("Forward dose computed. Max dose: " +
-                        std::to_string(m_state.doseResult->getMax()) + " Gy");
+                        std::to_string(dosePtr->getMax()) + " Gy");
+
+                    // Add to dose manager
+                    int optNum = m_state.doseManager.nextOptimizationNumber();
+                    m_state.doseManager.addDose(
+                        "Optimization #" + std::to_string(optNum),
+                        dosePtr,
+                        m_state.computeGrid);
+                    m_state.doseManager.incrementOptimizationCount();
+                    m_state.syncSelectedDose();
+
+                    // Signal Application to switch to DVH tab
+                    m_state.optimizationJustFinished = true;
 
                     // Post-optimization plan analysis
                     auto stats = PlanAnalysis::computeStats(
-                        *m_state.doseResult, *m_state.patientData, *m_state.doseGrid);
+                        *dosePtr, *m_state.patientData, *m_state.computeGrid);
                     std::ostringstream oss;
                     PlanAnalysis::print(stats, oss);
                     Logger::info(oss.str());
@@ -263,6 +276,7 @@ void OptimizationPanel::render() {
             m_state.resetOptimization();
             m_isOptimizing = true;
             m_optimizationDone = false;
+            m_state.taskRunning = true;
             m_currentIteration = 0;
 
             // Snapshot objectives to avoid data race with render thread
@@ -280,7 +294,7 @@ void OptimizationPanel::render() {
                 try {
                     const auto* ss = m_state.patientData->getStructureSet();
                     const auto& ctGrid = m_state.patientData->getGrid();
-                    const auto& doseGrid = *m_state.doseGrid;
+                    const auto& doseGrid = *m_state.computeGrid;
 
                     // ── Pre-optimization logging ──
                     Logger::info("=== Pre-Optimization Summary ===");

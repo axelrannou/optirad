@@ -19,6 +19,7 @@ class StfPanel;
 class PhaseSpacePanel;
 class OptimizationPanel;
 class DoseStatsPanel;
+class DVHPanel;
 class SliceView;
 class View3D;
 
@@ -67,6 +68,10 @@ private:
     std::unique_ptr<PhaseSpacePanel> m_phaseSpacePanel;
     std::unique_ptr<OptimizationPanel> m_optimizationPanel;
     std::unique_ptr<DoseStatsPanel> m_doseStatsPanel;
+    std::unique_ptr<DVHPanel> m_dvhPanel;
+
+    // Track whether imported dose was already added to DoseManager
+    bool m_importedDoseAdded = false;
 };
 
 } // namespace optirad

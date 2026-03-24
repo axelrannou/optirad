@@ -63,6 +63,12 @@ void applyTheme(AppTheme theme) {
         g_colors.phaseSpace = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);
         g_colors.generic    = ImVec4(0.8f, 0.8f, 0.5f, 1.0f);
 
+        // DVH plot colors
+        g_colors.dvhBackground = ImVec4(0.118f, 0.118f, 0.118f, 1.0f);
+        g_colors.dvhGrid       = ImVec4(0.235f, 0.235f, 0.235f, 1.0f);
+        g_colors.dvhLabel      = ImVec4(0.784f, 0.784f, 0.784f, 1.0f);
+        g_colors.dvhBorder     = ImVec4(0.588f, 0.588f, 0.588f, 1.0f);
+
         // Windows / containers
         c[ImGuiCol_WindowBg]              = kBlack;
         c[ImGuiCol_ChildBg]               = kBlackBg;
@@ -159,7 +165,7 @@ void applyTheme(AppTheme theme) {
         c[ImGuiCol_InputTextCursor] = kBlackText;
 
         // Text status same as dark but more saturated
-        g_colors.passText = ImVec4(0.0f, 0.8f, 0.0f, 1.0f);
+        g_colors.passText = ImVec4(0.0f, 0.7f, 0.0f, 1.0f);
         g_colors.failText = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
         g_colors.warningText = ImVec4(0.8f, 0.8f, 0.0f, 1.0f);
         // brighter yellow but more saturated than dark theme for better visibility on light bg
@@ -168,6 +174,12 @@ void applyTheme(AppTheme theme) {
         // Generic, phase space specific colours
         g_colors.phaseSpace = ImVec4(0.1f, 0.4f, 0.8f, 1.0f);
         g_colors.generic    = ImVec4(0.5f, 0.5f, 0.1f, 1.0f);
+
+        // DVH plot colors
+        g_colors.dvhBackground = ImVec4(1.00f, 1.00f, 1.00f, 1.0f);
+        g_colors.dvhGrid       = ImVec4(0.85f, 0.85f, 0.85f, 1.0f);
+        g_colors.dvhLabel      = ImVec4(0.20f, 0.20f, 0.20f, 1.0f);
+        g_colors.dvhBorder     = ImVec4(0.50f, 0.50f, 0.50f, 1.0f);
 
         // Windows / containers
         c[ImGuiCol_WindowBg]              = kLightBg;

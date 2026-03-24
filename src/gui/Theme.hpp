@@ -13,6 +13,12 @@ struct ThemeColors {
     ImVec4 failText;
     ImVec4 warningText;
     ImVec4 progressText;
+    
+    // DVH plot colors
+    ImVec4 dvhBackground;
+    ImVec4 dvhGrid;
+    ImVec4 dvhLabel;
+    ImVec4 dvhBorder;
 };
 
 const ThemeColors& getThemeColors();

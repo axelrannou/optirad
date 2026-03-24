@@ -1,9 +1,12 @@
 #pragma once
 
 #include "IDataImporter.hpp"
+#include "dose/DoseMatrix.hpp"
+#include "geometry/Grid.hpp"
 #include <vector>
 #include <filesystem>
 #include <memory>
+#include <utility>
 
 namespace optirad {
 
@@ -31,6 +34,9 @@ public:
     
     // Import structures with contour geometry
     std::unique_ptr<StructureSet> importStructuresWithContours();
+
+    // Import RT Dose (returns dose matrix + its grid, or nullptr if not available)
+    std::pair<std::shared_ptr<DoseMatrix>, std::shared_ptr<Grid>> importRTDose();
     
 private:
     std::vector<std::filesystem::path> m_ctFiles;

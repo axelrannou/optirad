@@ -41,6 +41,7 @@ add_library(optirad_gui
     panels/BeamPanel.cpp
     panels/OptimizationPanel.cpp
     panels/DoseStatsPanel.cpp
+    panels/DVHPanel.cpp
     panels/LogPanel.cpp
     panels/PlanningPanel.cpp
     panels/StfPanel.cpp

@@ -272,6 +272,7 @@ void PlanningPanel::render() {
             m_state.resetStf();
             m_isGeneratingStf = true;
             m_stfGenerationDone = false;
+            m_state.taskRunning = true;
 
             m_stfThread = std::thread([this]() {
                 auto start = std::chrono::steady_clock::now();
@@ -326,6 +327,7 @@ void PlanningPanel::render() {
             m_stfThread.join();
             m_isGeneratingStf = false;
             m_stfGenerationDone = false;
+            m_state.taskRunning = false;
         }
     }
 
@@ -429,6 +431,8 @@ void PlanningPanel::render() {
                 m_isCalculatingDij = false;
                 m_dijCalcDone = false;
                 m_state.cancelFlag = false;
+                m_state.taskRunning = false;
+
                 Logger::info("Dij calculation complete");
             }
         } else {
@@ -439,6 +443,7 @@ void PlanningPanel::render() {
                 m_isCalculatingDij = true;
                 m_dijCalcDone = false;
                 m_state.cancelFlag = false;
+                m_state.taskRunning = true;
                 m_dijCurrentBeam = 0;
                 m_dijTotalBeams = 0;
 
@@ -459,7 +464,8 @@ void PlanningPanel::render() {
                                 static_cast<double>(m_doseResolution[0]),
                                 static_cast<double>(m_doseResolution[1]),
                                 static_cast<double>(m_doseResolution[2])}));
-                        m_state.doseGrid = doseGrid;
+                        // Store in computeGrid (separate from display doseGrid)
+                        m_state.computeGrid = doseGrid;
 
                         auto dims = doseGrid->getDimensions();
                         Logger::info("Dose grid: " + std::to_string(dims[0]) + "x" +
