@@ -1,4 +1,5 @@
 #include "OptimizationPanel.hpp"
+#include "Theme.hpp"
 #include "optimization/OptimizerFactory.hpp"
 #include "optimization/optimizers/LBFGSOptimizer.hpp"
 #include "optimization/objectives/SquaredDeviation.hpp"
@@ -54,10 +55,6 @@ void OptimizationPanel::render() {
         };
         
         std::vector<DefaultObjective> defaults = {
-            // PTVs: MinDVH D98% at 66 Gy (RTEP7 protocol)
-            // Only PTV N and PTVT — PTV ok / PTV_66dosi are just unions of these.
-            {"PTV N",             true,  3,  66.0f, 100.0f, 98.0f},
-            {"PTVT",              true,  3,  66.0f, 100.0f, 98.0f},
             // Lungs: SquaredOverdose at MLD 20 Gy
             {"Poumon_D",          true,  1,  20.0f,  10.0f,  5.0f},
             {"Poumon_G",          true,  1,  20.0f,  10.0f,  5.0f},
@@ -68,15 +65,28 @@ void OptimizationPanel::render() {
             // Spinal cord: MaxDVH V10Gy <= 0%
             {"Canal_Medullaire",  true,  4,  10.0f, 200.0f,  0.0f},
         };
-        
-        for (const auto& def : defaults) {
-            for (size_t i = 0; i < ss->getCount(); ++i) {
-                const auto* s = ss->getStructure(i);
-                if (!s) continue;
-                std::string name = s->getName();
+
+        for (size_t i = 0; i < ss->getCount(); ++i) {
+            const auto* s = ss->getStructure(i);
+            if (!s) continue;
+
+            std::string name = s->getName();
+
+            if (s->getType() == "PTV") {
+                ObjectiveConfig obj;
+                obj.structureName = name;
+                obj.typeIdx = 3;        // MinDVH
+                obj.doseValue = 66.0f;
+                obj.weight = 100.0f;
+                obj.volumePct = 98.0f;
+                m_objectives.push_back(obj);
+            }
+
+            for (const auto& def : defaults) {
                 bool match = def.exactMatch 
                     ? (name == def.namePattern)
                     : (name.find(def.namePattern) != std::string::npos);
+
                 if (match) {
                     ObjectiveConfig obj;
                     obj.structureName = name;
@@ -98,8 +108,8 @@ void OptimizationPanel::render() {
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
             ImGui::TableSetupColumn("Structure",  ImGuiTableColumnFlags_None, 140.0f);
             ImGui::TableSetupColumn("Type",       ImGuiTableColumnFlags_None, 160.0f);
-            ImGui::TableSetupColumn("Dose (Gy)",  ImGuiTableColumnFlags_None, 80.0f);
-            ImGui::TableSetupColumn("Vol (%)",    ImGuiTableColumnFlags_None, 70.0f);
+            ImGui::TableSetupColumn("Dose Gy",  ImGuiTableColumnFlags_None, 80.0f);
+            ImGui::TableSetupColumn("Vol %",    ImGuiTableColumnFlags_None, 70.0f);
             ImGui::TableSetupColumn("Weight",     ImGuiTableColumnFlags_None, 80.0f);
             ImGui::TableSetupColumn("##del",      ImGuiTableColumnFlags_None, 25.0f);
             ImGui::TableHeadersRow();
@@ -136,19 +146,19 @@ void OptimizationPanel::render() {
 
                 ImGui::TableSetColumnIndex(2);
                 ImGui::SetNextItemWidth(-1);
-                ImGui::DragFloat("##dose", &obj.doseValue, 0.5f, 0.0f, 120.0f, "%.1f");
+                ImGui::InputFloat("##dose", &obj.doseValue, 0.0f, 0.0f, "%.1f");
 
                 ImGui::TableSetColumnIndex(3);
                 // Volume % only relevant for DVH objectives
                 bool isDVH = (obj.typeIdx == 3 || obj.typeIdx == 4);
                 if (!isDVH) ImGui::BeginDisabled();
                 ImGui::SetNextItemWidth(-1);
-                ImGui::DragFloat("##vol", &obj.volumePct, 1.0f, 0.0f, 100.0f, "%.0f");
+                ImGui::InputFloat("##vol", &obj.volumePct, 0.0f, 0.0f, "%.1f");
                 if (!isDVH) ImGui::EndDisabled();
 
                 ImGui::TableSetColumnIndex(4);
                 ImGui::SetNextItemWidth(-1);
-                ImGui::DragFloat("##w", &obj.weight, 0.1f, 0.0f, 1000.0f, "%.1f");
+                ImGui::InputFloat("##w", &obj.weight, 0.0f, 0.0f, "%.1f");
 
                 ImGui::TableSetColumnIndex(5);
                 if (ImGui::SmallButton("X")) {
@@ -182,7 +192,7 @@ void OptimizationPanel::render() {
     // ── Optimizer settings ──
     ImGui::Spacing();
     if (m_isOptimizing) ImGui::BeginDisabled();
-    if (ImGui::CollapsingHeader("Optimizer Settings")) {
+    if (ImGui::CollapsingHeader("Optimizer Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::InputInt("Max Iterations", &m_maxIterations);
         if (m_maxIterations < 1) m_maxIterations = 1;
         ImGui::InputFloat("Tolerance", &m_tolerance, 1e-7f, 1e-4f, "%.7f");
@@ -191,8 +201,8 @@ void OptimizationPanel::render() {
         ImGui::TextUnformatted("Hotspot Control (NTO)");
         ImGui::Checkbox("Enable NTO", &m_ntoEnabled);
         if (!m_ntoEnabled) ImGui::BeginDisabled();
-        ImGui::DragFloat("Threshold (%Rx)", &m_ntoThresholdPct, 0.5f, 90.0f, 120.0f, "%.0f%%");
-        ImGui::DragFloat("Penalty", &m_ntoPenalty, 100.0f, 0.0f, 100000.0f, "%.0f");
+        ImGui::InputFloat("Threshold (%Rx)", &m_ntoThresholdPct, 0.0f, 0.0f, "%.1f");
+        ImGui::InputInt("Penalty", &m_ntoPenalty);
         if (!m_ntoEnabled) ImGui::EndDisabled();
     }
     if (m_isOptimizing) ImGui::EndDisabled();
@@ -202,7 +212,7 @@ void OptimizationPanel::render() {
 
     // ── Run Optimization button ──
     if (m_isOptimizing) {
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Optimizing...");
+        ImGui::TextColored(getThemeColors().progressText, "Optimizing...");
         if (m_maxIterations > 0) {
             float progress = static_cast<float>(m_currentIteration.load()) / static_cast<float>(m_maxIterations);
             ImGui::ProgressBar(progress, ImVec2(-1, 0),
@@ -213,19 +223,32 @@ void OptimizationPanel::render() {
             m_optThread.join();
             m_isOptimizing = false;
             m_optimizationDone = false;
+            m_state.taskRunning = false;
 
             // Compute forward dose
             if (!m_state.optimizedWeights.empty()) {
                 try {
                     auto engine = DoseEngineFactory::create("PencilBeam");
-                    auto dose = engine->calculateDose(*m_state.dij, m_state.optimizedWeights, *m_state.doseGrid);
-                    m_state.doseResult = std::make_shared<DoseMatrix>(std::move(dose));
+                    auto dose = engine->calculateDose(*m_state.dij, m_state.optimizedWeights, *m_state.computeGrid);
+                    auto dosePtr = std::make_shared<DoseMatrix>(std::move(dose));
                     Logger::info("Forward dose computed. Max dose: " +
-                        std::to_string(m_state.doseResult->getMax()) + " Gy");
+                        std::to_string(dosePtr->getMax()) + " Gy");
+
+                    // Add to dose manager
+                    int optNum = m_state.doseManager.nextOptimizationNumber();
+                    m_state.doseManager.addDose(
+                        "Optimization #" + std::to_string(optNum),
+                        dosePtr,
+                        m_state.computeGrid);
+                    m_state.doseManager.incrementOptimizationCount();
+                    m_state.syncSelectedDose();
+
+                    // Signal Application to switch to DVH tab
+                    m_state.optimizationJustFinished = true;
 
                     // Post-optimization plan analysis
                     auto stats = PlanAnalysis::computeStats(
-                        *m_state.doseResult, *m_state.patientData, *m_state.doseGrid);
+                        *dosePtr, *m_state.patientData, *m_state.computeGrid);
                     std::ostringstream oss;
                     PlanAnalysis::print(stats, oss);
                     Logger::info(oss.str());
@@ -235,8 +258,16 @@ void OptimizationPanel::render() {
             }
         }
     } else {
-        bool canOptimize = m_state.dijComputed() && !m_objectives.empty();
-        if (!canOptimize) ImGui::BeginDisabled();
+        // Optimization should be possible only when PTV constraints are present to avoid meaningless runs.
+        bool canOptimize = m_state.dijComputed() && !m_objectives.empty() &&
+                          std::any_of(m_objectives.begin(), m_objectives.end(),
+                                      [](const ObjectiveConfig& obj) {
+                                          return obj.structureName.find("PTV") != std::string::npos; // on PTV
+                                      });
+        if (!canOptimize) {
+            ImGui::TextColored(getThemeColors().failText, "No valid PTV constraints.");
+            ImGui::BeginDisabled();
+        }
 
         if (ImGui::Button("Run Optimization", ImVec2(-1, 30))) {
             // Join any previous thread before starting a new one
@@ -245,6 +276,7 @@ void OptimizationPanel::render() {
             m_state.resetOptimization();
             m_isOptimizing = true;
             m_optimizationDone = false;
+            m_state.taskRunning = true;
             m_currentIteration = 0;
 
             // Snapshot objectives to avoid data race with render thread
@@ -253,7 +285,7 @@ void OptimizationPanel::render() {
             float tolerance = m_tolerance;
             bool ntoEnabled = m_ntoEnabled;
             float ntoThresholdPct = m_ntoThresholdPct;
-            float ntoPenalty = m_ntoPenalty;
+            int ntoPenalty = m_ntoPenalty;
 
             m_optThread = std::thread([this, objectivesCopy, maxIter, tolerance,
                                        ntoEnabled, ntoThresholdPct, ntoPenalty]() {
@@ -262,7 +294,7 @@ void OptimizationPanel::render() {
                 try {
                     const auto* ss = m_state.patientData->getStructureSet();
                     const auto& ctGrid = m_state.patientData->getGrid();
-                    const auto& doseGrid = *m_state.doseGrid;
+                    const auto& doseGrid = *m_state.computeGrid;
 
                     // ── Pre-optimization logging ──
                     Logger::info("=== Pre-Optimization Summary ===");
@@ -414,7 +446,7 @@ void OptimizationPanel::render() {
     // ── Status ──
     if (m_state.optimizationDone()) {
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", m_optStatusMessage.c_str());
+        ImGui::TextColored(getThemeColors().passText, "%s", m_optStatusMessage.c_str());
         if (m_state.doseResult) {
             ImGui::Text("Max dose: %.2f Gy | Mean dose: %.2f Gy",
                 m_state.doseResult->getMax(), m_state.doseResult->getMean());

@@ -1,10 +1,13 @@
 #include "Application.hpp"
+#include "Theme.hpp"
+#include "../../external/stb_image.h"
 #include "panels/PatientPanel.hpp"
 #include "panels/PlanningPanel.hpp"
 #include "panels/StfPanel.hpp"
 #include "panels/PhaseSpacePanel.hpp"
 #include "panels/OptimizationPanel.hpp"
 #include "panels/DoseStatsPanel.hpp"
+#include "panels/DVHPanel.hpp"
 #include "views/SliceView.hpp"
 #include "views/View3D.hpp"
 #include "views/renderers/PhaseSpaceRenderer.hpp"
@@ -19,6 +22,29 @@ namespace optirad {
 
 Application::Application() = default;
 Application::~Application() = default;
+
+bool Application::loadTexture(const std::string& path, GLuint* outTexture) {
+    int w, h, channels;
+    stbi_set_flip_vertically_on_load(false);
+    unsigned char* pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
+    if (!pixels) {
+        Logger::error("loadTexture: failed to load '" + path + "': " +
+                      std::string(stbi_failure_reason()));
+        return false;
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    stbi_image_free(pixels);
+    *outTexture = tex;
+    return true;
+}
 
 bool Application::init() {
     // Initialize GLFW
@@ -66,8 +92,9 @@ bool Application::init() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     
-    ImGui::StyleColorsDark();
-    
+    // Apply initial dark theme
+    applyTheme(m_theme);
+
     // DPI scaling
     // On Linux/X11, glfwGetWindowContentScale often returns the desktop scale
     // factor (e.g. 2.0 on 4K) but the framebuffer is already at native resolution,
@@ -89,7 +116,7 @@ bool Application::init() {
     m_dpiScale = xscale;
     
     // Use a clean, readable font size
-    float fontSize = 13.0f * m_dpiScale;
+    float fontSize = 20.0f * m_dpiScale;
     ImFontConfig fontConfig;
     fontConfig.SizePixels = fontSize;
     io.Fonts->AddFontDefault(&fontConfig);
@@ -111,17 +138,22 @@ bool Application::init() {
         return false;
     }
     
+    // Load theme toggle icon
+    loadTexture(OPTIRAD_GUI_IMG_DIR "/day-and-night.png", &m_themeIconTexture);
+
     // Create 3D view
     m_view3D = std::make_unique<View3D>();
     m_view3D->init();
+    m_view3D->setDarkMode(m_theme == AppTheme::Dark);
     
     // Create panels
-    m_patientPanel = std::make_unique<PatientPanel>();
+    m_patientPanel = std::make_unique<PatientPanel>(m_appState);
     m_planningPanel = std::make_unique<PlanningPanel>(m_appState);
     m_stfPanel = std::make_unique<StfPanel>(m_appState);
     m_phaseSpacePanel = std::make_unique<PhaseSpacePanel>(m_appState);
     m_optimizationPanel = std::make_unique<OptimizationPanel>(m_appState);
     m_doseStatsPanel = std::make_unique<DoseStatsPanel>(m_appState);
+    m_dvhPanel = std::make_unique<DVHPanel>(m_appState);
     
     // Phase Space panel hidden by default
     m_phaseSpacePanel->setVisible(false);
@@ -145,9 +177,9 @@ void Application::setupDockLayout() {
     ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->WorkSize);
     ImGui::DockBuilderSetNodePos(dockspace_id, viewport->WorkPos);
     
-    // Split: left 30% for sidebars | right 70% for views + bottom
+    // Split: left 35% for sidebars | right 65% for views + bottom
     ImGuiID leftNode, rightNode;
-    ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.30f, &leftNode, &rightNode);
+    ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.35f, &leftNode, &rightNode);
     
     // Split left into two sidebars: sidebar1 (50% of left = 15%) | sidebar2 (50% of left = 15%)
     ImGuiID sidebar1Node, sidebar2Node;
@@ -174,9 +206,9 @@ void Application::setupDockLayout() {
     ImGuiID sidebar1Top, sidebar1Bottom;
     ImGui::DockBuilderSplitNode(sidebar1Node, ImGuiDir_Down, 0.65f, &sidebar1Bottom, &sidebar1Top);
     
-    // Split sidebar2 vertically: STF (top 40%) | Optimization (bottom 60%)
+    // Split sidebar2 vertically: STF (top 35%) | Optimization (bottom 65%)
     ImGuiID sidebar2Top, sidebar2Bottom;
-    ImGui::DockBuilderSplitNode(sidebar2Node, ImGuiDir_Down, 0.60f, &sidebar2Bottom, &sidebar2Top);
+    ImGui::DockBuilderSplitNode(sidebar2Node, ImGuiDir_Down, 0.65f, &sidebar2Bottom, &sidebar2Top);
     
     // Dock windows into nodes
     // Sidebar 1: Patient (top) + Planning (bottom)
@@ -195,9 +227,10 @@ void Application::setupDockLayout() {
     ImGui::DockBuilderDockWindow("Sagittal", sagittalNode);
     ImGui::DockBuilderDockWindow("Coronal", coronalNode);
     ImGui::DockBuilderDockWindow("3D View", view3dNode);
+    ImGui::DockBuilderDockWindow("DVH", view3dNode);  // tabbed with 3D View
     
-    // Bottom: Dose Statistics & DVH (tabbed)
-    ImGui::DockBuilderDockWindow("Dose Statistics & DVH", bottomNode);
+    // Bottom: Dose Statistics
+    ImGui::DockBuilderDockWindow("Dose Statistics", bottomNode);
     
     ImGui::DockBuilderFinish(dockspace_id);
 }
@@ -220,6 +253,16 @@ void Application::run() {
             if (!m_appState.dicomLoaded()) {
                 m_appState.patientData = std::shared_ptr<PatientData>(
                     data, [](PatientData*) {});
+
+                // Add imported RT Dose to DoseManager (once)
+                if (!m_importedDoseAdded && data->hasImportedDose()) {
+                    m_appState.doseManager.addDose(
+                        "Imported (DICOM)",
+                        data->getImportedDose(),
+                        data->getImportedDoseGrid());
+                    m_appState.syncSelectedDose();
+                    m_importedDoseAdded = true;
+                }
             }
 
             m_view3D->setPatientData(data);
@@ -247,6 +290,9 @@ void Application::run() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+
+        // Re-apply theme every frame (ImGui immediate-mode best practice)
+        applyTheme(m_theme);
         
         // Create fullscreen dockspace host window
         ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -292,9 +338,10 @@ void Application::run() {
         }
         m_optimizationPanel->render();
         m_doseStatsPanel->render();
+        m_dvhPanel->render();
         
         // Pass dose data to slice views AFTER panels render
-        if (m_appState.optimizationDone() && m_appState.doseResult && m_appState.doseGrid) {
+        if (m_appState.doseAvailable() && m_appState.doseResult && m_appState.doseGrid) {
             m_axialView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
             m_sagittalView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
             m_coronalView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
@@ -312,6 +359,11 @@ void Application::run() {
         // Render 3D View inside an ImGui window
         render3DViewWindow();
         
+        // Auto-switch to DVH tab when optimization finishes
+        if (m_appState.optimizationJustFinished.exchange(false)) {
+            ImGui::SetWindowFocus("DVH");
+        }
+
         // Finalize ImGui frame
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -322,7 +374,11 @@ void Application::run() {
 
 void Application::render3DViewWindow() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::Begin("3D View");
+    if (!m_view3DVisible) {
+        ImGui::PopStyleVar();
+        return;
+    }
+    ImGui::Begin("3D View", &m_view3DVisible);
     ImGui::PopStyleVar();
     
     ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -358,6 +414,10 @@ void Application::shutdown() {
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
     
+    if (m_themeIconTexture) {
+        glDeleteTextures(1, &m_themeIconTexture);
+        m_themeIconTexture = 0;
+    }
     if (m_window) {
         glfwDestroyWindow(m_window);
     }
@@ -408,11 +468,50 @@ void Application::renderMenuBar() {
             if (ImGui::MenuItem("Dose Statistics", nullptr, &doseVis)) {
                 m_doseStatsPanel->setVisible(doseVis);
             }
+
+            bool dvhVis = m_dvhPanel->isVisible();
+            if (ImGui::MenuItem("DVH", nullptr, &dvhVis)) {
+                m_dvhPanel->setVisible(dvhVis);
+            }
+            
+            ImGui::Separator();
+            
+            bool axialVis = m_axialView->isVisible();
+            if (ImGui::MenuItem("Axial View", nullptr, &axialVis)) {
+                m_axialView->setVisible(axialVis);
+            }
+            
+            bool sagVis = m_sagittalView->isVisible();
+            if (ImGui::MenuItem("Sagittal View", nullptr, &sagVis)) {
+                m_sagittalView->setVisible(sagVis);
+            }
+            
+            bool corVis = m_coronalView->isVisible();
+            if (ImGui::MenuItem("Coronal View", nullptr, &corVis)) {
+                m_coronalView->setVisible(corVis);
+            }
+            
+            bool view3DVis = m_view3DVisible;
+            if (ImGui::MenuItem("3D View", nullptr, &view3DVis)) {
+                m_view3DVisible = view3DVis;
+            }
             
             ImGui::Separator();
             
             if (ImGui::MenuItem("Reset Layout")) {
                 m_layoutInitialized = false;
+                //make all panels visible again
+                m_patientPanel->setVisible(true);
+                m_planningPanel->setVisible(true);
+                m_stfPanel->setVisible(true);
+                m_phaseSpacePanel->setVisible(false);
+                m_optimizationPanel->setVisible(true);
+                m_doseStatsPanel->setVisible(true);
+                m_dvhPanel->setVisible(true);
+                m_axialView->setVisible(true);
+                m_sagittalView->setVisible(true);
+                m_coronalView->setVisible(true);
+                m_view3DVisible = true;
                 // Force rebuild on next frame by removing the existing node
                 ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
                 ImGui::DockBuilderRemoveNode(dockspace_id);
@@ -420,7 +519,36 @@ void Application::renderMenuBar() {
             
             ImGui::EndMenu();
         }
-        
+
+        // --- Theme toggle (after separator, right side of menu bar) ---
+        ImGui::Separator();
+
+        // Draw the icon button
+        ImVec2 iconSize(20.0f * m_dpiScale, 20.0f * m_dpiScale);
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.3f, 0.3f, 0.4f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.5f, 0.5f, 0.5f, 0.4f));
+        if (m_themeIconTexture) {
+            if (ImGui::ImageButton("##themeToggle",
+                    reinterpret_cast<void*>(static_cast<intptr_t>(m_themeIconTexture)),
+                    iconSize)) {
+                m_theme = (m_theme == AppTheme::Dark) ? AppTheme::Light : AppTheme::Dark;
+                applyTheme(m_theme);
+                m_view3D->setDarkMode(m_theme == AppTheme::Dark);
+            }
+        } else {
+            // Fallback text button if icon didn't load
+            if (ImGui::Button(m_theme == AppTheme::Dark ? "Light" : "Dark")) {
+                m_theme = (m_theme == AppTheme::Dark) ? AppTheme::Light : AppTheme::Dark;
+                applyTheme(m_theme);
+                m_view3D->setDarkMode(m_theme == AppTheme::Dark);
+            }
+        }
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s mode", m_theme == AppTheme::Dark ? "Switch to Light" : "Switch to Dark");
+        }
+
         ImGui::EndMenuBar();
     }
 }

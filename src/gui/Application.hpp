@@ -3,9 +3,11 @@
 #include "Window.hpp"
 #include "Renderer.hpp"
 #include "AppState.hpp"
+#include "Theme.hpp"
 #include "panels/IPanel.hpp"
 #include <vector>
 #include <memory>
+#include <string>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
@@ -17,6 +19,7 @@ class StfPanel;
 class PhaseSpacePanel;
 class OptimizationPanel;
 class DoseStatsPanel;
+class DVHPanel;
 class SliceView;
 class View3D;
 
@@ -33,14 +36,21 @@ private:
     void renderMenuBar();
     void render3DViewWindow();
     void setupDockLayout();
+    /// Load a PNG file into an OpenGL RGBA texture. Returns false on failure.
+    static bool loadTexture(const std::string& path, GLuint* outTexture);
     
     GLFWwindow* m_window = nullptr;
     
     // DPI scale factor
     float m_dpiScale = 1.0f;
-    
+
+    // Theme
+    AppTheme m_theme = AppTheme::Dark;
+    GLuint m_themeIconTexture = 0;
+
     // Layout state
     bool m_layoutInitialized = false;
+    bool m_view3DVisible = true;
     
     // Shared state
     GuiAppState m_appState;
@@ -58,6 +68,10 @@ private:
     std::unique_ptr<PhaseSpacePanel> m_phaseSpacePanel;
     std::unique_ptr<OptimizationPanel> m_optimizationPanel;
     std::unique_ptr<DoseStatsPanel> m_doseStatsPanel;
+    std::unique_ptr<DVHPanel> m_dvhPanel;
+
+    // Track whether imported dose was already added to DoseManager
+    bool m_importedDoseAdded = false;
 };
 
 } // namespace optirad

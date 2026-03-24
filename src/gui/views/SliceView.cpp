@@ -86,8 +86,10 @@ void SliceView::setSliceIndex(size_t index) {
 }
 
 void SliceView::render() {
+    if (!m_visible) return;
+
     std::string name = getName();
-    ImGui::Begin(name.c_str());
+    ImGui::Begin(name.c_str(), &m_visible);
     
     if (!m_patientData || !m_patientData->getCTVolume()) {
         ImGui::TextDisabled("No CT data loaded");
@@ -221,6 +223,11 @@ void SliceView::updateTexture() {
         
         m_lastTextureWidth = m_textureWidth;
         m_lastTextureHeight = m_textureHeight;
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        float borderColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
     } else {
         // Update existing texture (more efficient)
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_textureWidth, m_textureHeight,
@@ -243,30 +250,33 @@ void SliceView::renderSlice() {
     
     // Calculate display size using PHYSICAL aspect ratio
     float physicalAspect = static_cast<float>(m_physicalWidth / m_physicalHeight);
-    
-    float displayWidth = imgAreaW;
-    float displayHeight = imgAreaW / physicalAspect;
-    
-    if (displayHeight > imgAreaH) {
-        displayHeight = imgAreaH;
-        displayWidth = imgAreaH * physicalAspect;
-    }
-    
-    // Center the image in the image area
-    ImVec2 cursor = ImGui::GetCursorPos();
-    ImVec2 imagePos = ImVec2(cursor.x + (imgAreaW - displayWidth) * 0.5f,
-                             cursor.y + (imgAreaH - displayHeight) * 0.5f);
-    
-    // Calculate UV coordinates based on zoom and pan
-    float halfU = 0.5f / m_zoom;
-    float halfV = 0.5f / m_zoom;
+
+    // Use full available area
+    float displayWidth  = imgAreaW;
+    float displayHeight = imgAreaH;
+
+    // The image data itself occupies a sub-region of the display area.
+    // Compute how wide the real slice should be inside the full display rect.
+    float sliceDisplayH = displayHeight;                    // fill height
+    float sliceDisplayW = sliceDisplayH * physicalAspect;   // respect aspect ratio
+
+    // UV padding: how much of UV space [0,1] corresponds to sliceDisplayW
+    // Full displayWidth maps to a UV range of (displayWidth / sliceDisplayW)
+    float uvRangeX = displayWidth / sliceDisplayW;          // > 1.0 → black padding on sides
+    float uvRangeY = 1.0f;                                  // no vertical padding
+
+    // Center the data: uv 0.5 stays in the middle
+    float halfU = uvRangeX * 0.5f / m_zoom;
+    float halfV = uvRangeY * 0.5f / m_zoom;
     ImVec2 uv0(m_panU - halfU, m_panV - halfV);
     ImVec2 uv1(m_panU + halfU, m_panV + halfV);
-    
+
     // Store for contour rendering
     m_visUvMinX = uv0.x; m_visUvMinY = uv0.y;
     m_visUvMaxX = uv1.x; m_visUvMaxY = uv1.y;
-    
+
+    ImVec2 cursor  = ImGui::GetCursorPos();
+    ImVec2 imagePos = ImVec2(cursor.x, cursor.y);   // no centering needed, fills area
     ImGui::SetCursorPos(imagePos);
     
     // Store image screen bounds for contour rendering
@@ -562,6 +572,10 @@ void SliceView::updateDoseTexture() {
                  0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float borderColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 

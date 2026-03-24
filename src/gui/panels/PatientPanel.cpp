@@ -3,6 +3,7 @@
 #include <imgui.h>
 #include <filesystem>
 #include <algorithm>
+#include <string>
 
 #ifndef OPTIRAD_DATA_DIR
 #define OPTIRAD_DATA_DIR "."
@@ -10,14 +11,16 @@
 
 namespace optirad {
 
-PatientPanel::PatientPanel() {
+PatientPanel::PatientPanel(GuiAppState& state) : m_state(state) {
     // Default to project data/ directory
     snprintf(m_dicomPath, sizeof(m_dicomPath), "%s", OPTIRAD_DATA_DIR);
     m_dicomPath[sizeof(m_dicomPath) - 1] = '\0';
 }
 
 void PatientPanel::render() {
-    ImGui::Begin("Patient Data");
+    if (!m_visible) return;
+
+    ImGui::Begin("Patient Data", &m_visible);
     
     // Import button
     if (ImGui::Button("Import DICOM Directory", ImVec2(-1, 0))) {
@@ -30,7 +33,14 @@ void PatientPanel::render() {
     if (m_patientData) {
         renderPatientInfo();
         ImGui::Separator();
-        renderStructureList();
+
+        if (ImGui::CollapsingHeader("Dose", ImGuiTreeNodeFlags_DefaultOpen)) {
+            renderDoseList();
+        }
+        
+        if (ImGui::CollapsingHeader("Structures", ImGuiTreeNodeFlags_DefaultOpen)) {
+            renderStructureList();
+        }
     } else {
         ImGui::TextDisabled("No patient data loaded");
     }
@@ -159,7 +169,7 @@ void PatientPanel::renderPatientInfo() {
     }
     
     if (auto* ct = m_patientData->getCTVolume()) {
-        if (ImGui::CollapsingHeader("CT Volume", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader("CT Volume")) {
             ImGui::Indent();
             
             const auto& grid = ct->getGrid();
@@ -202,8 +212,6 @@ void PatientPanel::renderStructureList() {
     auto* structures = m_patientData->getStructureSet();
     if (!structures || structures->getCount() == 0) return;
     
-    ImGui::Text("Structures (%zu)", structures->getCount());
-    
     if (ImGui::BeginTable("Structures", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("Visible");
         ImGui::TableSetupColumn("Name");
@@ -242,6 +250,96 @@ void PatientPanel::renderStructureList() {
             ImGui::Text("%zu", s->getContourCount());
         }
         
+        ImGui::EndTable();
+    }
+}
+
+void PatientPanel::renderDoseList() {
+    auto& dm = m_state.doseManager;
+
+    if (dm.count() == 0) {
+        ImGui::TextDisabled("No dose data");
+        return;
+    }
+
+    if (ImGui::BeginTable("DoseList", 4,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("##sel", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("Max (Gy)", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, 25.0f);
+        ImGui::TableHeadersRow();
+
+        bool taskBusy = m_state.taskRunning;
+
+        int toRemove = -1;
+        for (int i = 0; i < dm.count(); ++i) {
+            const auto* entry = dm.getEntry(i);
+            if (!entry) continue;
+
+            ImGui::TableNextRow();
+
+            // Selectable spanning the full row as the hit area
+            ImGui::TableNextColumn();
+            bool selected = (i == dm.getSelectedIdx());
+            if (taskBusy) ImGui::BeginDisabled();
+            float rowHeight = ImGui::GetTextLineHeight() + ImGui::GetStyle().CellPadding.y * 2.0f;
+            ImGui::PushStyleColor(ImGuiCol_Header,        ImVec4(0,0,0,0));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive,  ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+            if (ImGui::Selectable(("##drow" + std::to_string(i)).c_str(), selected,
+                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                    ImVec2(0, rowHeight))) {
+                if (!selected) {
+                    dm.setSelected(i);
+                    m_state.syncSelectedDose();
+                }
+            }
+            ImGui::PopStyleColor(3);
+            if (taskBusy) ImGui::EndDisabled();
+
+            // Draw selection indicator circle directly via DrawList
+            float colWidth = ImGui::GetColumnWidth();
+            float colStartX = ImGui::GetCursorPosX();
+            float rowStartY = ImGui::GetCursorPosY() - rowHeight - ImGui::GetStyle().CellPadding.y * 2.0f;
+            float radius = ImGui::GetTextLineHeight() * 0.35f;
+            ImVec2 center(
+                ImGui::GetWindowPos().x + colStartX + colWidth * 0.5f,
+                ImGui::GetWindowPos().y + rowStartY + rowHeight * 0.5f
+            );
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImU32 borderCol = ImGui::GetColorU32(ImGuiCol_Text);
+            ImU32 fillCol   = ImGui::GetColorU32(selected ? ImGuiCol_Text : ImGuiCol_FrameBg);
+            dl->AddCircleFilled(center, radius, fillCol);
+            dl->AddCircle(center, radius, borderCol, 0, 1.2f);
+
+            // Name
+            ImGui::TableNextColumn();
+            ImGui::Text("%s", entry->name.c_str());
+
+            // Max dose
+            ImGui::TableNextColumn();
+            if (entry->dose) {
+                ImGui::Text("%.2f", entry->dose->getMax());
+            } else {
+                ImGui::TextDisabled("-");
+            }
+
+            // Delete button
+            ImGui::TableNextColumn();
+            if (taskBusy) ImGui::BeginDisabled();
+            if (ImGui::SmallButton(("X##ddel" + std::to_string(i)).c_str())) {
+                toRemove = i;
+            }
+            if (taskBusy) ImGui::EndDisabled();
+        }
+
+        if (toRemove >= 0) {
+            dm.removeDose(toRemove);
+            m_state.syncSelectedDose();
+        }
+
         ImGui::EndTable();
     }
 }

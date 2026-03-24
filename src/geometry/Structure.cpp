@@ -198,7 +198,7 @@ std::vector<size_t> Structure::rasterizeContourOnSlice(const Contour& contour,
                     size_t voxelIdx = static_cast<size_t>(i) + 
                                      static_cast<size_t>(j) * ny + 
                                      static_cast<size_t>(sliceIdx) * ny * nx;
-                    voxels.push_back(voxelIdx + 1);
+                    voxels.push_back(voxelIdx);
                 }
             }
         }

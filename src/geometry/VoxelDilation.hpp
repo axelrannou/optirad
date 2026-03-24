@@ -21,8 +21,8 @@ namespace optirad {
 /// 26-connectivity. The expansion is constrained to stay within the
 /// patient surface (union of all structure voxels).
 ///
-/// @param targetVoxelIndices   1-based linear indices of target voxels
-/// @param allVoxelIndices      1-based linear indices of all structure voxels (patient surface)
+/// @param targetVoxelIndices   0-based linear indices of target voxels
+/// @param allVoxelIndices      0-based linear indices of all structure voxels (patient surface)
 /// @param dimensions           Grid dimensions {ny, nx, nz}
 /// @param spacing              Grid spacing {dy, dx, dz} in mm
 /// @param margin               Margin to expand in mm {mx, my, mz}
@@ -69,11 +69,10 @@ inline std::vector<size_t> dilateVoxels(
         std::vector<Sub> subs;
         subs.reserve(frontier.size());
 
-        for (size_t idx1 : frontier) {
-            size_t idx0 = idx1 - 1;
-            size_t row   = idx0 % ny;
-            size_t col   = (idx0 / ny) % nx;
-            size_t slice = idx0 / (ny * nx);
+        for (size_t idx : frontier) {
+            size_t row   = idx % ny;
+            size_t col   = (idx / ny) % nx;
+            size_t slice = idx / (ny * nx);
 
             // Exclude border voxels (can't expand beyond grid)
             if (row == 0 || row == ny - 1 ||
@@ -113,12 +112,12 @@ inline std::vector<size_t> dilateVoxels(
                             size_t newCol   = s.col   + dj * dx;
                             size_t newSlice = s.slice + dk * dz;
 
-                            // Convert back to 1-based linear index
-                            size_t newIdx1 = newRow + newCol * ny + newSlice * ny * nx + 1;
+                            // Convert back to 0-based linear index
+                            size_t newIdx = newRow + newCol * ny + newSlice * ny * nx;
 
                             // Constrain to patient surface
-                            if (allVoxelIndices.count(newIdx1)) {
-                                localBuffer.push_back(newIdx1);
+                            if (allVoxelIndices.count(newIdx)) {
+                                localBuffer.push_back(newIdx);
                             }
                         }
                     }
@@ -142,12 +141,12 @@ inline std::vector<size_t> dilateVoxels(
                         size_t newCol   = s.col   + dj * dx;
                         size_t newSlice = s.slice + dk * dz;
 
-                        // Convert back to 1-based linear index (column-major: row + col*ny + slice*ny*nx)
-                        size_t newIdx1 = newRow + newCol * ny + newSlice * ny * nx + 1;
+                        // Convert back to 0-based linear index (column-major: row + col*ny + slice*ny*nx)
+                        size_t newIdx = newRow + newCol * ny + newSlice * ny * nx;
 
                         // Constrain to patient surface
-                        if (allVoxelIndices.count(newIdx1)) {
-                            enlarged.insert(newIdx1);
+                        if (allVoxelIndices.count(newIdx)) {
+                            enlarged.insert(newIdx);
                         }
     std::cout << " done\n" << std::flush;
                     }

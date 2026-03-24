@@ -41,7 +41,7 @@ private:
     // NTO (Normal Tissue Objective) / hotspot control
     bool m_ntoEnabled = true;
     float m_ntoThresholdPct = 104.0f;  // % of prescription dose
-    float m_ntoPenalty = 2000.0f;
+    int m_ntoPenalty = 2000.0f;
 
     // Async state
     std::atomic<bool> m_isOptimizing{false};

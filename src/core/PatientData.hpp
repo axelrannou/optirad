@@ -4,6 +4,7 @@
 #include "geometry/Volume.hpp"
 #include "geometry/StructureSet.hpp"
 #include "geometry/Grid.hpp"
+#include "dose/DoseMatrix.hpp"
 #include <memory>
 #include <vector>
 
@@ -37,6 +38,15 @@ public:
     StructureSet* getStructureSet() { return m_structures.get(); }
     const StructureSet* getStructureSet() const { return m_structures.get(); }
     
+    // Imported RT Dose (from DICOM)
+    void setImportedDose(std::shared_ptr<DoseMatrix> dose, std::shared_ptr<Grid> grid) {
+        m_importedDose = std::move(dose);
+        m_importedDoseGrid = std::move(grid);
+    }
+    std::shared_ptr<DoseMatrix> getImportedDose() const { return m_importedDose; }
+    std::shared_ptr<Grid> getImportedDoseGrid() const { return m_importedDoseGrid; }
+    bool hasImportedDose() const { return m_importedDose != nullptr; }
+
     // Grid information
     const Grid& getGrid() const { return m_ctVolume ? m_ctVolume->getGrid() : m_emptyGrid; }
     
@@ -53,6 +63,8 @@ private:
     std::unique_ptr<Volume<int16_t>> m_ctVolume;   // Hounsfield Units
     std::unique_ptr<Volume<double>> m_edVolume;    // Electron Density
     std::unique_ptr<StructureSet> m_structures;
+    std::shared_ptr<DoseMatrix> m_importedDose;
+    std::shared_ptr<Grid> m_importedDoseGrid;
     Grid m_emptyGrid;
 };
 

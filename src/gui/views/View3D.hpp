@@ -37,6 +37,9 @@ public:
     void setPhaseSpaceSources(const std::vector<const PhaseSpaceBeamSource*>& sources);
     BeamRenderer* getBeamRenderer();
     PhaseSpaceRenderer* getPhaseSpaceRenderer();
+
+    /// Switch between dark and light mode (affects logo background colour)
+    void setDarkMode(bool dark) { m_darkMode = dark; }
     
     /// Get the FBO color texture ID for ImGui::Image()
     GLuint getTextureID() const { return m_fboTexture; }
@@ -62,6 +65,9 @@ private:
     float m_yaw = 0.0f;     // Horizontal angle in radians
     float m_pitch = 0.3f;   // Vertical angle in radians
     glm::vec3 m_target = glm::vec3(0.0f);
+
+    // Theme
+    bool m_darkMode = true;
     
     // Mouse state - protected with mutex for thread safety
     mutable std::mutex m_mouseMutex;
@@ -85,6 +91,19 @@ private:
     void initLabelRendering();
     void renderFaceLabels();
     void createLabelTexture();
+
+    // Logo rendering (shown when no patient is loaded)
+    void initLogoRendering();
+    void renderLogo(int width, int height);
+    void cleanupLogoRendering();
+    GLuint m_logoShader    = 0;
+    GLuint m_logoVAO       = 0;
+    GLuint m_logoVBO       = 0;
+    GLuint m_gradShader    = 0;
+    GLuint m_gradVAO       = 0;
+    GLuint m_gradVBO       = 0;
+    GLuint m_logoTexDark   = 0;  // LaTIM_white_black.png
+    GLuint m_logoTexLight  = 0;  // LaTIM.png
 };
 
 } // namespace optirad

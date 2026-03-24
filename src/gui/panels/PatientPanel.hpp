@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IPanel.hpp"
+#include "../AppState.hpp"
 #include "core/PatientData.hpp"
 #include "io/DicomImporter.hpp"
 #include <memory>
@@ -10,7 +11,7 @@ namespace optirad {
 
 class PatientPanel : public IPanel {
 public:
-    PatientPanel();
+    PatientPanel(GuiAppState& state);
     
     void render() override;
     void update() override;  // Declare but don't define inline
@@ -25,9 +26,11 @@ private:
     void renderFileBrowser();
     void renderPatientInfo();
     void renderStructureList();
+    void renderDoseList();
     
     void importDicom(const std::string& path);
     
+    GuiAppState& m_state;
     std::unique_ptr<PatientData> m_patientData;
     DicomImporter m_importer;
     

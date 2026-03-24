@@ -1,4 +1,5 @@
 #include "PlanningPanel.hpp"
+#include "Theme.hpp"
 #include "io/MachineLoader.hpp"
 #include "steering/PhotonIMRTStfGenerator.hpp"
 #include "dose/DoseEngineFactory.hpp"
@@ -56,10 +57,11 @@ void PlanningPanel::render() {
         ImGui::Indent();
         ImGui::Combo("Mode", &m_radiationModeIdx, kRadiationModes, IM_ARRAYSIZE(kRadiationModes));
         ImGui::Combo("Machine", &m_machineIdx, kMachines, IM_ARRAYSIZE(kMachines));
+        const auto& col = getThemeColors();
         if (kIsPhaseSpace[m_machineIdx]) {
-            ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Phase-space (IAEA PSF)");
+            ImGui::TextColored(col.phaseSpace, "Phase-space (IAEA PSF)");
         } else {
-            ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.5f, 1.0f), "Generic (pencil-beam)");
+            ImGui::TextColored(col.generic, "Generic (pencil-beam)");
         }
         ImGui::Unindent();
     }
@@ -79,9 +81,9 @@ void PlanningPanel::render() {
         ImGui::RadioButton("List##gantry", &m_gantryMode, 1);
 
         if (m_gantryMode == 0) {
-            ImGui::DragFloat("Start (deg)##gantry", &m_gantryStart, 1.0f, 0.0f, 360.0f, "%.1f");
-            ImGui::DragFloat("Step (deg)##gantry", &m_gantryStep, 0.5f, 0.5f, 90.0f, "%.1f");
-            ImGui::DragFloat("Stop (deg)##gantry", &m_gantryStop, 1.0f, 1.0f, 720.0f, "%.1f");
+            ImGui::InputFloat("Start (deg)##gantry", &m_gantryStart, 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("Step (deg)##gantry", &m_gantryStep, 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("Stop (deg)##gantry", &m_gantryStop, 0.0f, 0.0f, "%.1f");
             int numGantry = 0;
             if (m_gantryStep > 0.0f && m_gantryStop > m_gantryStart) {
                 numGantry = static_cast<int>(std::ceil((m_gantryStop - m_gantryStart) / m_gantryStep));
@@ -106,14 +108,14 @@ void PlanningPanel::render() {
         ImGui::RadioButton("List##couch", &m_couchMode, 1);
 
         if (m_couchMode == 0) {
-            ImGui::DragFloat("Start (deg)##couch", &m_couchStart, 1.0f, -90.0f, 90.0f, "%.1f");
-            ImGui::DragFloat("Step (deg)##couch", &m_couchStep, 0.5f, 0.0f, 45.0f, "%.1f");
+            ImGui::InputFloat("Start (deg)##couch", &m_couchStart, 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("Step (deg)##couch", &m_couchStep, 0.0f, 0.0f, "%.1f");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Set to 0 for a single couch angle (= Start) on every beam.\n"
                                   "Step > 0 creates a multi-arc plan: each couch angle\n"
                                   "sweeps through ALL gantry angles (Cartesian product).\n"
                                   "Total beams = gantry_entries x couch_entries.");
-            ImGui::DragFloat("Stop (deg)##couch", &m_couchStop, 1.0f, -90.0f, 90.0f, "%.1f");
+            ImGui::InputFloat("Stop (deg)##couch", &m_couchStop, 0.0f, 0.0f, "%.1f");
 
             if (m_couchStep <= 0.0f) {
                 ImGui::Text("Single couch angle: %.1f deg (all beams)", m_couchStart);
@@ -170,7 +172,7 @@ void PlanningPanel::render() {
     if (!kIsPhaseSpace[m_machineIdx]) {
         if (ImGui::CollapsingHeader("Bixel Width", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Indent();
-            ImGui::DragFloat("Width (mm)", &m_bixelWidth, 0.5f, 1.0f, 20.0f, "%.1f");
+            ImGui::InputFloat("Width (mm)", &m_bixelWidth, 0.0f, 0.0f, "%.1f");
             ImGui::Unindent();
         }
     }
@@ -195,7 +197,7 @@ void PlanningPanel::render() {
                   (m_numFractions > 0);
 
     if (!paramsValid) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Fix parameter errors above.");
+        ImGui::TextColored(getThemeColors().failText, "Fix parameter errors above.");
     }
 
     // ── Create Plan button ──
@@ -264,14 +266,90 @@ void PlanningPanel::render() {
 
         Logger::info("Plan created: " + std::to_string(stfProps.numOfBeams) +
             " beams, bixelWidth=" + std::to_string(m_bixelWidth) + "mm");
+
+        // Automatically generate STF for generic (non-phase-space) machines
+        if (!kIsPhaseSpace[m_machineIdx]) {
+            m_state.resetStf();
+            m_isGeneratingStf = true;
+            m_stfGenerationDone = false;
+            m_state.taskRunning = true;
+
+            m_stfThread = std::thread([this]() {
+                auto start = std::chrono::steady_clock::now();
+
+                const auto& stfP = m_state.plan->getStfProperties();
+                std::string radiationMode = m_state.plan->getRadiationMode();
+
+                std::array<double, 3> iso = {0.0, 0.0, 0.0};
+                if (!stfP.isoCenters.empty()) {
+                    iso = stfP.isoCenters[0];
+                }
+
+                double bixelWidth = stfP.bixelWidth;
+
+                PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, bixelWidth, iso);
+                generator.setMachine(m_state.plan->getMachine());
+                generator.setRadiationMode(radiationMode);
+                generator.setGantryAngles(stfP.gantryAngles);
+                generator.setCouchAngles(stfP.couchAngles);
+
+                auto patientData = m_state.plan->getPatientData();
+                if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
+                    const auto* ct = patientData->getCTVolume();
+                    const auto* structureSet = patientData->getStructureSet();
+                    const auto& grid = ct->getGrid();
+
+                    generator.setGrid(grid);
+                    generator.setStructureSet(*structureSet);
+                    generator.setCTResolution(grid.getSpacing());
+                }
+
+                m_state.stfProps = generator.generate();
+                m_state.stf = std::make_shared<Stf>(generator.generateStf());
+
+                auto end = std::chrono::steady_clock::now();
+                double elapsed = std::chrono::duration<double>(end - start).count();
+                m_stfStatusMessage = "STF generated in " + std::to_string(elapsed).substr(0, 5) + "s";
+
+                m_stfGenerationDone = true;
+            });
+        }
     }
 
     if (!paramsValid) ImGui::EndDisabled();
 
+    // Handle async STF generation completion
+    if (m_isGeneratingStf) {
+        ImGui::TextColored(getThemeColors().progressText, "Creating plan...");
+        ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(-1, 0));
+
+        if (m_stfGenerationDone) {
+            m_stfThread.join();
+            m_isGeneratingStf = false;
+            m_stfGenerationDone = false;
+            m_state.taskRunning = false;
+        }
+    }
+
     // Show plan status
     if (m_state.planCreated()) {
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Plan created.");
+        if (m_state.isPhaseSpaceMachine()) {
+            ImGui::TextColored(getThemeColors().passText, "Plan created.");
+            ImGui::TextColored(getThemeColors().phaseSpace,
+                "Phase-space machine: use the Phase Space panel to load beam data.");
+        } else if (m_state.stfGenerated()) {
+            ImGui::TextColored(getThemeColors().passText, "Plan created.");
+            if (!m_stfStatusMessage.empty()) {
+                ImGui::TextColored(getThemeColors().passText, "%s", m_stfStatusMessage.c_str());
+            }
+            ImGui::Text("Beams: %zu | Rays: %zu | Bixels: %zu",
+                        m_state.stf->getCount(),
+                        m_state.stf->getTotalNumOfRays(),
+                        m_state.stf->getTotalNumOfBixels());
+        } //else {
+        //     ImGui::TextColored(getThemeColors().passText, "Plan created.");
+        // }
 
         const auto& stfProps = m_state.plan->getStfProperties();
         ImGui::Text("  Beams: %zu", stfProps.gantryAngles.size());
@@ -279,99 +357,6 @@ void PlanningPanel::render() {
                     stfProps.isoCenters[0][0],
                     stfProps.isoCenters[0][1],
                     stfProps.isoCenters[0][2]);
-    }
-
-    // ── Generate STF ──
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    if (ImGui::CollapsingHeader("STF Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
-        bool canGenerateStf = m_state.planCreated() &&
-                              !m_state.isPhaseSpaceMachine();
-
-        if (!m_state.planCreated()) {
-            ImGui::TextDisabled("Create a plan first to generate STF.");
-        } else if (m_state.isPhaseSpaceMachine()) {
-            ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f),
-                "Phase-space machine: use the Phase Space panel instead.");
-        }
-
-        if (m_isGeneratingStf) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Generating STF...");
-            ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(-1, 0));
-
-            if (m_stfGenerationDone) {
-                m_stfThread.join();
-                m_isGeneratingStf = false;
-                m_stfGenerationDone = false;
-                Logger::info("STF generation complete");
-            }
-        } else {
-            if (!canGenerateStf) ImGui::BeginDisabled();
-
-            if (ImGui::Button("Generate STF", ImVec2(-1, 30))) {
-                m_state.resetStf();
-                m_isGeneratingStf = true;
-                m_stfGenerationDone = false;
-
-                m_stfThread = std::thread([this]() {
-                    auto start = std::chrono::steady_clock::now();
-
-                    const auto& stfP = m_state.plan->getStfProperties();
-                    std::string radiationMode = m_state.plan->getRadiationMode();
-
-                    std::array<double, 3> iso = {0.0, 0.0, 0.0};
-                    if (!stfP.isoCenters.empty()) {
-                        iso = stfP.isoCenters[0];
-                    }
-
-                    double bixelWidth = stfP.bixelWidth;
-
-                    // Pass pre-expanded paired gantry/couch lists directly.
-                    // StfProperties already performed Cartesian product expansion,
-                    // so we avoid re-inferring start/step/stop.
-                    PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, bixelWidth, iso);
-                    generator.setMachine(m_state.plan->getMachine());
-                    generator.setRadiationMode(radiationMode);
-                    generator.setGantryAngles(stfP.gantryAngles);
-                    generator.setCouchAngles(stfP.couchAngles);
-
-                    auto patientData = m_state.plan->getPatientData();
-                    if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
-                        const auto* ct = patientData->getCTVolume();
-                        const auto* structureSet = patientData->getStructureSet();
-                        const auto& grid = ct->getGrid();
-
-                        generator.setGrid(grid);
-                        generator.setStructureSet(*structureSet);
-                        generator.setCTResolution(grid.getSpacing());
-                    }
-
-                    m_state.stfProps = generator.generate();
-                    m_state.stf = std::make_shared<Stf>(generator.generateStf());
-
-                    auto end = std::chrono::steady_clock::now();
-                    double elapsed = std::chrono::duration<double>(end - start).count();
-                    m_stfStatusMessage = "Generated in " + std::to_string(elapsed).substr(0, 5) + "s";
-
-                    m_stfGenerationDone = true;
-                });
-            }
-
-            if (!canGenerateStf) ImGui::EndDisabled();
-        }
-
-        // Show STF status
-        if (m_state.stfGenerated()) {
-            if (!m_stfStatusMessage.empty()) {
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", m_stfStatusMessage.c_str());
-            }
-            ImGui::Text("Beams: %zu | Rays: %zu | Bixels: %zu",
-                        m_state.stf->getCount(),
-                        m_state.stf->getTotalNumOfRays(),
-                        m_state.stf->getTotalNumOfBixels());
-        }
     }
 
     // ── Dose Calculation ──
@@ -383,27 +368,36 @@ void PlanningPanel::render() {
         bool canCalcDose = m_state.stfGenerated() && !m_state.isPhaseSpaceMachine();
 
         if (!m_state.stfGenerated()) {
-            ImGui::TextDisabled("Generate STF first to calculate dose.");
+            ImGui::TextDisabled("Create plan first to calculate dose.");
         }
 
         // Dose grid resolution
         if (canCalcDose && !m_isCalculatingDij) {
-            ImGui::Text("Dose Grid Resolution (mm):");
-            ImGui::DragFloat3("##doseRes", m_doseResolution, 0.1f, 0.5f, 10.0f, "%.1f");
+            ImGui::Text("Dose Grid Resolution:");
+            ImGui::SetNextItemWidth(95.0f);
+            ImGui::InputFloat("##doseRes0", &m_doseResolution[0], 0.0f, 0.0f, "%.1f");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(95.0f);
+            ImGui::InputFloat("##doseRes1", &m_doseResolution[1], 0.0f, 0.0f, "%.1f");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(95.0f);
+            ImGui::InputFloat("##doseRes2", &m_doseResolution[2], 0.0f, 0.0f, "%.1f");
+            ImGui::SameLine();
+            ImGui::TextUnformatted("mm");
 
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Text("Memory / Speed Options:");
 
             ImGui::SetNextItemWidth(120);
-            ImGui::DragFloat("Relative Threshold (%%)", &m_relativeThreshold, 0.1f, 0.0f, 50.0f, "%.1f");
+            ImGui::InputFloat("Relative Threshold (%%)", &m_relativeThreshold, 0.0f, 0.0f, "%.1f");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Discard entries below this %% of each bixel's max dose.\n"
                                   "Higher = less RAM, slightly less accurate.\n"
                                   "Recommended: 1%%. Set 0 to disable.");
 
             ImGui::SetNextItemWidth(120);
-            ImGui::InputFloat("Absolute Threshold", &m_absoluteThreshold, 0.0f, 0.0f, "%.1e");
+            ImGui::InputFloat("Absolute Threshold", &m_absoluteThreshold, 0.0f, 0.0f, "%.1f");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Discard dose entries below this value (Gy).\n"
                                   "Removes noise from far-field kernel tails.\n"
@@ -419,7 +413,7 @@ void PlanningPanel::render() {
         }
 
         if (m_isCalculatingDij) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Calculating Dij...");
+            ImGui::TextColored(getThemeColors().progressText, "Calculating Dij...");
             if (m_dijTotalBeams > 0) {
                 float progress = static_cast<float>(m_dijCurrentBeam) / static_cast<float>(m_dijTotalBeams);
                 ImGui::ProgressBar(progress, ImVec2(-1, 0),
@@ -437,6 +431,8 @@ void PlanningPanel::render() {
                 m_isCalculatingDij = false;
                 m_dijCalcDone = false;
                 m_state.cancelFlag = false;
+                m_state.taskRunning = false;
+
                 Logger::info("Dij calculation complete");
             }
         } else {
@@ -447,6 +443,7 @@ void PlanningPanel::render() {
                 m_isCalculatingDij = true;
                 m_dijCalcDone = false;
                 m_state.cancelFlag = false;
+                m_state.taskRunning = true;
                 m_dijCurrentBeam = 0;
                 m_dijTotalBeams = 0;
 
@@ -467,7 +464,8 @@ void PlanningPanel::render() {
                                 static_cast<double>(m_doseResolution[0]),
                                 static_cast<double>(m_doseResolution[1]),
                                 static_cast<double>(m_doseResolution[2])}));
-                        m_state.doseGrid = doseGrid;
+                        // Store in computeGrid (separate from display doseGrid)
+                        m_state.computeGrid = doseGrid;
 
                         auto dims = doseGrid->getDimensions();
                         Logger::info("Dose grid: " + std::to_string(dims[0]) + "x" +
@@ -535,7 +533,7 @@ void PlanningPanel::render() {
         // Show Dij status
         if (m_state.dijComputed()) {
             if (!m_dijStatusMessage.empty()) {
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", m_dijStatusMessage.c_str());
+                ImGui::TextColored(getThemeColors().passText, "%s", m_dijStatusMessage.c_str());
             }
             ImGui::Text("Dij: %zu voxels x %zu bixels (nnz: %zu)",
                         m_state.dij->getNumVoxels(),

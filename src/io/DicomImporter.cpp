@@ -5,6 +5,7 @@
 #include "geometry/StructureSet.hpp"
 #include "geometry/Volume.hpp"
 #include "geometry/Grid.hpp"
+#include "dose/DoseMatrix.hpp"
 #include "segmentation/BodyContourGenerator.hpp"
 #include "utils/Logger.hpp"
 #include <algorithm>
@@ -92,6 +93,13 @@ std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath
         }
         
         patientData->setStructureSet(std::move(structures));
+    }
+
+    // Import RT Dose if available
+    auto [doseMatrix, doseGrid] = importRTDose();
+    if (doseMatrix) {
+        patientData->setImportedDose(doseMatrix, doseGrid);
+        Logger::info("RT Dose imported: max=" + std::to_string(doseMatrix->getMax()) + " Gy");
     }
     
     return patientData;
@@ -452,6 +460,195 @@ bool DicomImporter::loadRTPlan(const std::string& filePath) {
 bool DicomImporter::loadRTDose(const std::string& filePath) {
     m_rtDoseFile = filePath;
     return std::filesystem::exists(filePath);
+}
+
+std::pair<std::shared_ptr<DoseMatrix>, std::shared_ptr<Grid>> DicomImporter::importRTDose() {
+#ifdef OPTIRAD_HAS_DCMTK
+    if (m_rtDoseFile.empty()) {
+        return {nullptr, nullptr};
+    }
+
+    DcmFileFormat fileFormat;
+    if (!fileFormat.loadFile(m_rtDoseFile.c_str()).good()) {
+        Logger::error("Failed to load RT Dose file: " + m_rtDoseFile.string());
+        return {nullptr, nullptr};
+    }
+
+    DcmDataset* ds = fileFormat.getDataset();
+    if (!ds) {
+        Logger::error("RT Dose file has no dataset");
+        return {nullptr, nullptr};
+    }
+
+    // Get dimensions
+    Uint16 rows = 0, cols = 0;
+    ds->findAndGetUint16(DCM_Rows, rows);
+    ds->findAndGetUint16(DCM_Columns, cols);
+
+    // Number of frames (slices)
+    OFString numFramesStr;
+    long numFrames = 1;
+    if (ds->findAndGetOFString(DCM_NumberOfFrames, numFramesStr).good()) {
+        numFrames = std::atol(numFramesStr.c_str());
+    }
+    if (numFrames < 1) numFrames = 1;
+
+    Logger::info("RT Dose dimensions: " + std::to_string(cols) + "x" +
+                std::to_string(rows) + "x" + std::to_string(numFrames));
+
+    // Pixel spacing
+    double spacingX = 1.0, spacingY = 1.0;
+    OFString pixelSpacing;
+    if (ds->findAndGetOFString(DCM_PixelSpacing, pixelSpacing, 0).good()) {
+        try { spacingY = std::stod(pixelSpacing.c_str()); } catch (...) {}
+    }
+    if (ds->findAndGetOFString(DCM_PixelSpacing, pixelSpacing, 1).good()) {
+        try { spacingX = std::stod(pixelSpacing.c_str()); } catch (...) {}
+    }
+
+    // Image position (origin)
+    double originX = 0, originY = 0, originZ = 0;
+    OFString pos;
+    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 0).good()) {
+        try { originX = std::stod(pos.c_str()); } catch (...) {}
+    }
+    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 1).good()) {
+        try { originY = std::stod(pos.c_str()); } catch (...) {}
+    }
+    if (ds->findAndGetOFString(DCM_ImagePositionPatient, pos, 2).good()) {
+        try { originZ = std::stod(pos.c_str()); } catch (...) {}
+    }
+
+    // Grid frame offset vector → compute slice spacing
+    // Read offset[0] and offset[1] to get the inter-frame distance.
+    // Offsets are relative to ImagePositionPatient of the first frame.
+    double spacingZ = 1.0;
+    bool framesDescending = false;
+    if (numFrames > 1) {
+        double off0 = 0.0, off1 = 0.0;
+        OFString offsetStr;
+        if (ds->findAndGetOFString(DCM_GridFrameOffsetVector, offsetStr, 0).good()) {
+            try { off0 = std::stod(offsetStr.c_str()); } catch (...) {}
+        }
+        if (ds->findAndGetOFString(DCM_GridFrameOffsetVector, offsetStr, 1).good()) {
+            try { off1 = std::stod(offsetStr.c_str()); } catch (...) {}
+        }
+        double step = off1 - off0;
+        if (std::abs(step) > 0.001) {
+            framesDescending = (step < 0);
+            spacingZ = std::abs(step);
+        }
+    }
+
+    // Dose grid scaling factor
+    Float64 doseGridScaling = 1.0;
+    ds->findAndGetFloat64(DCM_DoseGridScaling, doseGridScaling);
+
+    // BitsAllocated determines pixel word size (typically 32 for RT Dose)
+    Uint16 bitsAllocated = 32;
+    ds->findAndGetUint16(DCM_BitsAllocated, bitsAllocated);
+
+    Logger::info("RT Dose: DoseGridScaling=" + std::to_string(doseGridScaling) +
+                ", BitsAllocated=" + std::to_string(bitsAllocated));
+
+    // Image orientation (defaults to standard axial if absent)
+    std::array<double, 6> imageOrientation = {1, 0, 0, 0, 1, 0};
+    OFString orientStr;
+    for (int i = 0; i < 6; ++i) {
+        if (ds->findAndGetOFString(DCM_ImageOrientationPatient, orientStr, i).good()) {
+            try { imageOrientation[i] = std::stod(orientStr.c_str()); } catch (...) {}
+        }
+    }
+
+    // Create grid — if frames are descending, adjust origin to the last frame
+    // so the grid always goes in the positive slice direction.
+    auto grid = std::make_shared<Grid>();
+    grid->setDimensions(static_cast<size_t>(rows), static_cast<size_t>(cols),
+                        static_cast<size_t>(numFrames));
+    grid->setSpacing(spacingY, spacingX, spacingZ);
+
+    if (framesDescending && numFrames > 1) {
+        // Origin becomes position of last DICOM frame (which is lowest Z)
+        double adjustedOriginZ = originZ + (numFrames - 1) * (-spacingZ); // offset from first frame
+        grid->setOrigin({originX, originY, adjustedOriginZ});
+    } else {
+        grid->setOrigin({originX, originY, originZ});
+    }
+    grid->setImageOrientation(imageOrientation);
+
+    Logger::info("RT Dose grid: origin=(" + std::to_string(grid->getOrigin()[0]) + ", " +
+                std::to_string(grid->getOrigin()[1]) + ", " + std::to_string(grid->getOrigin()[2]) +
+                "), spacing=(" + std::to_string(spacingX) + ", " + std::to_string(spacingY) +
+                ", " + std::to_string(spacingZ) + ")" +
+                (framesDescending ? " [frames reversed]" : ""));
+
+    size_t totalVoxels = static_cast<size_t>(rows) * cols * numFrames;
+    size_t sliceSize = static_cast<size_t>(rows) * cols;
+
+    auto doseMatrix = std::make_shared<DoseMatrix>();
+    doseMatrix->setGrid(*grid);
+    doseMatrix->allocate();
+
+    // Read pixel data via raw byte buffer to avoid DCMTK VR mismatch
+    // (RT Dose pixel data is OW but contains 32-bit unsigned integers)
+    DcmElement* pixelElement = nullptr;
+    OFCondition findPxStatus = ds->findAndGetElement(DCM_PixelData, pixelElement);
+
+    if (!findPxStatus.good() || !pixelElement) {
+        Logger::error("RT Dose: pixel data element not found");
+        return {nullptr, nullptr};
+    }
+
+    // DICOM stores pixels row-major: data[col + row*cols + frame*rows*cols]
+    // DoseMatrix::at(i,j,k) uses column-major: data[i + j*rows + k*rows*cols]
+    // We must transpose within each frame so at(row, col, frame) returns the
+    // correct DICOM pixel at (row, col, frame).
+    // Also handle descending frame order by reversing frame index.
+    auto transposeAndStore = [&](auto* srcData) {
+        for (long frame = 0; frame < numFrames; ++frame) {
+            long dstFrame = framesDescending ? (numFrames - 1 - frame) : frame;
+            for (size_t row = 0; row < rows; ++row) {
+                for (size_t col = 0; col < cols; ++col) {
+                    size_t dicomFlat = col + row * cols + frame * sliceSize;
+                    // at(row, col, dstFrame) index:
+                    size_t atFlat = row + col * rows + dstFrame * sliceSize;
+                    doseMatrix->data()[atFlat] = static_cast<double>(srcData[dicomFlat]) * doseGridScaling;
+                }
+            }
+        }
+    };
+
+    if (bitsAllocated == 32) {
+        // Get raw byte buffer and reinterpret as 32-bit unsigned
+        Uint8* rawBuffer = nullptr;
+        pixelElement->getUint8Array(rawBuffer);
+        if (rawBuffer) {
+            const Uint32* data32 = reinterpret_cast<const Uint32*>(rawBuffer);
+            transposeAndStore(data32);
+        } else {
+            Logger::error("RT Dose: failed to read 32-bit pixel data buffer");
+            return {nullptr, nullptr};
+        }
+    } else {
+        // 16-bit pixel data
+        Uint16* data16 = nullptr;
+        pixelElement->getUint16Array(data16);
+        if (data16) {
+            transposeAndStore(data16);
+        } else {
+            Logger::error("RT Dose: failed to read 16-bit pixel data");
+            return {nullptr, nullptr};
+        }
+    }
+
+    Logger::info("RT Dose loaded: " + std::to_string(totalVoxels) + " voxels, max=" +
+                std::to_string(doseMatrix->getMax()) + " Gy");
+
+    return {doseMatrix, grid};
+#else
+    Logger::warn("DCMTK not available - cannot import RT Dose");
+    return {nullptr, nullptr};
+#endif
 }
 
 } // namespace optirad
