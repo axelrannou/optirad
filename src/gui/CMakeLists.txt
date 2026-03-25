@@ -38,7 +38,6 @@ add_library(optirad_gui
     Window.cpp
     Renderer.cpp
     panels/PatientPanel.cpp
-    panels/BeamPanel.cpp
     panels/OptimizationPanel.cpp
     panels/DoseStatsPanel.cpp
     panels/DVHPanel.cpp
@@ -61,6 +60,7 @@ target_include_directories(optirad_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(optirad_gui PRIVATE ${CMAKE_SOURCE_DIR}/external)
 
 target_link_libraries(optirad_gui PUBLIC
+    optirad_workflow
     optirad_core
     optirad_io
     optirad_geometry

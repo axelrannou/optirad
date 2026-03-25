@@ -1,17 +1,9 @@
 #include "OptimizationPanel.hpp"
 #include "Theme.hpp"
-#include "optimization/OptimizerFactory.hpp"
-#include "optimization/optimizers/LBFGSOptimizer.hpp"
-#include "optimization/objectives/SquaredDeviation.hpp"
-#include "optimization/objectives/SquaredOverdose.hpp"
-#include "optimization/objectives/SquaredUnderdose.hpp"
-#include "optimization/objectives/DVHObjective.hpp"
-#include "dose/DoseEngineFactory.hpp"
-#include "dose/PlanAnalysis.hpp"
-#include "geometry/Grid.hpp"
+#include "optimization/ObjectiveBuilder.hpp"
+#include "geometry/Structure.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
-#include <chrono>
 #include <cmath>
 #include <sstream>
 
@@ -225,44 +217,34 @@ void OptimizationPanel::render() {
             m_optimizationDone = false;
             m_state.taskRunning = false;
 
-            // Compute forward dose
-            if (!m_state.optimizedWeights.empty()) {
-                try {
-                    auto engine = DoseEngineFactory::create("PencilBeam");
-                    auto dose = engine->calculateDose(*m_state.dij, m_state.optimizedWeights, *m_state.computeGrid);
-                    auto dosePtr = std::make_shared<DoseMatrix>(std::move(dose));
-                    Logger::info("Forward dose computed. Max dose: " +
-                        std::to_string(dosePtr->getMax()) + " Gy");
+            // Transfer pipeline results to app state
+            if (!m_pipelineResult.weights.empty()) {
+                m_state.optimizedWeights = std::move(m_pipelineResult.weights);
 
-                    // Add to dose manager
+                if (m_pipelineResult.doseResult) {
                     int optNum = m_state.doseManager.nextOptimizationNumber();
                     m_state.doseManager.addDose(
                         "Optimization #" + std::to_string(optNum),
-                        dosePtr,
+                        m_pipelineResult.doseResult,
                         m_state.computeGrid);
                     m_state.doseManager.incrementOptimizationCount();
                     m_state.syncSelectedDose();
-
-                    // Signal Application to switch to DVH tab
                     m_state.optimizationJustFinished = true;
 
-                    // Post-optimization plan analysis
-                    auto stats = PlanAnalysis::computeStats(
-                        *dosePtr, *m_state.patientData, *m_state.computeGrid);
-                    std::ostringstream oss;
-                    PlanAnalysis::print(stats, oss);
-                    Logger::info(oss.str());
-                } catch (const std::exception& e) {
-                    Logger::error("Forward dose failed: " + std::string(e.what()));
+                    Logger::info("Max dose: " +
+                        std::to_string(m_pipelineResult.doseResult->getMax()) + " Gy");
                 }
             }
         }
     } else {
         // Optimization should be possible only when PTV constraints are present to avoid meaningless runs.
         bool canOptimize = m_state.dijComputed() && !m_objectives.empty() &&
+                          m_state.patientData && m_state.patientData->getStructureSet() &&
                           std::any_of(m_objectives.begin(), m_objectives.end(),
-                                      [](const ObjectiveConfig& obj) {
-                                          return obj.structureName.find("PTV") != std::string::npos; // on PTV
+                                      [this](const ObjectiveConfig& obj) {
+                                          const auto* s = m_state.patientData->getStructureSet()
+                                              ->getStructureByName(obj.structureName);
+                                          return s && s->isTarget();
                                       });
         if (!canOptimize) {
             ImGui::TextColored(getThemeColors().failText, "No valid PTV constraints.");
@@ -289,148 +271,52 @@ void OptimizationPanel::render() {
 
             m_optThread = std::thread([this, objectivesCopy, maxIter, tolerance,
                                        ntoEnabled, ntoThresholdPct, ntoPenalty]() {
-                auto start = std::chrono::steady_clock::now();
-
                 try {
-                    const auto* ss = m_state.patientData->getStructureSet();
                     const auto& ctGrid = m_state.patientData->getGrid();
                     const auto& doseGrid = *m_state.computeGrid;
 
-                    // ── Pre-optimization logging ──
-                    Logger::info("=== Pre-Optimization Summary ===");
-                    Logger::info("Structures: " + std::to_string(ss->getCount()) +
-                                " | Bixels: " + std::to_string(m_state.dij->getNumBixels()) +
-                                " | Dose voxels: " + std::to_string(m_state.dij->getNumVoxels()) +
-                                " | NNZ: " + std::to_string(m_state.dij->getNumNonZeros()));
-
-                    // Build objectives
-                    std::vector<std::unique_ptr<ObjectiveFunction>> ownedObjs;
-                    std::vector<ObjectiveFunction*> objPtrs;
-
+                    // Convert GUI objectives to ObjectiveSpecs
+                    std::vector<ObjectiveSpec> specs;
                     for (const auto& cfg : objectivesCopy) {
-                        const auto* structure = ss->getStructureByName(cfg.structureName);
-                        if (!structure) continue;
-
-                        auto doseIndices = Grid::mapVoxelIndices(
-                            ctGrid, doseGrid, structure->getVoxelIndices());
-
-                        std::unique_ptr<ObjectiveFunction> obj;
-                        std::string objDesc;
-
-                        switch (cfg.typeIdx) {
-                            case 0: {
-                                auto sd = std::make_unique<SquaredDeviation>();
-                                sd->setPrescribedDose(static_cast<double>(cfg.doseValue));
-                                objDesc = "SquaredDeviation @ " + std::to_string(cfg.doseValue) + " Gy";
-                                obj = std::move(sd);
-                                break;
-                            }
-                            case 1: {
-                                auto so = std::make_unique<SquaredOverdose>();
-                                so->setMaxDose(static_cast<double>(cfg.doseValue));
-                                objDesc = "SquaredOverdose @ " + std::to_string(cfg.doseValue) + " Gy";
-                                obj = std::move(so);
-                                break;
-                            }
-                            case 2: {
-                                auto su = std::make_unique<SquaredUnderdose>();
-                                su->setMinDose(static_cast<double>(cfg.doseValue));
-                                objDesc = "SquaredUnderdose @ " + std::to_string(cfg.doseValue) + " Gy";
-                                obj = std::move(su);
-                                break;
-                            }
-                            case 3: {
-                                auto dvh = std::make_unique<DVHObjective>();
-                                dvh->setType(DVHObjective::Type::MIN_DVH);
-                                dvh->setDoseThreshold(static_cast<double>(cfg.doseValue));
-                                dvh->setVolumeFraction(static_cast<double>(cfg.volumePct) / 100.0);
-                                objDesc = "MinDVH D" + std::to_string(static_cast<int>(cfg.volumePct)) +
-                                         "% >= " + std::to_string(cfg.doseValue) + " Gy";
-                                obj = std::move(dvh);
-                                break;
-                            }
-                            case 4: {
-                                auto dvh = std::make_unique<DVHObjective>();
-                                dvh->setType(DVHObjective::Type::MAX_DVH);
-                                dvh->setDoseThreshold(static_cast<double>(cfg.doseValue));
-                                dvh->setVolumeFraction(static_cast<double>(cfg.volumePct) / 100.0);
-                                objDesc = "MaxDVH V" + std::to_string(cfg.doseValue) +
-                                         "Gy <= " + std::to_string(static_cast<int>(cfg.volumePct)) + "%";
-                                obj = std::move(dvh);
-                                break;
-                            }
-                        }
-
-                        if (obj) {
-                            obj->setWeight(static_cast<double>(cfg.weight));
-                            obj->setStructure(structure);
-                            obj->setVoxelIndices(doseIndices);
-
-                            Logger::info("  " + cfg.structureName + " (" + structure->getType() +
-                                        ") -> " + objDesc + " | w=" +
-                                        std::to_string(cfg.weight) +
-                                        " | " + std::to_string(doseIndices.size()) + " dose voxels");
-
-                            objPtrs.push_back(obj.get());
-                            ownedObjs.push_back(std::move(obj));
-                        }
+                        ObjectiveSpec spec;
+                        spec.structurePattern = cfg.structureName;
+                        spec.exactMatch = true;
+                        spec.typeIdx = cfg.typeIdx;
+                        spec.doseValue = static_cast<double>(cfg.doseValue);
+                        spec.weight = static_cast<double>(cfg.weight);
+                        spec.volumePct = static_cast<double>(cfg.volumePct);
+                        specs.push_back(spec);
                     }
 
-                    Logger::info("Total objectives: " + std::to_string(objPtrs.size()));
-                    Logger::info("Max iterations: " + std::to_string(maxIter) +
-                                " | Tolerance: " + std::to_string(tolerance));
+                    auto objectives = ObjectiveBuilder::buildFromSpecs(
+                        specs, *m_state.patientData, ctGrid, doseGrid);
 
-                    // Detect prescription dose for NTO from ALL objective types
-                    // Use the max dose value from any target structure objective
+                    // Detect prescription dose from target objectives
                     double prescriptionDose = 0.0;
+                    const auto* ss = m_state.patientData->getStructureSet();
                     for (const auto& cfg : objectivesCopy) {
-                        // Check if this is a target structure
                         const auto* structure = ss->getStructureByName(cfg.structureName);
-                        if (!structure) continue;
-                        std::string sType = structure->getType();
-                        std::string sName = structure->getName();
-                        bool isTarget = (sType.find("TARGET") != std::string::npos ||
-                                        sType.find("PTV") != std::string::npos ||
-                                        sType.find("CTV") != std::string::npos ||
-                                        sType.find("GTV") != std::string::npos ||
-                                        sName.find("PTV") != std::string::npos ||
-                                        sName.find("CTV") != std::string::npos ||
-                                        sName.find("GTV") != std::string::npos);
-                        if (isTarget && cfg.doseValue > prescriptionDose) {
+                        if (structure && structure->isTarget() &&
+                            cfg.doseValue > prescriptionDose) {
                             prescriptionDose = cfg.doseValue;
                         }
                     }
 
-                    // Create optimizer
-                    auto optimizer = OptimizerFactory::create("LBFGS");
-                    optimizer->setMaxIterations(maxIter);
-                    optimizer->setTolerance(static_cast<double>(tolerance));
+                    OptimizationConfig config;
+                    config.maxIterations = maxIter;
+                    config.tolerance = static_cast<double>(tolerance);
+                    config.targetDose = prescriptionDose > 0 ? prescriptionDose : 66.0;
+                    config.ntoEnabled = ntoEnabled;
+                    config.ntoThresholdPct = static_cast<double>(ntoThresholdPct) / 100.0;
+                    config.ntoPenalty = static_cast<double>(ntoPenalty);
 
-                    // Configure NTO (hotspot control) if enabled and we have a prescription dose
-                    auto* lbfgs = dynamic_cast<LBFGSOptimizer*>(optimizer.get());
-                    if (lbfgs && ntoEnabled && prescriptionDose > 0) {
-                        lbfgs->setPrescriptionDose(prescriptionDose);
-                        lbfgs->setHotspotThreshold(static_cast<double>(ntoThresholdPct) / 100.0);
-                        lbfgs->setHotspotPenalty(static_cast<double>(ntoPenalty));
-                        Logger::info("NTO enabled: Rx=" + std::to_string(prescriptionDose) +
-                                    " Gy, threshold=" + std::to_string(ntoThresholdPct) +
-                                    "%, penalty=" + std::to_string(ntoPenalty));
-                    }
+                    m_pipelineResult = OptimizationPipeline::runWithObjectives(
+                        *m_state.dij, config, std::move(objectives),
+                        *m_state.patientData, doseGrid);
 
-                    // Run
-                    std::vector<Constraint> constraints;
-                    auto result = optimizer->optimize(*m_state.dij, objPtrs, constraints);
-
-                    m_state.optimizedWeights = std::move(result.weights);
-
-                    auto end = std::chrono::steady_clock::now();
-                    double elapsed = std::chrono::duration<double>(end - start).count();
-                    m_optStatusMessage = (result.converged ? "Converged" : "Max iter reached") +
-                        std::string(" in ") + std::to_string(result.iterations) +
-                        " iterations (" + std::to_string(elapsed).substr(0, 5) + "s)" +
-                        " | Obj=" + std::to_string(result.finalObjective);
-
-                    Logger::info("Optimization: " + m_optStatusMessage);
+                    m_optStatusMessage = (m_pipelineResult.converged ? "Converged" : "Max iter reached") +
+                        std::string(" in ") + std::to_string(m_pipelineResult.iterations) +
+                        " iterations | Obj=" + std::to_string(m_pipelineResult.finalObjective);
                 } catch (const std::exception& e) {
                     Logger::error("Optimization failed: " + std::string(e.what()));
                     m_optStatusMessage = "Error: " + std::string(e.what());

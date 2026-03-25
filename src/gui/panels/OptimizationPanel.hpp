@@ -2,6 +2,8 @@
 
 #include "IPanel.hpp"
 #include "../AppState.hpp"
+#include "core/workflow/OptimizationPipeline.hpp"
+#include "optimization/ObjectiveProtocol.hpp"
 #include <string>
 #include <vector>
 #include <atomic>
@@ -49,6 +51,7 @@ private:
     std::thread m_optThread;
     std::string m_optStatusMessage;
     std::atomic<int> m_currentIteration{0};
+    OptimizationPipelineResult m_pipelineResult;
 };
 
 } // namespace optirad

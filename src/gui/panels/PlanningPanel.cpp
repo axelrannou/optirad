@@ -1,13 +1,10 @@
 #include "PlanningPanel.hpp"
 #include "Theme.hpp"
-#include "io/MachineLoader.hpp"
-#include "steering/PhotonIMRTStfGenerator.hpp"
-#include "dose/DoseEngineFactory.hpp"
-#include "dose/DijSerializer.hpp"
+#include "core/workflow/PlanBuilder.hpp"
+#include "core/workflow/DoseCalculationPipeline.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
 #include <cmath>
-#include <chrono>
 #include <sstream>
 
 namespace optirad {
@@ -207,113 +204,59 @@ void PlanningPanel::render() {
         // Reset downstream state
         m_state.resetPlan();
 
-        auto plan = std::make_shared<Plan>();
-        plan->setName("TreatmentPlan");
-        plan->setRadiationMode(kRadiationModes[m_radiationModeIdx]);
-        plan->setNumOfFractions(m_numFractions);
-        plan->setPatientData(m_state.patientData);
+        // Build config from UI values
+        PlanConfig config;
+        config.radiationMode = kRadiationModes[m_radiationModeIdx];
+        config.machineName = kMachines[m_machineIdx];
+        config.numFractions = m_numFractions;
+        config.bixelWidth = m_bixelWidth;
 
-        // Load machine from JSON data file
-        try {
-            plan->setMachine(MachineLoader::load(
-                kRadiationModes[m_radiationModeIdx],
-                kMachines[m_machineIdx]));
-        } catch (const std::exception& e) {
-            Logger::error("Failed to load machine: " + std::string(e.what()));
-            ImGui::End();
-            return;
-        }
-
-        // STF properties
-        StfProperties stfProps;
-
-        // --- Parse gantry angles ---
         if (m_gantryMode == 0) {
-            stfProps.setGantryAngles(m_gantryStart, m_gantryStep, m_gantryStop);
+            config.gantryStart = m_gantryStart;
+            config.gantryStep = m_gantryStep;
+            config.gantryStop = m_gantryStop;
         } else {
-            std::vector<double> gList;
-            { std::istringstream ss(m_gantryListBuf); double v; while (ss >> v) gList.push_back(v); }
-            stfProps.setGantryAngles(gList);
+            std::istringstream ss(m_gantryListBuf);
+            double v;
+            while (ss >> v) config.gantryAngles.push_back(v);
         }
 
-        // --- Parse couch angles ---
         if (m_couchMode == 0) {
-            if (m_couchStep > 0.0f) {
-                stfProps.setCouchAngles(
-                    static_cast<double>(m_couchStart),
-                    static_cast<double>(m_couchStep),
-                    static_cast<double>(m_couchStop));
-            } else {
-                stfProps.setUniformCouchAngle(static_cast<double>(m_couchStart));
-            }
+            config.couchStart = m_couchStart;
+            config.couchStep = m_couchStep;
+            config.couchStop = m_couchStop;
         } else {
-            std::vector<double> cList;
-            { std::istringstream ss(m_couchListBuf); double v; while (ss >> v) cList.push_back(v); }
-            stfProps.setCouchAngles(cList);
+            std::istringstream ss(m_couchListBuf);
+            double v;
+            while (ss >> v) config.couchAngles.push_back(v);
         }
 
-        stfProps.ensureConsistentAngles();
-        stfProps.bixelWidth = m_bixelWidth;
+        m_isGeneratingStf = true;
+        m_stfGenerationDone = false;
+        m_state.taskRunning = true;
 
-        // Compute isocenter from target structures
-        auto iso = plan->computeIsoCenter();
-        stfProps.setUniformIsoCenter(iso);
-
-        plan->setStfProperties(stfProps);
-
-        m_state.plan = plan;
-        m_planCreated = true;
-
-        Logger::info("Plan created: " + std::to_string(stfProps.numOfBeams) +
-            " beams, bixelWidth=" + std::to_string(m_bixelWidth) + "mm");
-
-        // Automatically generate STF for generic (non-phase-space) machines
-        if (!kIsPhaseSpace[m_machineIdx]) {
-            m_state.resetStf();
-            m_isGeneratingStf = true;
-            m_stfGenerationDone = false;
-            m_state.taskRunning = true;
-
-            m_stfThread = std::thread([this]() {
-                auto start = std::chrono::steady_clock::now();
+        m_stfThread = std::thread([this, config]() {
+            auto start = std::chrono::steady_clock::now();
+            try {
+                auto result = PlanBuilder::build(config, m_state.patientData);
+                m_state.plan = result.plan;
+                if (result.stfProps) m_state.stfProps = result.stfProps;
+                if (result.stf) m_state.stf = result.stf;
+                m_planCreated = true;
 
                 const auto& stfP = m_state.plan->getStfProperties();
-                std::string radiationMode = m_state.plan->getRadiationMode();
-
-                std::array<double, 3> iso = {0.0, 0.0, 0.0};
-                if (!stfP.isoCenters.empty()) {
-                    iso = stfP.isoCenters[0];
-                }
-
-                double bixelWidth = stfP.bixelWidth;
-
-                PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, bixelWidth, iso);
-                generator.setMachine(m_state.plan->getMachine());
-                generator.setRadiationMode(radiationMode);
-                generator.setGantryAngles(stfP.gantryAngles);
-                generator.setCouchAngles(stfP.couchAngles);
-
-                auto patientData = m_state.plan->getPatientData();
-                if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
-                    const auto* ct = patientData->getCTVolume();
-                    const auto* structureSet = patientData->getStructureSet();
-                    const auto& grid = ct->getGrid();
-
-                    generator.setGrid(grid);
-                    generator.setStructureSet(*structureSet);
-                    generator.setCTResolution(grid.getSpacing());
-                }
-
-                m_state.stfProps = generator.generate();
-                m_state.stf = std::make_shared<Stf>(generator.generateStf());
+                Logger::info("Plan created: " + std::to_string(stfP.numOfBeams) +
+                    " beams, bixelWidth=" + std::to_string(config.bixelWidth) + "mm");
 
                 auto end = std::chrono::steady_clock::now();
                 double elapsed = std::chrono::duration<double>(end - start).count();
-                m_stfStatusMessage = "STF generated in " + std::to_string(elapsed).substr(0, 5) + "s";
-
-                m_stfGenerationDone = true;
-            });
-        }
+                m_stfStatusMessage = "Plan created in " + std::to_string(elapsed).substr(0, 5) + "s";
+            } catch (const std::exception& e) {
+                Logger::error("Plan creation failed: " + std::string(e.what()));
+                m_stfStatusMessage = "Error: " + std::string(e.what());
+            }
+            m_stfGenerationDone = true;
+        });
     }
 
     if (!paramsValid) ImGui::EndDisabled();
@@ -448,76 +391,33 @@ void PlanningPanel::render() {
                 m_dijTotalBeams = 0;
 
                 m_dijThread = std::thread([this]() {
-                    auto start = std::chrono::steady_clock::now();
-
                     try {
-                        // Update plan's dose grid resolution
                         m_state.plan->setDoseGridResolution({
                             static_cast<double>(m_doseResolution[0]),
                             static_cast<double>(m_doseResolution[1]),
                             static_cast<double>(m_doseResolution[2])});
 
-                        // Create dose grid
-                        const auto& ctGrid = m_state.patientData->getGrid();
-                        auto doseGrid = std::make_shared<Grid>(
-                            Grid::createDoseGrid(ctGrid, {
-                                static_cast<double>(m_doseResolution[0]),
-                                static_cast<double>(m_doseResolution[1]),
-                                static_cast<double>(m_doseResolution[2])}));
-                        // Store in computeGrid (separate from display doseGrid)
-                        m_state.computeGrid = doseGrid;
+                        DoseCalcPipelineOptions opts;
+                        opts.resolution = {
+                            static_cast<double>(m_doseResolution[0]),
+                            static_cast<double>(m_doseResolution[1]),
+                            static_cast<double>(m_doseResolution[2])};
+                        opts.absoluteThreshold = static_cast<double>(m_absoluteThreshold);
+                        opts.relativeThreshold = static_cast<double>(m_relativeThreshold) / 100.0;
+                        opts.numThreads = m_numThreads;
 
-                        auto dims = doseGrid->getDimensions();
-                        Logger::info("Dose grid: " + std::to_string(dims[0]) + "x" +
-                            std::to_string(dims[1]) + "x" + std::to_string(dims[2]));
+                        auto result = DoseCalculationPipeline::run(
+                            *m_state.plan, *m_state.stf, *m_state.patientData, opts,
+                            [this](int current, int total) {
+                                m_dijCurrentBeam = current;
+                                m_dijTotalBeams = total;
+                            },
+                            &m_state.cancelFlag);
 
-                        // Check cache
-                        std::string patientName = "unknown";
-                        if (m_state.patientData->getPatient()) {
-                            patientName = m_state.patientData->getPatient()->getName();
-                        }
-                        std::string cacheFile = DijSerializer::getCacheDir() + "/" +
-                            DijSerializer::buildCacheKey(
-                                patientName,
-                                static_cast<int>(m_state.stf->getCount()),
-                                m_state.plan->getStfProperties().bixelWidth,
-                                static_cast<double>(m_doseResolution[0]));
-
-                        if (DijSerializer::exists(cacheFile)) {
-                            Logger::info("Loading Dij from cache: " + cacheFile);
-                            auto loaded = DijSerializer::load(cacheFile);
-                            m_state.dij = std::make_shared<DoseInfluenceMatrix>(std::move(loaded));
-                            m_dijStatusMessage = "Loaded from cache";
-                        } else {
-                            // Create dose engine and compute
-                            auto engine = DoseEngineFactory::create("PencilBeam");
-                            engine->setCancelFlag(&m_state.cancelFlag);
-                            engine->setProgressCallback(
-                                [this](int current, int total, const std::string&) {
-                                    m_dijCurrentBeam = current;
-                                    m_dijTotalBeams = total;
-                                });
-
-                            // Apply user options (thresholds, threads)
-                            DoseCalcOptions opts;
-                            opts.absoluteThreshold = static_cast<double>(m_absoluteThreshold);
-                            opts.relativeThreshold = static_cast<double>(m_relativeThreshold) / 100.0;
-                            opts.numThreads = m_numThreads;
-                            engine->setOptions(opts);
-
-                            auto dij = engine->calculateDij(
-                                *m_state.plan, *m_state.stf, *m_state.patientData, *doseGrid);
-                            m_state.dij = std::make_shared<DoseInfluenceMatrix>(std::move(dij));
-
-                            // Save to cache
-                            DijSerializer::save(*m_state.dij, cacheFile);
-
-                            auto end = std::chrono::steady_clock::now();
-                            double elapsed = std::chrono::duration<double>(end - start).count();
-                            m_dijStatusMessage = "Computed in " +
-                                std::to_string(elapsed).substr(0, 5) + "s" +
-                                " (nnz=" + std::to_string(m_state.dij->getNumNonZeros()) + ")";
-                        }
+                        m_state.computeGrid = result.doseGrid;
+                        m_state.dij = result.dij;
+                        m_dijStatusMessage = result.cacheHit ? "Loaded from cache" :
+                            "Computed (nnz=" + std::to_string(result.dij->getNumNonZeros()) + ")";
                     } catch (const std::exception& e) {
                         Logger::error("Dij calculation failed: " + std::string(e.what()));
                         m_dijStatusMessage = "Error: " + std::string(e.what());
