@@ -56,7 +56,8 @@ public:
         const OptimizationConfig& config,
         BuiltObjectives objectives,
         const PatientData& patientData,
-        const Grid& doseGrid);
+        const Grid& doseGrid,
+        IterationCallback iterCallback = nullptr);
 };
 
 } // namespace optirad

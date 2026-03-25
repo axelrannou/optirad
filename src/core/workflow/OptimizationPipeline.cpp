@@ -13,7 +13,8 @@ static OptimizationPipelineResult runImpl(
     const OptimizationConfig& config,
     BuiltObjectives objectives,
     const PatientData& patientData,
-    const Grid& doseGrid) {
+    const Grid& doseGrid,
+    IterationCallback iterCallback) {
 
     OptimizationPipelineResult result;
 
@@ -42,6 +43,10 @@ static OptimizationPipelineResult runImpl(
             lbfgs->setHotspotThreshold(config.ntoThresholdPct);
             lbfgs->setHotspotPenalty(config.ntoPenalty);
         }
+    }
+
+    if (iterCallback) {
+        optimizer->setIterationCallback(std::move(iterCallback));
     }
 
     auto start = std::chrono::steady_clock::now();
@@ -84,7 +89,7 @@ OptimizationPipelineResult OptimizationPipeline::run(
     auto objectives = ObjectiveBuilder::build(
         protocol, patientData, ctGrid, doseGrid, config.targetDose);
 
-    return runImpl(dij, config, std::move(objectives), patientData, doseGrid);
+    return runImpl(dij, config, std::move(objectives), patientData, doseGrid, nullptr);
 }
 
 OptimizationPipelineResult OptimizationPipeline::runWithObjectives(
@@ -92,9 +97,10 @@ OptimizationPipelineResult OptimizationPipeline::runWithObjectives(
     const OptimizationConfig& config,
     BuiltObjectives objectives,
     const PatientData& patientData,
-    const Grid& doseGrid) {
+    const Grid& doseGrid,
+    IterationCallback iterCallback) {
 
-    return runImpl(dij, config, std::move(objectives), patientData, doseGrid);
+    return runImpl(dij, config, std::move(objectives), patientData, doseGrid, std::move(iterCallback));
 }
 
 } // namespace optirad

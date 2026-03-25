@@ -288,9 +288,14 @@ void PatientPanel::renderDoseList() {
             ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
             ImGui::PushStyleColor(ImGuiCol_HeaderActive,  ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
             if (ImGui::Selectable(("##drow" + std::to_string(i)).c_str(), selected,
-                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap |
+                    ImGuiSelectableFlags_AllowDoubleClick,
                     ImVec2(0, rowHeight))) {
-                if (!selected) {
+                if (ImGui::IsMouseDoubleClicked(0)) {
+                    // Double-click: enter edit mode on the name
+                    m_editingDoseIdx = i;
+                    snprintf(m_editDoseName, sizeof(m_editDoseName), "%s", entry->name.c_str());
+                } else if (!selected) {
                     dm.setSelected(i);
                     m_state.syncSelectedDose();
                 }
@@ -314,9 +319,29 @@ void PatientPanel::renderDoseList() {
             dl->AddCircleFilled(center, radius, fillCol);
             dl->AddCircle(center, radius, borderCol, 0, 1.2f);
 
-            // Name
+            // Name (double-click to edit)
             ImGui::TableNextColumn();
-            ImGui::Text("%s", entry->name.c_str());
+            if (m_editingDoseIdx == i) {
+                ImGui::SetNextItemWidth(-1);
+                ImGui::SetKeyboardFocusHere();
+                bool committed = ImGui::InputText(
+                    ("##dname" + std::to_string(i)).c_str(),
+                    m_editDoseName, sizeof(m_editDoseName),
+                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+                if (committed || ImGui::IsItemDeactivatedAfterEdit() ||
+                    (!ImGui::IsItemActive() && !ImGui::IsItemFocused() && ImGui::IsItemDeactivated())) {
+                    if (m_editDoseName[0] != '\0') {
+                        dm.renameDose(i, m_editDoseName);
+                    }
+                    m_editingDoseIdx = -1;
+                }
+                // Cancel on Escape
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                    m_editingDoseIdx = -1;
+                }
+            } else {
+                ImGui::Text("%s", entry->name.c_str());
+            }
 
             // Max dose
             ImGui::TableNextColumn();

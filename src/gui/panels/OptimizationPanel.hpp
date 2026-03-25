@@ -8,6 +8,7 @@
 #include <vector>
 #include <atomic>
 #include <thread>
+#include <mutex>
 
 namespace optirad {
 
@@ -51,7 +52,16 @@ private:
     std::thread m_optThread;
     std::string m_optStatusMessage;
     std::atomic<int> m_currentIteration{0};
+    std::atomic<double> m_currentObjective{0.0};
+    std::atomic<double> m_currentProjGrad{0.0};
+    std::atomic<double> m_currentImprovement{0.0};
     OptimizationPipelineResult m_pipelineResult;
+
+    // Iteration log for convergence curve (written by optimizer thread, read by render)
+    std::mutex m_iterMutex;
+    std::vector<IterationInfo> m_iterationLog;
+
+    void renderConvergenceCurve();
 };
 
 } // namespace optirad

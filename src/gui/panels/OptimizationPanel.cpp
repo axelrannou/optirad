@@ -6,6 +6,7 @@
 #include <imgui.h>
 #include <cmath>
 #include <sstream>
+#include <algorithm>
 
 namespace optirad {
 
@@ -143,10 +144,12 @@ void OptimizationPanel::render() {
                 ImGui::TableSetColumnIndex(3);
                 // Volume % only relevant for DVH objectives
                 bool isDVH = (obj.typeIdx == 3 || obj.typeIdx == 4);
-                if (!isDVH) ImGui::BeginDisabled();
-                ImGui::SetNextItemWidth(-1);
-                ImGui::InputFloat("##vol", &obj.volumePct, 0.0f, 0.0f, "%.1f");
-                if (!isDVH) ImGui::EndDisabled();
+                if (isDVH) {
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::InputFloat("##vol", &obj.volumePct, 0.0f, 0.0f, "%.1f");
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
 
                 ImGui::TableSetColumnIndex(4);
                 ImGui::SetNextItemWidth(-1);
@@ -206,10 +209,27 @@ void OptimizationPanel::render() {
     if (m_isOptimizing) {
         ImGui::TextColored(getThemeColors().progressText, "Optimizing...");
         if (m_maxIterations > 0) {
-            float progress = static_cast<float>(m_currentIteration.load()) / static_cast<float>(m_maxIterations);
+            int curIter = m_currentIteration.load();
+            float progress = static_cast<float>(curIter) / static_cast<float>(m_maxIterations);
             ImGui::ProgressBar(progress, ImVec2(-1, 0),
-                ("Iteration " + std::to_string(m_currentIteration.load())).c_str());
+                ("Iteration " + std::to_string(curIter) + " / " + std::to_string(m_maxIterations)).c_str());
         }
+
+        // Live iteration stats
+        {
+            int iter = m_currentIteration.load();
+            if (iter > 0) {
+                double obj = m_currentObjective.load();
+                double grad = m_currentProjGrad.load();
+                double imp = m_currentImprovement.load();
+                char buf[256];
+                snprintf(buf, sizeof(buf), "Iter %d | Obj: %.3e | Grad: %.2e | %.1f%% imp",
+                         iter, obj, grad, imp);
+                ImGui::Text("%s", buf);
+            }
+        }
+
+        renderConvergenceCurve();
 
         if (m_optimizationDone) {
             m_optThread.join();
@@ -260,6 +280,13 @@ void OptimizationPanel::render() {
             m_optimizationDone = false;
             m_state.taskRunning = true;
             m_currentIteration = 0;
+            m_currentObjective = 0.0;
+            m_currentProjGrad = 0.0;
+            m_currentImprovement = 0.0;
+            {
+                std::lock_guard<std::mutex> lock(m_iterMutex);
+                m_iterationLog.clear();
+            }
 
             // Snapshot objectives to avoid data race with render thread
             auto objectivesCopy = m_objectives;
@@ -312,7 +339,15 @@ void OptimizationPanel::render() {
 
                     m_pipelineResult = OptimizationPipeline::runWithObjectives(
                         *m_state.dij, config, std::move(objectives),
-                        *m_state.patientData, doseGrid);
+                        *m_state.patientData, doseGrid,
+                        [this](const IterationInfo& info) {
+                            m_currentIteration.store(info.iteration);
+                            m_currentObjective.store(info.objective);
+                            m_currentProjGrad.store(info.projGradNorm);
+                            m_currentImprovement.store(info.improvement);
+                            std::lock_guard<std::mutex> lock(m_iterMutex);
+                            m_iterationLog.push_back(info);
+                        });
 
                     m_optStatusMessage = (m_pipelineResult.converged ? "Converged" : "Max iter reached") +
                         std::string(" in ") + std::to_string(m_pipelineResult.iterations) +
@@ -337,9 +372,117 @@ void OptimizationPanel::render() {
             ImGui::Text("Max dose: %.2f Gy | Mean dose: %.2f Gy",
                 m_state.doseResult->getMax(), m_state.doseResult->getMean());
         }
+        renderConvergenceCurve();
     }
 
     ImGui::End();
+}
+
+void OptimizationPanel::renderConvergenceCurve() {
+    // Snapshot iteration log under lock
+    std::vector<IterationInfo> log;
+    {
+        std::lock_guard<std::mutex> lock(m_iterMutex);
+        log = m_iterationLog;
+    }
+    if (log.size() < 2) return;
+
+    const auto& tc = getThemeColors();
+    auto vecToCol32 = [](const ImVec4& v) {
+        return IM_COL32(
+            static_cast<int>(v.x * 255),
+            static_cast<int>(v.y * 255),
+            static_cast<int>(v.z * 255),
+            static_cast<int>(v.w * 255));
+    };
+
+    // Compute log10 of objectives and axis ranges
+    float minLogObj = std::numeric_limits<float>::max();
+    float maxLogObj = std::numeric_limits<float>::lowest();
+    int maxIter = 0;
+    std::vector<float> logObjs(log.size());
+    for (size_t i = 0; i < log.size(); ++i) {
+        float v = (log[i].objective > 0) ? std::log10(static_cast<float>(log[i].objective)) : 0.0f;
+        logObjs[i] = v;
+        minLogObj = std::min(minLogObj, v);
+        maxLogObj = std::max(maxLogObj, v);
+        maxIter = std::max(maxIter, log[i].iteration);
+    }
+    // Pad Y-axis slightly
+    float yRange = maxLogObj - minLogObj;
+    if (yRange < 0.5f) yRange = 0.5f;
+    minLogObj -= yRange * 0.05f;
+    maxLogObj += yRange * 0.05f;
+    yRange = maxLogObj - minLogObj;
+
+    // Canvas layout
+    const float canvasHeight = 180.0f;
+    ImVec2 canvasSize(ImGui::GetContentRegionAvail().x, canvasHeight);
+    canvasSize.x = std::max(canvasSize.x, 200.0f);
+
+    const float marginLeft = 60.0f;
+    const float marginBottom = 25.0f;
+    const float marginTop = 10.0f;
+    const float marginRight = 10.0f;
+
+    ImVec2 canvasPos = ImGui::GetCursorScreenPos();
+    ImVec2 plotOrigin(canvasPos.x + marginLeft, canvasPos.y + marginTop);
+    ImVec2 plotSize(canvasSize.x - marginLeft - marginRight,
+                    canvasSize.y - marginTop - marginBottom);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // Background
+    dl->AddRectFilled(
+        plotOrigin,
+        ImVec2(plotOrigin.x + plotSize.x, plotOrigin.y + plotSize.y),
+        vecToCol32(tc.dvhBackground));
+
+    // Grid lines and labels
+    constexpr int kGridLines = 5;
+    for (int i = 0; i <= kGridLines; ++i) {
+        float frac = static_cast<float>(i) / kGridLines;
+
+        // Horizontal grid (objective axis)
+        float y = plotOrigin.y + plotSize.y - frac * plotSize.y;
+        dl->AddLine(
+            ImVec2(plotOrigin.x, y),
+            ImVec2(plotOrigin.x + plotSize.x, y),
+            vecToCol32(tc.dvhGrid));
+        float val = minLogObj + frac * yRange;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "1e%.0f", val);
+        dl->AddText(ImVec2(plotOrigin.x - 55, y - 7), vecToCol32(tc.dvhLabel), buf);
+
+        // Vertical grid (iteration axis)
+        float x = plotOrigin.x + frac * plotSize.x;
+        dl->AddLine(
+            ImVec2(x, plotOrigin.y),
+            ImVec2(x, plotOrigin.y + plotSize.y),
+            vecToCol32(tc.dvhGrid));
+        int iterLabel = static_cast<int>(frac * maxIter);
+        snprintf(buf, sizeof(buf), "%d", iterLabel);
+        dl->AddText(ImVec2(x - 8, plotOrigin.y + plotSize.y + 5), vecToCol32(tc.dvhLabel), buf);
+    }
+
+    // Border
+    dl->AddRect(
+        plotOrigin,
+        ImVec2(plotOrigin.x + plotSize.x, plotOrigin.y + plotSize.y),
+        vecToCol32(tc.dvhBorder));
+
+    // Draw the objective curve
+    ImU32 lineColor = vecToCol32(tc.progressText);
+    for (size_t i = 1; i < log.size(); ++i) {
+        float x0 = plotOrigin.x + (static_cast<float>(log[i-1].iteration) / maxIter) * plotSize.x;
+        float y0 = plotOrigin.y + plotSize.y - ((logObjs[i-1] - minLogObj) / yRange) * plotSize.y;
+        float x1 = plotOrigin.x + (static_cast<float>(log[i].iteration) / maxIter) * plotSize.x;
+        float y1 = plotOrigin.y + plotSize.y - ((logObjs[i] - minLogObj) / yRange) * plotSize.y;
+        dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), lineColor, 2.0f);
+    }
+
+    // Reserve canvas space
+    ImGui::Dummy(canvasSize);
 }
 
 } // namespace optirad

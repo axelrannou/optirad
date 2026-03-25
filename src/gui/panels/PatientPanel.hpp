@@ -38,6 +38,10 @@ private:
     bool m_showImportDialog = false;
     char m_dicomPath[512] = "";
     bool m_isImporting = false;
+
+    // Dose name inline editing
+    int m_editingDoseIdx = -1;
+    char m_editDoseName[128] = "";
 };
 
 } // namespace optirad

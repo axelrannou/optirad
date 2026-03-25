@@ -22,6 +22,7 @@ void LBFGSOptimizer::setVerbose(bool verbose) { m_verbose = verbose; }
 void LBFGSOptimizer::setPrescriptionDose(double dose) { m_prescriptionDose = dose; }
 void LBFGSOptimizer::setHotspotThreshold(double threshold) { m_hotspotThreshold = threshold; }
 void LBFGSOptimizer::setHotspotPenalty(double penalty) { m_hotspotPenalty = penalty; }
+void LBFGSOptimizer::setIterationCallback(IterationCallback cb) { m_iterCallback = std::move(cb); }
 
 OptimizationResult LBFGSOptimizer::optimize(
     const DoseInfluenceMatrix& dij,
@@ -178,18 +179,30 @@ OptimizationResult LBFGSOptimizer::optimize(
         }
         
         // Display progress
-        if (m_verbose && (iter % m_progressEvery == 0 || iter == 1)) {
+        if (iter % m_progressEvery == 0 || iter == 1) {
             double initialObj = objectiveHistory[0];
             double improvement = 0;
             if (initialObj > 0) {
                 improvement = 100.0 * (initialObj - fval) / initialObj;
             }
-            std::cout << std::setw(8) << iter 
-                      << std::setw(16) << std::scientific << fval 
-                      << std::setw(16) << projGradNorm 
-                      << std::setw(12) << std::fixed << alpha 
-                      << std::setw(10) << lsIter 
-                      << "  (" << std::fixed << std::setprecision(1) << improvement << "% imp)\n";
+            if (m_verbose) {
+                std::cout << std::setw(8) << iter 
+                          << std::setw(16) << std::scientific << fval 
+                          << std::setw(16) << projGradNorm 
+                          << std::setw(12) << std::fixed << alpha 
+                          << std::setw(10) << lsIter 
+                          << "  (" << std::fixed << std::setprecision(1) << improvement << "% imp)\n";
+            }
+            if (m_iterCallback) {
+                IterationInfo info;
+                info.iteration = iter;
+                info.objective = fval;
+                info.projGradNorm = projGradNorm;
+                info.stepSize = alpha;
+                info.lsIters = lsIter;
+                info.improvement = improvement;
+                m_iterCallback(info);
+            }
         }
         
         // Compute s and y for L-BFGS update

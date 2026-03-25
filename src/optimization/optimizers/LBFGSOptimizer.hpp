@@ -29,7 +29,10 @@ public:
     void setHotspotThreshold(double threshold);  // fraction of Rx (e.g. 1.0 = 100%)
     void setHotspotPenalty(double penalty);
 
+    void setIterationCallback(IterationCallback cb) override;
+
 private:
+    IterationCallback m_iterCallback;
     // Parameters
     int m_maxIterations = 400;
     double m_tolerance = 1e-5;

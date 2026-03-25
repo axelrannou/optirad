@@ -104,6 +104,13 @@ public:
         ++m_version;
     }
 
+    /// Rename a dose entry. Increments version so downstream panels refresh.
+    void renameDose(int idx, const std::string& newName) {
+        if (idx < 0 || idx >= static_cast<int>(m_entries.size())) return;
+        m_entries[idx].name = newName;
+        ++m_version;
+    }
+
     /// Return the next sequential optimization number (for naming).
     int nextOptimizationNumber() const { return m_optimizationCount + 1; }
 
