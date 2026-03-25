@@ -1,6 +1,6 @@
 #include "PhaseSpacePanel.hpp"
 #include "../views/renderers/PhaseSpaceRenderer.hpp"
-#include "phsp/PhaseSpaceBeamSource.hpp"
+#include "core/workflow/PhaseSpaceBuilder.hpp"
 #include "phsp/PhaseSpaceData.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
@@ -136,44 +136,18 @@ void PhaseSpacePanel::renderLoadControls() {
                 auto start = std::chrono::steady_clock::now();
 
                 try {
-                    const auto& stfP = m_state.plan->getStfProperties();
-                    const auto& gantryAngles = stfP.gantryAngles;
-                    const auto& couchAngles = stfP.couchAngles;
+                    PhaseSpaceBuildOptions opts;
+                    opts.collimatorAngle = static_cast<double>(m_collimatorAngle);
+                    opts.maxParticles = static_cast<int64_t>(m_maxParticlesK) * 1000;
+                    opts.vizSampleSize = static_cast<int64_t>(m_vizSampleSizeK) * 1000;
 
-                    // Get isocenter from plan
-                    std::array<double, 3> iso = {0.0, 0.0, 0.0};
-                    if (!stfP.isoCenters.empty()) {
-                        iso = stfP.isoCenters[0];
-                    }
-
-                    const int numBeams = static_cast<int>(gantryAngles.size());
-                    std::vector<std::shared_ptr<PhaseSpaceBeamSource>> sources(numBeams);
-
-                    // Build all beams in parallel (OpenMP)
-                    #pragma omp parallel for schedule(dynamic)
-                    for (int i = 0; i < numBeams; ++i) {
-                        auto source = std::make_shared<PhaseSpaceBeamSource>();
-                        double beamCouch = (static_cast<size_t>(i) < couchAngles.size() ? couchAngles[i] : 0.0);
-                        source->configure(m_state.plan->getMachine(),
-                                           gantryAngles[i],
-                                           m_collimatorAngle,
-                                           beamCouch,
-                                           iso);
-                        source->build(static_cast<int64_t>(m_maxParticlesK) * 1000,
-                                       static_cast<int64_t>(m_vizSampleSizeK) * 1000);
-                        sources[i] = std::move(source);
-
-                        Logger::debug("Phase-space beam " + std::to_string(i) +
-                                      " (gantry=" + std::to_string(gantryAngles[i]) +
-                                      ") loaded");
-                    }
-
-                    m_state.phaseSpaceSources = std::move(sources);
+                    m_state.phaseSpaceSources = PhaseSpaceBuilder::build(*m_state.plan, opts);
 
                     auto end = std::chrono::steady_clock::now();
                     double elapsed = std::chrono::duration<double>(end - start).count();
-                    m_statusMessage = "Loaded " + std::to_string(gantryAngles.size()) +
-                                     " beams in " + std::to_string(elapsed).substr(0, 5) + "s";
+                    m_statusMessage = "Loaded " +
+                        std::to_string(m_state.phaseSpaceSources.size()) +
+                        " beams in " + std::to_string(elapsed).substr(0, 5) + "s";
                 } catch (const std::exception& e) {
                     m_statusMessage = "Error: " + std::string(e.what());
                     Logger::error("Phase-space load failed: " + std::string(e.what()));

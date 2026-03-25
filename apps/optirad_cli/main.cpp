@@ -1,30 +1,13 @@
 #include "io/DicomImporter.hpp"
-#include "io/MachineLoader.hpp"
-#include "core/Patient.hpp"
 #include "core/PatientData.hpp"
 #include "core/Plan.hpp"
-#include "core/Machine.hpp"
 #include "core/Stf.hpp"
-#include "steering/StfProperties.hpp"
-#include "steering/IStfGenerator.hpp"
-#include "steering/PhotonIMRTStfGenerator.hpp"
-#include "geometry/StructureSet.hpp"
-#include "geometry/Structure.hpp"
-#include "geometry/Volume.hpp"
-#include "phsp/PhaseSpaceBeamSource.hpp"
-#include "phsp/PhaseSpaceData.hpp"
-#include "dose/DoseEngineFactory.hpp"
-#include "dose/DoseInfluenceMatrix.hpp"
-#include "dose/DoseMatrix.hpp"
-#include "dose/DijSerializer.hpp"
-#include "dose/DoseCalcOptions.hpp"
-#include "optimization/OptimizerFactory.hpp"
-#include "optimization/optimizers/LBFGSOptimizer.hpp"
-#include "optimization/objectives/SquaredDeviation.hpp"
-#include "optimization/objectives/SquaredOverdose.hpp"
-#include "optimization/objectives/SquaredUnderdose.hpp"
-#include "optimization/objectives/DVHObjective.hpp"
-#include "optimization/Constraint.hpp"
+#include "core/workflow/WorkflowState.hpp"
+#include "core/workflow/PlanBuilder.hpp"
+#include "core/workflow/DoseCalculationPipeline.hpp"
+#include "core/workflow/PhaseSpaceBuilder.hpp"
+#include "core/workflow/OptimizationPipeline.hpp"
+#include "optimization/ObjectiveProtocol.hpp"
 #include "dose/PlanAnalysis.hpp"
 #include "utils/Logger.hpp"
 
@@ -40,28 +23,10 @@
 
 using namespace optirad;
 
-// Shared state across commands
-struct AppState {
-    std::shared_ptr<PatientData> patientData;
-    std::shared_ptr<Plan> plan;
-    std::shared_ptr<StfProperties> stfProps;  // lightweight STF properties
-    std::shared_ptr<Stf> stf;                 // full STF with beams and rays
-    std::vector<std::shared_ptr<PhaseSpaceBeamSource>> phaseSpaceSources;
-
-    // Dose calculation
-    std::shared_ptr<DoseInfluenceMatrix> dij;
-    std::shared_ptr<Grid> doseGrid;
-
-    // Optimization
-    std::vector<double> optimizedWeights;
-    std::shared_ptr<DoseMatrix> doseResult;
-};
-
 // Forward declarations
-int loadPhaseSpace(const std::vector<std::string>& args, AppState& state);
-int doseCalc(const std::vector<std::string>& args, AppState& state);
-int optimize(const std::vector<std::string>& args, AppState& state);
-std::unique_ptr<optirad::IStfGenerator> selectStfGenerator(const std::string& mode, double gantryStart, double gantryStep, double gantryStop, double bixelWidth, const std::array<double, 3>& iso);
+int loadPhaseSpace(const std::vector<std::string>& args, WorkflowState& state);
+int doseCalc(const std::vector<std::string>& args, WorkflowState& state);
+int optimize(const std::vector<std::string>& args, WorkflowState& state);
 
 void printUsage(const char* progName) {
     std::cout << "Usage: " << progName << " <command> [options]\n\n"
@@ -101,7 +66,7 @@ void printUsage(const char* progName) {
               << "  (Couch angles come from plan's --couch-start/step/stop or --couch-angles)\n";
 }
 
-int loadDicom(const std::string& path, AppState& state) {
+int loadDicom(const std::string& path, WorkflowState& state) {
     std::cout << "=== OptiRad DICOM Loader ===\n\n";
     std::cout << "Loading DICOM from: " << path << "\n\n";
 
@@ -123,14 +88,7 @@ int loadDicom(const std::string& path, AppState& state) {
     state.patientData = std::move(patientData);
 
     // Invalidate derived state to avoid stale reuse across patients
-    state.plan.reset();
-    state.stfProps.reset();
-    state.stf.reset();
-    state.dij.reset();
-    state.doseGrid.reset();
-    state.optimizedWeights.clear();
-    state.doseResult.reset();
-    state.phaseSpaceSources.clear();
+    state.resetPlan();
 
     // Display patient info
     if (auto* patient = state.patientData->getPatient()) {
@@ -216,153 +174,69 @@ int loadDicom(const std::string& path, AppState& state) {
     return 0;
 }
 
-int createPlan(const std::vector<std::string>& args, AppState& state) {
+int createPlan(const std::vector<std::string>& args, WorkflowState& state) {
     if (!state.patientData) {
         std::cerr << "Error: No patient data loaded. Use 'load <dicom_dir>' first.\n";
         return 1;
     }
 
-    // Default plan parameters
-    std::string radiationMode = "photons";
-    std::string machineName = "Generic";
-    int numFractions = 30;
-    double gantryStart = 0.0;
-    double gantryStep = 4.0;
-    double gantryStop = 360.0;
-    double couchStart = 0.0;
-    double couchStep = 0.0;
-    double couchStop = 0.0;
-    double bixelWidth = 7.0;
-    std::vector<double> gantryAnglesList;
-    std::vector<double> couchAnglesList;
+    // Parse into PlanConfig
+    PlanConfig config;
 
-    // Parse plan options
     for (size_t i = 0; i < args.size(); ++i) {
         if (args[i] == "--mode" && i + 1 < args.size()) {
-            radiationMode = args[++i];
+            config.radiationMode = args[++i];
         } else if (args[i] == "--machine" && i + 1 < args.size()) {
-            machineName = args[++i];
+            config.machineName = args[++i];
         } else if (args[i] == "--fractions" && i + 1 < args.size()) {
-            numFractions = std::stoi(args[++i]);
+            config.numFractions = std::stoi(args[++i]);
         } else if (args[i] == "--gantry-start" && i + 1 < args.size()) {
-            gantryStart = std::stod(args[++i]);
+            config.gantryStart = std::stod(args[++i]);
         } else if (args[i] == "--gantry-step" && i + 1 < args.size()) {
-            gantryStep = std::stod(args[++i]);
+            config.gantryStep = std::stod(args[++i]);
         } else if (args[i] == "--gantry-stop" && i + 1 < args.size()) {
-            gantryStop = std::stod(args[++i]);
+            config.gantryStop = std::stod(args[++i]);
         } else if (args[i] == "--couch-start" && i + 1 < args.size()) {
-            couchStart = std::stod(args[++i]);
+            config.couchStart = std::stod(args[++i]);
         } else if (args[i] == "--couch-step" && i + 1 < args.size()) {
-            couchStep = std::stod(args[++i]);
+            config.couchStep = std::stod(args[++i]);
         } else if (args[i] == "--couch-stop" && i + 1 < args.size()) {
-            couchStop = std::stod(args[++i]);
+            config.couchStop = std::stod(args[++i]);
         } else if (args[i] == "--gantry-angles") {
-            // Consume subsequent numeric arguments
             while (i + 1 < args.size() && args[i + 1][0] != '-') {
-                gantryAnglesList.push_back(std::stod(args[++i]));
+                config.gantryAngles.push_back(std::stod(args[++i]));
             }
         } else if (args[i] == "--couch-angles") {
-            // Consume subsequent numeric arguments
             while (i + 1 < args.size() && args[i + 1][0] != '-') {
-                couchAnglesList.push_back(std::stod(args[++i]));
+                config.couchAngles.push_back(std::stod(args[++i]));
             }
         } else if (args[i] == "--bixel-width" && i + 1 < args.size()) {
-            bixelWidth = std::stod(args[++i]);
+            config.bixelWidth = std::stod(args[++i]);
         }
     }
 
-    // Create the plan
-    auto plan = std::make_shared<Plan>();
-    plan->setName("TreatmentPlan");
-    plan->setRadiationMode(radiationMode);
-    plan->setNumOfFractions(numFractions);
-    plan->setPatientData(state.patientData);
-
-    // Load machine from JSON data file
     try {
-        plan->setMachine(MachineLoader::load(radiationMode, machineName));
+        auto result = PlanBuilder::build(config, state.patientData);
+        state.plan = result.plan;
+        state.stfProps = result.stfProps;
+        state.stf = result.stf;
+        state.resetDij();
+
+        state.plan->printSummary();
+        if (state.stf) {
+            state.stf->printSummary();
+        } else {
+            std::cout << "\nPhase-space machine: use 'loadPhaseSpace' to build beam sources.\n";
+        }
     } catch (const std::exception& e) {
-        std::cerr << "Error loading machine '" << machineName << "': " << e.what() << "\n";
+        std::cerr << "Error: " << e.what() << "\n";
         return 1;
-    }
-
-    // Configure STF properties
-    StfProperties stf;
-    if (!gantryAnglesList.empty()) {
-        stf.setGantryAngles(gantryAnglesList);
-    } else {
-        stf.setGantryAngles(gantryStart, gantryStep, gantryStop);
-    }
-    if (!couchAnglesList.empty()) {
-        stf.setCouchAngles(couchAnglesList);
-    } else if (couchStep > 0.0) {
-        stf.setCouchAngles(couchStart, couchStep, couchStop);
-    } else {
-        stf.setUniformCouchAngle(couchStart);
-    }
-    stf.ensureConsistentAngles();
-    stf.bixelWidth = bixelWidth;
-
-    // Compute isocenter from Target structures
-    auto iso = plan->computeIsoCenter();
-    stf.setUniformIsoCenter(iso);
-
-    plan->setStfProperties(stf);
-
-    // Store in state
-    state.plan = plan;
-
-    // New plan invalidates previously generated steering/dose artifacts
-    state.stfProps.reset();
-    state.stf.reset();
-    state.dij.reset();
-    state.doseGrid.reset();
-    state.optimizedWeights.clear();
-    state.doseResult.reset();
-    state.phaseSpaceSources.clear();
-
-    // Print summary
-    plan->printSummary();
-
-    // Automatically generate STF for generic (non-phase-space) machines
-    if (!plan->getMachine().isPhaseSpace()) {
-        std::cout << "\nGenerating STF...\n";
-
-        const auto& stfPropsRef = plan->getStfProperties();
-        std::array<double, 3> isoRef = {0.0, 0.0, 0.0};
-        if (!stfPropsRef.isoCenters.empty()) {
-            isoRef = stfPropsRef.isoCenters[0];
-        }
-
-        PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, stfPropsRef.bixelWidth, isoRef);
-        generator.setMachine(plan->getMachine());
-        generator.setRadiationMode(plan->getRadiationMode());
-        generator.setGantryAngles(stfPropsRef.gantryAngles);
-        generator.setCouchAngles(stfPropsRef.couchAngles);
-
-        auto patientData = plan->getPatientData();
-        if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
-            const auto* ct = patientData->getCTVolume();
-            const auto* structureSet = patientData->getStructureSet();
-            const auto& grid = ct->getGrid();
-
-            generator.setGrid(grid);
-            generator.setStructureSet(*structureSet);
-            generator.setCTResolution(grid.getSpacing());
-        }
-
-        state.stfProps = generator.generate();
-        state.stf = std::make_shared<Stf>(generator.generateStf());
-
-        state.stf->printSummary();
-    } else {
-        std::cout << "\nPhase-space machine: use 'loadPhaseSpace' to build beam sources.\n";
     }
 
     return 0;
 }
 
-int runInteractive(AppState& state) {
+int runInteractive(WorkflowState& state) {
     std::cout << "=== OptiRad Interactive Mode ===\n";
     std::cout << "Type 'help' for commands, 'quit' to exit.\n\n";
 
@@ -497,86 +371,8 @@ int runInteractive(AppState& state) {
     return 0;
 }
 
-// Helper: select STF generator based on mode (future extensibility)
-std::unique_ptr<optirad::IStfGenerator> selectStfGenerator(const std::string& mode, double gantryStart, double gantryStep, double gantryStop, double bixelWidth, const std::array<double, 3>& iso) {
-    // For now, only Photon IMRT is implemented
-    if (mode == "photons" || mode == "photon_imrt") {
-        return std::make_unique<optirad::PhotonIMRTStfGenerator>(gantryStart, gantryStep, gantryStop, bixelWidth, iso);
-    }
-    // Future: add more modalities here
-    // Default fallback
-    return std::make_unique<optirad::PhotonIMRTStfGenerator>(gantryStart, gantryStep, gantryStop, bixelWidth, iso);
-}
-
-// New command: generateStf (uses plan parameters)
-int generateStf(const std::vector<std::string>& args, AppState& state) {
-    if (!state.plan) {
-        std::cerr << "Error: No plan generated. Use 'plan [options]' to create a plan first.\n";
-        return 1;
-    }
-
-    // Gate: STF generation only for generic machines
-    if (state.plan->getMachine().isPhaseSpace()) {
-        std::cerr << "Error: STF generation is not applicable for phase-space machines.\n";
-        std::cerr << "Use 'loadPhaseSpace' instead to build the beam source from IAEA PSF files.\n";
-        return 1;
-    }
-
-    // Use plan's STF properties to generate STF
-    const auto& stfProps = state.plan->getStfProperties();
-    std::string radiationMode = state.plan->getRadiationMode();
-    
-    // Get isocenter from plan
-    std::array<double, 3> iso = {0.0, 0.0, 0.0};
-    if (!stfProps.isoCenters.empty()) {
-        iso = stfProps.isoCenters[0];
-    }
-
-    double bixelWidth = stfProps.bixelWidth;
-
-    // Create generator and pass the already-expanded paired gantry/couch lists.
-    // The plan's StfProperties already performed Cartesian product expansion,
-    // so we pass the full paired lists directly to avoid re-inferring start/step/stop.
-    PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, bixelWidth, iso);
-    generator.setMachine(state.plan->getMachine());
-    generator.setRadiationMode(radiationMode);
-    generator.setGantryAngles(stfProps.gantryAngles);
-    generator.setCouchAngles(stfProps.couchAngles);
-
-    // Extract target voxel world coordinates from patient data
-    auto patientData = state.plan->getPatientData();
-    if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
-        const auto* ct = patientData->getCTVolume();
-        const auto* structureSet = patientData->getStructureSet();
-        const auto& grid = ct->getGrid();
-
-        // Pass Grid and StructureSet to the generator for proper 3D margin expansion
-        generator.setGrid(grid);
-        generator.setStructureSet(*structureSet);
-
-        // Pass CT resolution for potential padding
-        auto spacing = grid.getSpacing();
-        generator.setCTResolution(spacing);
-
-        std::cout << "Using Grid and StructureSet for 3D margin expansion\n";
-    } else {
-        std::cout << "Warning: No patient data available, using fixed field size\n";
-    }
-
-    // Also store lightweight StfProperties for backward compatibility
-    state.stfProps = generator.generate();
-
-    // Generate full Stf with beams and rays
-    auto stf = std::make_shared<Stf>(generator.generateStf());
-    state.stf = stf;
-
-    // Print summary
-    state.stf->printSummary();
-    return 0;
-}
-
-// New command: loadPhaseSpace (builds beam sources from IAEA PSF files for all gantry angles)
-int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
+// ── loadPhaseSpace: builds beam sources from IAEA PSF files ──
+int loadPhaseSpace(const std::vector<std::string>& args, WorkflowState& state) {
     if (!state.plan) {
         std::cerr << "Error: No plan generated. Use 'plan [options]' first.\n";
         return 1;
@@ -604,44 +400,20 @@ int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
         }
     }
 
-    // Get gantry/couch angles and isocenter from plan
-    const auto& stfProps = state.plan->getStfProperties();
-    const auto& gantryAngles = stfProps.gantryAngles;
-    const auto& couchAngles = stfProps.couchAngles;
-    std::array<double, 3> iso = {0.0, 0.0, 0.0};
-    if (!stfProps.isoCenters.empty()) {
-        iso = stfProps.isoCenters[0];
-    }
+    PhaseSpaceBuildOptions options;
+    options.collimatorAngle = collimatorAngle;
+    options.maxParticles = maxParticles;
+    options.vizSampleSize = vizSample;
 
     std::cout << "\n=== Loading Phase-Space Beam Sources ===\n";
-    std::cout << "Beams: " << gantryAngles.size() << " gantry/couch angle pairs\n";
-    std::cout << "Collimator: " << collimatorAngle << " deg\n";
-    std::cout << "Max particles/beam: " << maxParticles << "\n";
-    std::cout << "Viz sample/beam: " << vizSample << "\n\n";
 
     try {
-        const int numBeams = static_cast<int>(gantryAngles.size());
-        state.phaseSpaceSources.clear();
-        state.phaseSpaceSources.resize(numBeams);
+        state.phaseSpaceSources = PhaseSpaceBuilder::build(*state.plan, options);
 
-        // Build all beams in parallel (OpenMP)
-        #pragma omp parallel for schedule(dynamic)
-        for (int i = 0; i < numBeams; ++i) {
-            auto source = std::make_shared<PhaseSpaceBeamSource>();
-            source->configure(state.plan->getMachine(), gantryAngles[i],
-                              collimatorAngle,
-                              (static_cast<size_t>(i) < couchAngles.size() ? couchAngles[i] : 0.0),
-                              iso);
-            source->build(maxParticles, vizSample);
-            state.phaseSpaceSources[i] = std::move(source);
-        }
-
-        // Print metrics sequentially
-        for (int i = 0; i < numBeams; ++i) {
+        for (size_t i = 0; i < state.phaseSpaceSources.size(); ++i) {
             const auto& metrics = state.phaseSpaceSources[i]->getMetrics();
-            double beamCouch = (static_cast<size_t>(i) < couchAngles.size() ? couchAngles[i] : 0.0);
-            std::cout << "Beam " << i << " (gantry=" << gantryAngles[i]
-                      << " couch=" << beamCouch << " deg): "
+            std::cout << "Beam " << i << " (gantry=" << state.phaseSpaceSources[i]->getGantryAngle()
+                      << " couch=" << state.phaseSpaceSources[i]->getCouchAngle() << " deg): "
                       << metrics.totalCount << " particles, "
                       << "mean E=" << metrics.meanEnergy << " MeV\n";
         }
@@ -657,9 +429,9 @@ int loadPhaseSpace(const std::vector<std::string>& args, AppState& state) {
 }
 
 // ── doseCalc command: compute Dij with optional caching ──
-int doseCalc(const std::vector<std::string>& args, AppState& state) {
+int doseCalc(const std::vector<std::string>& args, WorkflowState& state) {
     if (!state.stf || state.stf->isEmpty()) {
-        std::cerr << "Error: No STF generated. Use 'generateStf' first.\n";
+        std::cerr << "Error: No STF generated. Use 'plan' first.\n";
         return 1;
     }
 
@@ -684,87 +456,32 @@ int doseCalc(const std::vector<std::string>& args, AppState& state) {
     }
 
     std::cout << "\n=== Dose Calculation ===\n";
-    std::cout << "Dose grid resolution: " << doseResolution << " mm\n";
-    std::cout << "Thresholds: absolute=" << absoluteThreshold
-              << ", relative=" << (relativeThreshold * 100.0) << "%\n";
-    std::cout << "Threads: " << (numThreads > 0 ? std::to_string(numThreads) : "all") << "\n";
+    std::cout << "Resolution: " << doseResolution << " mm | Cache: " << (useCache ? "on" : "off") << "\n";
 
-    // Set dose resolution on plan
-    state.plan->setDoseGridResolution({doseResolution, doseResolution, doseResolution});
-
-    // Create dose grid
-    const auto& ctGrid = state.patientData->getGrid();
-    auto doseGrid = std::make_shared<Grid>(
-        Grid::createDoseGrid(ctGrid, {doseResolution, doseResolution, doseResolution}));
-    state.doseGrid = doseGrid;
-
-    auto dims = doseGrid->getDimensions();
-    std::cout << "Dose grid: " << dims[0] << "x" << dims[1] << "x" << dims[2]
-              << " (" << doseGrid->getNumVoxels() << " voxels)\n";
-
-    // Check cache
-    if (useCache) {
-        std::string patientName = "unknown";
-        if (state.patientData->getPatient()) {
-            patientName = state.patientData->getPatient()->getName();
-        }
-        std::string cacheFile = DijSerializer::getCacheDir() + "/" +
-            DijSerializer::buildCacheKey(
-                patientName,
-                static_cast<int>(state.stf->getCount()),
-                state.plan->getStfProperties().bixelWidth,
-                doseResolution);
-
-        if (DijSerializer::exists(cacheFile)) {
-            std::cout << "Loading Dij from cache: " << cacheFile << "\n";
-            auto loaded = DijSerializer::load(cacheFile);
-            state.dij = std::make_shared<DoseInfluenceMatrix>(std::move(loaded));
-            std::cout << "Dij loaded: " << state.dij->getNumVoxels() << " x "
-                      << state.dij->getNumBixels() << " (nnz: " << state.dij->getNumNonZeros() << ")\n";
-            std::cout << "=== Done ===\n";
-            return 0;
-        }
-    }
-
-    // Compute Dij
-    std::cout << "Computing Dij (" << state.stf->getCount() << " beams, "
-              << state.stf->getTotalNumOfBixels() << " bixels)...\n";
-
-    auto engine = DoseEngineFactory::create("PencilBeam");
-    engine->setProgressCallback([](int current, int total, const std::string& msg) {
-        std::cout << "\r  Beam " << current << "/" << total << " " << msg << std::flush;
-    });
-
-    // Apply user options
-    DoseCalcOptions opts;
+    DoseCalcPipelineOptions opts;
+    opts.resolution = {doseResolution, doseResolution, doseResolution};
+    opts.useCache = useCache;
     opts.absoluteThreshold = absoluteThreshold;
     opts.relativeThreshold = relativeThreshold;
     opts.numThreads = numThreads;
-    engine->setOptions(opts);
 
-    auto start = std::chrono::steady_clock::now();
-    auto dij = engine->calculateDij(*state.plan, *state.stf, *state.patientData, *doseGrid);
-    auto end = std::chrono::steady_clock::now();
-    double elapsed = std::chrono::duration<double>(end - start).count();
+    auto progressCb = [](int current, int total) {
+        std::cout << "\r  Beam " << current << "/" << total << std::flush;
+    };
 
-    state.dij = std::make_shared<DoseInfluenceMatrix>(std::move(dij));
-    std::cout << "\nDij: " << state.dij->getNumVoxels() << " x " << state.dij->getNumBixels()
-              << " (nnz: " << state.dij->getNumNonZeros() << ") in " << elapsed << "s\n";
+    try {
+        auto result = DoseCalculationPipeline::run(
+            *state.plan, *state.stf, *state.patientData, opts, progressCb);
+        state.dij = result.dij;
+        state.doseGrid = result.doseGrid;
+        state.computeGrid = result.doseGrid;
 
-    // Save to cache
-    if (useCache) {
-        std::string patientName = "unknown";
-        if (state.patientData->getPatient()) {
-            patientName = state.patientData->getPatient()->getName();
-        }
-        std::string cacheFile = DijSerializer::getCacheDir() + "/" +
-            DijSerializer::buildCacheKey(
-                patientName,
-                static_cast<int>(state.stf->getCount()),
-                state.plan->getStfProperties().bixelWidth,
-                doseResolution);
-        DijSerializer::save(*state.dij, cacheFile);
-        std::cout << "Saved to cache: " << cacheFile << "\n";
+        std::cout << "\nDij: " << state.dij->getNumVoxels() << " x " << state.dij->getNumBixels()
+                  << " (nnz: " << state.dij->getNumNonZeros() << ")"
+                  << (result.cacheHit ? " [cached]" : "") << "\n";
+    } catch (const std::exception& e) {
+        std::cerr << "\nError: " << e.what() << "\n";
+        return 1;
     }
 
     std::cout << "=== Done ===\n";
@@ -772,7 +489,7 @@ int doseCalc(const std::vector<std::string>& args, AppState& state) {
 }
 
 // ── optimize command: run L-BFGS-B fluence optimization ──
-int optimize(const std::vector<std::string>& args, AppState& state) {
+int optimize(const std::vector<std::string>& args, WorkflowState& state) {
     if (!state.dij || state.dij->getNumNonZeros() == 0) {
         std::cerr << "Error: No Dij computed. Use 'doseCalc' first.\n";
         return 1;
@@ -795,183 +512,33 @@ int optimize(const std::vector<std::string>& args, AppState& state) {
         }
     }
 
-    // Build objectives from structures
-    const auto* ss = state.patientData->getStructureSet();
-    if (!ss || ss->getCount() == 0) {
-        std::cerr << "Error: No structures available for optimization.\n";
+    std::cout << "\n=== Optimization ===\n";
+    std::cout << "Max iter: " << maxIter << " | Tolerance: " << tolerance
+              << " | Target dose: " << targetDose << " Gy\n";
+
+    OptimizationConfig config;
+    config.maxIterations = maxIter;
+    config.tolerance = tolerance;
+    config.targetDose = targetDose;
+
+    auto protocol = ObjectiveProtocol::lungIMRT(targetDose);
+
+    try {
+        auto result = OptimizationPipeline::run(
+            *state.dij, config, protocol, *state.patientData, *state.doseGrid);
+
+        state.optimizedWeights = std::move(result.weights);
+        state.doseResult = result.doseResult;
+
+        std::cout << "\nOptimization " << (result.converged ? "converged" : "reached max iterations")
+                  << " in " << result.iterations << " iterations\n"
+                  << "Final objective: " << result.finalObjective << "\n";
+
+        PlanAnalysis::print(result.stats);
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
-
-    const auto& ctGrid = state.patientData->getGrid();
-    const auto& doseGrid = *state.doseGrid;
-
-    // ── Pre-optimization summary ──
-    std::cout << "\n╔══════════════════════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║                       PRE-OPTIMIZATION SUMMARY                              ║\n";
-    std::cout << "╚══════════════════════════════════════════════════════════════════════════════╝\n\n";
-    std::cout << "  Bixels:      " << state.dij->getNumBixels() << "\n";
-    std::cout << "  Dose voxels: " << state.dij->getNumVoxels() << "\n";
-    std::cout << "  NNZ:         " << state.dij->getNumNonZeros() << "\n";
-    std::cout << "  Max iter:    " << maxIter << "\n";
-    std::cout << "  Tolerance:   " << tolerance << "\n\n";
-
-    std::vector<std::unique_ptr<ObjectiveFunction>> ownedObjs;
-    std::vector<ObjectiveFunction*> objPtrs;
-
-    std::cout << "  Objectives:\n";
-    std::cout << "  ──────────────────────────────────────────────────────────────\n";
-
-    // Helper lambda to find a structure by name (exact) or pattern (substring)
-    auto findStructures = [&](const std::string& pattern, bool exact) 
-        -> std::vector<std::pair<const Structure*, std::vector<size_t>>> {
-        std::vector<std::pair<const Structure*, std::vector<size_t>>> results;
-        for (size_t si = 0; si < ss->getCount(); ++si) {
-            const auto* structure = ss->getStructure(si);
-            if (!structure || structure->getVoxelIndices().empty()) continue;
-            std::string name = structure->getName();
-            bool match = exact ? (name == pattern) : (name.find(pattern) != std::string::npos);
-            if (match) {
-                auto doseIndices = Grid::mapVoxelIndices(ctGrid, doseGrid, structure->getVoxelIndices());
-                results.push_back({structure, std::move(doseIndices)});
-            }
-        }
-        return results;
-    };
-
-    // Helper lambda to add an objective
-    auto addObjective = [&](std::unique_ptr<ObjectiveFunction> obj, 
-                            const Structure* structure,
-                            const std::vector<size_t>& doseIndices,
-                            const std::string& desc) {
-        obj->setStructure(structure);
-        obj->setVoxelIndices(doseIndices);
-        std::cout << "  " << desc << " (" << doseIndices.size() << " voxels)\n";
-        objPtrs.push_back(obj.get());
-        ownedObjs.push_back(std::move(obj));
-    };
-
-    // ── PTVs: MinDVH D98% at targetDose (only PTV N and PTVT) ──
-    // PTV ok and PTV_66dosi are unions of PTV N + PTVT, so we only optimize the individual PTVs.
-    for (const std::string& ptvName : {"PTV N", "PTVT"}) {
-        for (auto& [structure, doseIndices] : findStructures(ptvName, true)) {
-            auto obj = std::make_unique<DVHObjective>();
-            obj->setType(DVHObjective::Type::MIN_DVH);
-            obj->setDoseThreshold(targetDose);
-            obj->setVolumeFraction(0.98);
-            obj->setWeight(100.0);
-            addObjective(std::move(obj), structure, doseIndices,
-                "Target: " + ptvName + " -> MinDVH D98% >= " + std::to_string(targetDose) + " Gy (w=100)");
-        }
-    }
-
-    // ── Poumon_D: SquaredOverdose at MLD 20 Gy ──
-    for (auto& [structure, doseIndices] : findStructures("Poumon_D", true)) {
-        auto obj = std::make_unique<SquaredOverdose>();
-        obj->setMaxDose(20.0);
-        obj->setWeight(10.0);
-        addObjective(std::move(obj), structure, doseIndices,
-            "OAR:    Poumon_D -> SquaredOverdose @ 20 Gy (w=10)");
-    }
-
-    // ── Poumon_G: SquaredOverdose at MLD 20 Gy ──
-    for (auto& [structure, doseIndices] : findStructures("Poumon_G", true)) {
-        auto obj = std::make_unique<SquaredOverdose>();
-        obj->setMaxDose(20.0);
-        obj->setWeight(10.0);
-        addObjective(std::move(obj), structure, doseIndices,
-            "OAR:    Poumon_G -> SquaredOverdose @ 20 Gy (w=10)");
-    }
-
-    // ── Coeur: MaxDVH V40 < 30% ──
-    for (auto& [structure, doseIndices] : findStructures("Coeur", true)) {
-        auto obj = std::make_unique<DVHObjective>();
-        obj->setType(DVHObjective::Type::MAX_DVH);
-        obj->setDoseThreshold(40.0);
-        obj->setVolumeFraction(0.30);
-        obj->setWeight(30.0);
-        addObjective(std::move(obj), structure, doseIndices,
-            "OAR:    Coeur -> MaxDVH V40Gy <= 30% (w=30)");
-    }
-
-    // ── Oesophage: MaxDVH V50 < 30% ──
-    for (auto& [structure, doseIndices] : findStructures("Oesophage", true)) {
-        auto obj = std::make_unique<DVHObjective>();
-        obj->setType(DVHObjective::Type::MAX_DVH);
-        obj->setDoseThreshold(50.0);
-        obj->setVolumeFraction(0.30);
-        obj->setWeight(50.0);
-        addObjective(std::move(obj), structure, doseIndices,
-            "OAR:    Oesophage -> MaxDVH V50Gy <= 30% (w=50)");
-    }
-
-    // ── Canal_Medullaire: MaxDVH V10Gy <= 0% ──
-    for (auto& [structure, doseIndices] : findStructures("Canal_Medullaire", true)) {
-        auto obj = std::make_unique<DVHObjective>();
-        obj->setType(DVHObjective::Type::MAX_DVH);
-        obj->setDoseThreshold(10.0);
-        obj->setVolumeFraction(0.0);
-        obj->setWeight(200.0);
-        addObjective(std::move(obj), structure, doseIndices,
-            "OAR:    Canal_Medullaire -> MaxDVH V10Gy <= 0% (w=200)");
-    }
-
-    if (objPtrs.empty()) {
-        std::cerr << "Error: No valid objectives generated from structures.\n";
-        return 1;
-    }
-
-    std::cout << "\n  Total objectives: " << objPtrs.size() << "\n";
-    std::cout << "\nRunning L-BFGS-B optimizer...\n";
-
-    auto optimizer = OptimizerFactory::create("LBFGS");
-    optimizer->setMaxIterations(maxIter);
-    optimizer->setTolerance(tolerance);
-
-    // Configure LBFGS-specific parameters
-    if (auto* lbfgs = dynamic_cast<LBFGSOptimizer*>(optimizer.get())) {
-        // maxFluence must be large enough for the optimizer to reach the prescribed dose.
-        // Estimate: targetDose / maxBixelDose. Use a generous margin.
-        double maxBixelDose = state.dij->getMaxValue();
-        double estimatedMaxFluence = (maxBixelDose > 1e-10)
-            ? targetDose / maxBixelDose * 2.0  // 2x headroom
-            : 1000.0;
-        lbfgs->setMaxFluence(estimatedMaxFluence);
-        lbfgs->setPrescriptionDose(targetDose);
-        lbfgs->setHotspotThreshold(1.04);   // penalise > 104% of Rx
-        lbfgs->setHotspotPenalty(2000.0);
-
-        std::cout << "\n  LBFGS parameters:\n";
-        std::cout << "    Max fluence:      " << estimatedMaxFluence
-                  << " (estimated from maxBixelDose=" << maxBixelDose << ")\n";
-        std::cout << "    Prescription:     " << targetDose << " Gy\n";
-        std::cout << "    Hotspot limit:    " << targetDose * 1.04 << " Gy (104%)\n";
-        std::cout << "    Hotspot penalty:  2000\n";
-    } else {
-        std::cerr << "Warning: dynamic_cast to LBFGSOptimizer failed!\n";
-    }
-
-    auto start = std::chrono::steady_clock::now();
-    std::vector<Constraint> constraints;
-    auto result = optimizer->optimize(*state.dij, objPtrs, constraints);
-    auto end = std::chrono::steady_clock::now();
-    double elapsed = std::chrono::duration<double>(end - start).count();
-
-    state.optimizedWeights = std::move(result.weights);
-
-    std::cout << "\nOptimization " << (result.converged ? "converged" : "reached max iterations")
-              << " in " << result.iterations << " iterations (" << elapsed << "s)\n"
-              << "Final objective: " << result.finalObjective << "\n";
-
-    // Forward dose computation
-    std::cout << "\nComputing forward dose...\n";
-    auto engine = DoseEngineFactory::create("PencilBeam");
-    auto dose = engine->calculateDose(*state.dij, state.optimizedWeights, *state.doseGrid);
-    state.doseResult = std::make_shared<DoseMatrix>(std::move(dose));
-
-    // Comprehensive Plan Analysis
-    auto stats = PlanAnalysis::computeStats(
-        *state.doseResult, *state.patientData, *state.doseGrid, targetDose);
-    PlanAnalysis::print(stats);
 
     std::cout << "=== Done ===\n";
     return 0;
@@ -980,7 +547,7 @@ int optimize(const std::vector<std::string>& args, AppState& state) {
 int main(int argc, char* argv[]) {
     Logger::init();
 
-    AppState state;
+    WorkflowState state;
 
     if (argc < 2) {
         printUsage(argv[0]);

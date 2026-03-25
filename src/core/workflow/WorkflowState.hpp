@@ -13,13 +13,13 @@
 #include <memory>
 #include <vector>
 #include <string>
-#include <atomic>
 
 namespace optirad {
 
-/// Shared application state for the GUI pipeline.
-/// Mirrors the CLI AppState: load DICOM → create Plan → generate STF → dose calc → optimize.
-struct GuiAppState {
+/// Shared pipeline state used by both CLI and GUI.
+/// Holds the data flowing through the treatment planning workflow:
+///   load DICOM → create Plan → generate STF → dose calc → optimize.
+struct WorkflowState {
     std::shared_ptr<PatientData> patientData;
     std::shared_ptr<Plan> plan;
     std::shared_ptr<StfProperties> stfProps;
@@ -30,8 +30,8 @@ struct GuiAppState {
 
     // ── Dose calculation state ──
     std::shared_ptr<DoseInfluenceMatrix> dij;
-    std::shared_ptr<Grid> doseGrid;        // Display grid (synced with doseResult for rendering)
-    std::shared_ptr<Grid> computeGrid;     // Computation grid for Dij / optimization
+    std::shared_ptr<Grid> doseGrid;
+    std::shared_ptr<Grid> computeGrid;
 
     // ── Optimization state ──
     std::vector<double> optimizedWeights;
@@ -40,16 +40,7 @@ struct GuiAppState {
     // ── Multi-dose management ──
     DoseManager doseManager;
 
-    // ── Async task state ──
-    std::atomic<bool> cancelFlag{false};
-    std::string taskStatus;   // e.g. "Calculating Dij..."
-    float taskProgress = 0.f; // 0..1
-    bool taskRunning = false;
-
-    /// Set to true when optimization finishes; Application reads & resets it to switch DVH tab.
-    std::atomic<bool> optimizationJustFinished{false};
-
-    // Workflow state
+    // ── Workflow queries ──
     bool dicomLoaded() const { return patientData != nullptr; }
     bool planCreated() const { return plan != nullptr; }
     bool stfGenerated() const { return stf != nullptr && !stf->isEmpty(); }
@@ -60,12 +51,11 @@ struct GuiAppState {
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
     bool doseAvailable() const { return doseManager.count() > 0 && doseManager.getSelected() != nullptr; }
 
-    /// Check if the current plan uses a phase-space machine
     bool isPhaseSpaceMachine() const {
         return plan && plan->getMachine().isPhaseSpace();
     }
 
-    /// Sync doseResult/doseGrid from DoseManager's current selection (for backward compat).
+    /// Sync doseResult/doseGrid from DoseManager's current selection.
     void syncSelectedDose() {
         auto* sel = doseManager.getSelected();
         if (sel) {
@@ -73,13 +63,10 @@ struct GuiAppState {
             doseGrid = sel->grid;
         } else {
             doseResult.reset();
-            // Don't clear doseGrid here — it may still be used by the dose engine
         }
     }
 
-    // Reset downstream state when upstream changes.
-    // After clearing pipeline state, re-sync display dose from DoseManager so
-    // SliceViews / stats / DVH keep showing the currently selected dose.
+    // ── Reset cascades ──
     void resetPlan() {
         plan.reset(); stfProps.reset(); stf.reset(); phaseSpaceSources.clear();
         resetDij();
@@ -90,14 +77,18 @@ struct GuiAppState {
         dij.reset();
         computeGrid.reset();
         optimizedWeights.clear();
-        // Restore display dose from DoseManager.
         syncSelectedDose();
     }
     void resetOptimization() {
         optimizedWeights.clear();
         syncSelectedDose();
     }
-    void resetAllDoses() { doseManager.clear(); doseResult.reset(); doseGrid.reset(); computeGrid.reset(); }
+    void resetAllDoses() {
+        doseManager.clear();
+        doseResult.reset();
+        doseGrid.reset();
+        computeGrid.reset();
+    }
 };
 
 } // namespace optirad

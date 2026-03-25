@@ -18,3 +18,5 @@ if(OpenMP_CXX_FOUND)
 else()
     message(STATUS "OpenMP not found - STF generation will use sequential mode")
 endif()
+
+add_subdirectory(workflow)

@@ -69,6 +69,16 @@ public:
     /// Rasterize contours to voxel indices using the CT grid
     void rasterizeContours(const Grid& ctGrid);
 
+    /// Check if this structure is a target (PTV, GTV, or CTV) based on name and type.
+    bool isTarget() const {
+        auto contains = [](const std::string& haystack, const char* needle) {
+            return haystack.find(needle) != std::string::npos;
+        };
+        return contains(m_type, "TARGET") ||
+               contains(m_type, "PTV") || contains(m_type, "CTV") || contains(m_type, "GTV") ||
+               contains(m_name, "PTV") || contains(m_name, "CTV") || contains(m_name, "GTV");
+    }
+
 private:
     std::string m_name;
     std::string m_type = "UNKNOWN";  // TARGET, OAR, EXTERNAL, UNKNOWN
