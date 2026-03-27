@@ -364,7 +364,8 @@ void SliceView::renderSlice() {
             ImGui::SetNextItemWidth(120);
             if (ImGui::SliderFloat("Dose Opacity", &m_doseAlpha, 0.0f, 1.0f)) m_doseNeedsUpdate = true;
             ImGui::SetNextItemWidth(120);
-            if (ImGui::SliderFloat("Dose Thresh%", &m_doseThresholdPct, 0.0f, 50.0f)) m_doseNeedsUpdate = true;
+            float maxDose = static_cast<float>(m_doseData->getMax());
+            if (ImGui::SliderFloat("Dose Thresh (Gy)", &m_doseThresholdGy, 0.0f, maxDose)) m_doseNeedsUpdate = true;
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Reset Zoom")) { m_zoom = 1.0f; m_panU = 0.5f; m_panV = 0.5f; }
@@ -513,7 +514,7 @@ void SliceView::updateDoseTexture() {
 
     double maxDose = m_doseData->getMax();
     if (maxDose <= 0.0) return;
-    double threshold = maxDose * (m_doseThresholdPct / 100.0f);
+    double threshold = m_doseThresholdGy;
 
     // Create RGBA pixels on CT grid dimensions (same as CT texture)
     std::vector<unsigned char> pixels(m_textureWidth * m_textureHeight * 4, 0);

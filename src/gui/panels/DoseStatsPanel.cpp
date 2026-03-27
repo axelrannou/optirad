@@ -13,16 +13,19 @@ void DoseStatsPanel::computeStats() {
     m_stats.clear();
     m_compareStats.clear();
 
-    auto* sel = m_state.doseManager.getSelected();
+    auto& dm = m_state.doseManager;
+    int selIdx = dm.getSelectedIdx();
+    auto* sel = dm.getSelected();
     if (!sel || !sel->dose || !sel->grid || !m_state.patientData) return;
 
-    // Primary dose stats
-    m_stats = PlanAnalysis::computeStats(*sel->dose, *m_state.patientData, *sel->grid);
+    // Primary dose stats (cached in DoseManager)
+    m_stats = dm.getOrComputeStats(selIdx, *m_state.patientData);
 
-    // Comparison dose stats
-    auto* cmp = m_state.doseManager.getCompare();
+    // Comparison dose stats (also cached)
+    int cmpIdx = dm.getCompareIdx();
+    auto* cmp = dm.getCompare();
     if (cmp && cmp->dose && cmp->grid) {
-        m_compareStats = PlanAnalysis::computeStats(*cmp->dose, *m_state.patientData, *cmp->grid);
+        m_compareStats = dm.getOrComputeStats(cmpIdx, *m_state.patientData);
     }
 }
 

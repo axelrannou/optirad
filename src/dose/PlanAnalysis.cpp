@@ -6,6 +6,10 @@
 #include <iomanip>
 #include <sstream>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 namespace optirad {
 
 double PlanAnalysis::computeDx(const std::vector<double>& sortedDoses, double percentile) {
@@ -63,9 +67,20 @@ std::vector<StructureDoseStats> PlanAnalysis::computeStats(
         }
     }
 
+    // Collect non-empty structure indices for OpenMP parallelization
+    std::vector<size_t> structIndices;
     for (size_t si = 0; si < ss->getCount(); ++si) {
         const auto* structure = ss->getStructure(si);
-        if (!structure || structure->getVoxelIndices().empty()) continue;
+        if (structure && !structure->getVoxelIndices().empty())
+            structIndices.push_back(si);
+    }
+
+    results.resize(structIndices.size());
+
+    #pragma omp parallel for schedule(dynamic)
+    for (size_t idx = 0; idx < structIndices.size(); ++idx) {
+        size_t si = structIndices[idx];
+        const auto* structure = ss->getStructure(si);
 
         const auto& ctVoxels = structure->getVoxelIndices();
 
@@ -154,7 +169,7 @@ std::vector<StructureDoseStats> PlanAnalysis::computeStats(
             }
         }
 
-        results.push_back(std::move(stats));
+        results[idx] = std::move(stats);
     }
 
     return results;

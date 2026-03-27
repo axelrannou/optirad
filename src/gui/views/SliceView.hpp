@@ -84,7 +84,7 @@ private:
     unsigned int m_doseTextureID = 0;
     bool m_showDose = true;
     float m_doseAlpha = 0.8f;
-    float m_doseThresholdPct = 0.5f; // % of max dose below which dose is not shown
+    float m_doseThresholdGy = 0.5f; // Absolute dose [Gy] below which dose is not shown
     bool m_doseNeedsUpdate = true;
 };
 

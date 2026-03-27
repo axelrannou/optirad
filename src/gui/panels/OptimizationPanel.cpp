@@ -462,8 +462,13 @@ void OptimizationPanel::renderConvergenceCurve() {
             vecToCol32(tc.dvhGrid));
         int iterLabel = static_cast<int>(frac * maxIter);
         snprintf(buf, sizeof(buf), "%d", iterLabel);
-        dl->AddText(ImVec2(x - 8, plotOrigin.y + plotSize.y + 5), vecToCol32(tc.dvhLabel), buf);
-    }
+        ImVec2 textSize = ImGui::CalcTextSize(buf);
+        float textX = x - textSize.x * 0.5f;
+        textX = std::clamp(textX, plotOrigin.x, plotOrigin.x + plotSize.x - textSize.x);
+
+        dl->AddText(ImVec2(textX, plotOrigin.y + plotSize.y + 5),
+                    vecToCol32(tc.dvhLabel), buf);
+            }
 
     // Border
     dl->AddRect(

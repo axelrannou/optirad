@@ -304,13 +304,16 @@ void PatientPanel::renderDoseList() {
             if (taskBusy) ImGui::EndDisabled();
 
             // Draw selection indicator circle directly via DrawList
-            float colWidth = ImGui::GetColumnWidth();
-            float colStartX = ImGui::GetCursorPosX();
-            float rowStartY = ImGui::GetCursorPosY() - rowHeight - ImGui::GetStyle().CellPadding.y * 2.0f;
             float radius = ImGui::GetTextLineHeight() * 0.35f;
+            ImVec2 cellMin = ImGui::GetItemRectMin();
+            ImVec2 cellMax = ImGui::GetItemRectMax();
+
+            float colMinX = ImGui::GetCursorScreenPos().x;
+            float colMaxX = colMinX + ImGui::GetColumnWidth();
+
             ImVec2 center(
-                ImGui::GetWindowPos().x + colStartX + colWidth * 0.5f,
-                ImGui::GetWindowPos().y + rowStartY + rowHeight * 0.5f
+                (colMinX + colMaxX) * 0.5f,
+                (cellMin.y + cellMax.y) * 0.5f
             );
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
