@@ -338,7 +338,6 @@ void Application::run() {
         }
         m_optimizationPanel->render();
         m_doseStatsPanel->render();
-        m_dvhPanel->render();
         
         // Pass dose data to slice views AFTER panels render
         if (m_appState.doseAvailable() && m_appState.doseResult && m_appState.doseGrid) {
@@ -358,7 +357,14 @@ void Application::run() {
         
         // Render 3D View inside an ImGui window
         render3DViewWindow();
-        
+        m_dvhPanel->render();
+
+        //Auto-switch to 3D View for first render
+        if (!focus3DView) {
+            ImGui::SetWindowFocus("3D View");
+            focus3DView = true;
+        }
+
         // Auto-switch to DVH tab when optimization finishes
         if (m_appState.optimizationJustFinished.exchange(false)) {
             ImGui::SetWindowFocus("DVH");

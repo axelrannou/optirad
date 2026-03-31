@@ -45,6 +45,8 @@ void AxisLabels::createLabelTexture() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 }
 
 void AxisLabels::init() {
@@ -119,39 +121,63 @@ void AxisLabels::init() {
 void AxisLabels::render(const glm::mat4& view, const glm::mat4& projection) {
     struct Label { glm::vec3 pos; int idx; glm::vec3 color; };
     const float offset = 0.60f;
+
     Label labels[] = {
-        {{offset, 0.0f, 0.0f}, 5, {1.0f, 0.5f, 0.5f}}, // L (was R)
-        {{-offset, 0.0f, 0.0f}, 4, {0.5f, 1.0f, 0.5f}}, // R (was L)
-        {{0.0f, offset, 0.0f}, 0, {0.5f, 0.5f, 1.0f}}, // S
+        {{ offset, 0.0f, 0.0f}, 5, {1.0f, 0.5f, 0.5f}}, // L
+        {{-offset, 0.0f, 0.0f}, 4, {0.5f, 1.0f, 0.5f}}, // R
+        {{0.0f,  offset, 0.0f}, 0, {0.5f, 0.5f, 1.0f}}, // S
         {{0.0f, -offset, 0.0f}, 1, {1.0f, 1.0f, 0.5f}}, // I
-        {{0.0f, 0.0f, offset}, 3, {1.0f, 0.5f, 1.0f}}, // A
+        {{0.0f, 0.0f,  offset}, 3, {1.0f, 0.5f, 1.0f}}, // A
         {{0.0f, 0.0f, -offset}, 2, {0.5f, 1.0f, 1.0f}}, // P
     };
-    
+
+    // Extract camera vectors
+    glm::vec3 cameraPos = glm::inverse(view)[3];
     glm::vec3 camRight(view[0][0], view[1][0], view[2][0]);
     glm::vec3 camUp(view[0][1], view[1][1], view[2][1]);
+    glm::vec3 camForward = -glm::vec3(view[0][2], view[1][2], view[2][2]);
+
     const float labelSize = 0.02f;
-    
+
+    const float hideDistance = 2.5f;
+    const float frontThreshold = 0.85f;
+
     glUseProgram(m_shaderProgram);
     glBindVertexArray(m_vao);
     glBindTexture(GL_TEXTURE_2D, m_texture);
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_DEPTH_TEST);
-    
+
     for (const auto& label : labels) {
+
+        // --- Smart visibility test ---
+        glm::vec3 toLabel = label.pos - cameraPos;
+        float dist = glm::length(toLabel);
+        glm::vec3 dir = glm::normalize(toLabel);
+
+        float dot = glm::dot(camForward, dir);
+
+        // Hide if directly in front AND too close
+        if (dot > frontThreshold && dist < hideDistance)
+            continue;
+
+        // --- Billboard transform ---
         glm::mat4 model(1.0f);
         model[0] = glm::vec4(camRight * labelSize, 0.0f);
         model[1] = glm::vec4(camUp * labelSize, 0.0f);
         model[2] = glm::vec4(glm::normalize(glm::cross(camRight, camUp)) * labelSize, 0.0f);
         model[3] = glm::vec4(label.pos, 1.0f);
-        
+
         glUniformMatrix4fv(glGetUniformLocation(m_shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
         glUniformMatrix4fv(glGetUniformLocation(m_shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(glGetUniformLocation(m_shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
         glUniform3fv(glGetUniformLocation(m_shaderProgram, "labelColor"), 1, glm::value_ptr(label.color));
-        
-        float u0 = label.idx / 6.0f, u1 = (label.idx + 1) / 6.0f;
+
+        float u0 = label.idx / 6.0f;
+        float u1 = (label.idx + 1) / 6.0f;
+
         float quadVertices[] = {
             -1.0f, -1.0f, 0.0f,  u0, 1.0f,
              1.0f, -1.0f, 0.0f,  u1, 1.0f,
@@ -160,15 +186,16 @@ void AxisLabels::render(const glm::mat4& view, const glm::mat4& projection) {
              1.0f,  1.0f, 0.0f,  u1, 0.0f,
             -1.0f,  1.0f, 0.0f,  u0, 0.0f,
         };
-        
-        // Allocate sufficient VBO size or use sub-data safely
+
         glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quadVertices), quadVertices);
+
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
-    
+
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
+
     glBindVertexArray(0);
     glUseProgram(0);
 }

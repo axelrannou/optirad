@@ -33,6 +33,31 @@ private:
         bool visible = true;
         glm::vec3 center;
     };
+
+    // WBOIT framebuffer
+    GLuint m_wboitFBO    = 0;
+    GLuint m_accumTex    = 0;
+    GLuint m_revealTex   = 0;
+    GLuint m_depthRBO    = 0;
+    int    m_wboitWidth  = 0;
+    int    m_wboitHeight = 0;
+
+    // Shaders
+    GLuint m_accumProgram     = 0;  // replaces m_shaderProgram
+    GLuint m_compositeProgram = 0;
+
+    // Full-screen quad
+    GLuint m_quadVao = 0;
+    GLuint m_quadVbo = 0;
+
+    // Cached uniform locations
+    GLint m_uModel, m_uView, m_uProjection, m_uViewPos;
+    GLint m_uNormalMatrix, m_uLightDir1, m_uLightDir2;
+    GLint m_uColor, m_uOpacity;
+
+    // New private methods
+    void ensureWboitFBO(int width, int height);
+    void destroyWboitFBO();
     
     PatientData* m_patientData = nullptr;
     bool m_needsRebuild = false;

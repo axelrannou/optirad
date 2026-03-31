@@ -72,6 +72,8 @@ private:
 
     // Track whether imported dose was already added to DoseManager
     bool m_importedDoseAdded = false;
+
+    bool focus3DView = false;
 };
 
 } // namespace optirad
