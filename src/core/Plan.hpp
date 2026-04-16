@@ -53,6 +53,10 @@ public:
     void setDoseGridResolution(const std::array<double, 3>& res) { m_doseGridResolution = res; }
     const std::array<double, 3>& getDoseGridResolution() const { return m_doseGridResolution; }
 
+    // Prescribed dose (single source of truth)
+    void setPrescribedDose(double dose) { m_prescribedDose = dose; }
+    double getPrescribedDose() const { return m_prescribedDose; }
+
     /// Print plan summary
     void printSummary() const;
 
@@ -65,6 +69,7 @@ private:
     std::shared_ptr<PatientData> m_patientData;
     std::vector<Beam> m_beams;
     std::array<double, 3> m_doseGridResolution = {2.5, 2.5, 2.5}; // mm
+    double m_prescribedDose = 0.0; // Gy (0 = not set, use default)
 };
 
 } // namespace optirad

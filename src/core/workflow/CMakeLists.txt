@@ -3,6 +3,7 @@ add_library(optirad_workflow
     DoseCalculationPipeline.cpp
     PhaseSpaceBuilder.cpp
     OptimizationPipeline.cpp
+    LeafSequencingPipeline.cpp
 )
 
 target_include_directories(optirad_workflow PUBLIC
@@ -17,6 +18,8 @@ target_link_libraries(optirad_workflow PUBLIC
     optirad_optimization
     optirad_phsp
     optirad_geometry
+    optirad_segmentation
+    optirad_sequencing
     optirad_utils
 )
 

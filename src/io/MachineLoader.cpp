@@ -176,6 +176,36 @@ void MachineLoader::loadGenericMachine(const json& j, Machine& machine) {
 
         machine.setConstraints(constraints);
     }
+
+    // ── MLC (optional for generic machines) ───────────────────────────────────
+    if (j.contains("MLC")) {
+        const auto& jmlc = j["MLC"];
+        MachineGeometry geom = machine.getGeometry();
+
+        if (jmlc.contains("type")) geom.mlcType = jmlc["type"].get<std::string>();
+        if (jmlc.contains("num_leaves")) geom.numLeaves = jmlc["num_leaves"].get<int>();
+        if (jmlc.contains("max_travel_mm")) geom.maxLeafTravel = jmlc["max_travel_mm"].get<double>();
+        if (jmlc.contains("interdigitation")) geom.interdigitation = jmlc["interdigitation"].get<bool>();
+        if (jmlc.contains("num_inner_pairs")) geom.numInnerPairs = jmlc["num_inner_pairs"].get<int>();
+        if (jmlc.contains("leaf_width_mm") && jmlc["leaf_width_mm"].is_array()) {
+            for (const auto& w : jmlc["leaf_width_mm"]) {
+                geom.leafWidths.push_back(w.get<double>());
+            }
+        }
+        if (jmlc.contains("leaf_position_resolution_mm"))
+            geom.leafPositionResolution = jmlc["leaf_position_resolution_mm"].get<double>();
+        if (jmlc.contains("tongue_and_groove_width_mm"))
+            geom.tongueAndGrooveWidth = jmlc["tongue_and_groove_width_mm"].get<double>();
+        if (jmlc.contains("leaf_tip_radius_mm"))
+            geom.leafTipRadius = jmlc["leaf_tip_radius_mm"].get<double>();
+        if (jmlc.contains("leaf_transmission"))
+            geom.leafTransmission = jmlc["leaf_transmission"].get<double>();
+
+        machine.setGeometry(geom);
+
+        Logger::info("MLC loaded: " + geom.mlcType + ", " +
+                     std::to_string(geom.numLeaves) + " leaves");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +284,7 @@ void MachineLoader::loadPhaseSpaceMachine(const json& j,
         if (jmlc.contains("num_leaves")) geom.numLeaves = jmlc["num_leaves"].get<int>();
         if (jmlc.contains("max_travel_mm")) geom.maxLeafTravel = jmlc["max_travel_mm"].get<double>();
         if (jmlc.contains("interdigitation")) geom.interdigitation = jmlc["interdigitation"].get<bool>();
+        if (jmlc.contains("num_inner_pairs")) geom.numInnerPairs = jmlc["num_inner_pairs"].get<int>();
         if (jmlc.contains("leaf_width_mm") && jmlc["leaf_width_mm"].is_array()) {
             for (const auto& w : jmlc["leaf_width_mm"]) {
                 geom.leafWidths.push_back(w.get<double>());

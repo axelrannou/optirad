@@ -7,6 +7,7 @@
 #include "core/workflow/DoseCalculationPipeline.hpp"
 #include "core/workflow/PhaseSpaceBuilder.hpp"
 #include "core/workflow/OptimizationPipeline.hpp"
+#include "core/workflow/LeafSequencingPipeline.hpp"
 #include "optimization/ObjectiveProtocol.hpp"
 #include "dose/PlanAnalysis.hpp"
 #include "utils/Logger.hpp"
@@ -20,6 +21,7 @@
 #include <chrono>
 #include <algorithm>
 #include <numeric>
+#include <iomanip>
 
 using namespace optirad;
 
@@ -27,6 +29,7 @@ using namespace optirad;
 int loadPhaseSpace(const std::vector<std::string>& args, WorkflowState& state);
 int doseCalc(const std::vector<std::string>& args, WorkflowState& state);
 int optimize(const std::vector<std::string>& args, WorkflowState& state);
+int leafSeq(const std::vector<std::string>& args, WorkflowState& state);
 
 void printUsage(const char* progName) {
     std::cout << "Usage: " << progName << " <command> [options]\n\n"
@@ -35,6 +38,7 @@ void printUsage(const char* progName) {
               << "  plan [options]                   Generate a treatment plan and STF (requires DICOM data first)\n"
               << "  doseCalc [options]               Calculate Dij (requires plan)\n"
               << "  optimize [options]               Run optimization (requires Dij)\n"
+              << "  leafSeq [options]                Run leaf sequencing (requires optimization)\n"
               << "  loadPhaseSpace [options]          Load phase-space beam source (phase-space machines only)\n"
               << "  interactive                      Enter interactive mode\n"
               << "  help                             Show this help message\n\n"
@@ -59,6 +63,9 @@ void printUsage(const char* progName) {
               << "  --tolerance <val>                Convergence tolerance (default: 1e-5)\n"
               << "  --target-dose <Gy>               Prescribed dose for targets (default: 60)\n"
               << "  --oar-max-dose <Gy>              Max dose for OARs (default: 30)\n\n"
+              << "Leaf sequencing options:\n"
+              << "  --num-levels <n>                 Intensity quantization levels (default: 15)\n"
+              << "  --min-segment-mu <MU>            Min MU per segment (default: 0)\n\n"
               << "Phase-space options:\n"
               << "  --collimator <deg>               Collimator angle (default: 0)\n"
               << "  --max-particles <n>              Max particles per beam (default: 1000000)\n"
@@ -264,6 +271,7 @@ int runInteractive(WorkflowState& state) {
                       << "  plan-help                     Show plan options and examples\n"
                       << "  doseCalc [options]            Calculate Dij (requires plan)\n"
                       << "  optimize [options]            Run optimization (requires Dij)\n"
+                      << "  leafSeq [options]             Run leaf sequencing (requires optimization)\n"
                       << "  loadPhaseSpace [options]       Load phase-space beam source (PSF machines only)\n"
                       << "  phsp-info                     Show phase-space source metrics\n"
                       << "  info                          Show current state and available STF properties\n"
@@ -315,6 +323,9 @@ int runInteractive(WorkflowState& state) {
         } else if (cmd == "optimize") {
             std::vector<std::string> optArgs(tokens.begin() + 1, tokens.end());
             optimize(optArgs, state);
+        } else if (cmd == "leafSeq") {
+            std::vector<std::string> lsArgs(tokens.begin() + 1, tokens.end());
+            leafSeq(lsArgs, state);
         } else if (cmd == "phsp-info") {
             if (state.phaseSpaceSources.empty()) {
                 std::cout << "No phase-space sources loaded.\n";
@@ -347,6 +358,8 @@ int runInteractive(WorkflowState& state) {
             std::cout << "STF:            " << (state.stf ? "generated" : "not generated") << "\n";
             std::cout << "Dij:            " << (state.dij ? "computed (nnz=" + std::to_string(state.dij->getNumNonZeros()) + ")" : "not computed") << "\n";
             std::cout << "Optimization:   " << (!state.optimizedWeights.empty() ? "done" : "not done") << "\n";
+            std::cout << "Leaf Sequencing: " << (state.leafSequenceDone() ?
+                std::to_string(state.leafSequences.size()) + " beams sequenced" : "not done") << "\n";
             std::cout << "Phase-space:    " << (!state.phaseSpaceSources.empty() ?
                 std::to_string(state.phaseSpaceSources.size()) + " beams loaded" : "not loaded") << "\n";
             if (state.stf) {
@@ -428,6 +441,77 @@ int loadPhaseSpace(const std::vector<std::string>& args, WorkflowState& state) {
     return 0;
 }
 
+// ── leafSeq command: leaf sequencing from optimized weights ──
+int leafSeq(const std::vector<std::string>& args, WorkflowState& state) {
+    if (state.optimizedWeights.empty()) {
+        std::cerr << "Error: No optimized weights. Use 'optimize' first.\n";
+        return 1;
+    }
+
+    int numLevels = 15;
+    double minSegmentMU = 0.0;
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--num-levels" && i + 1 < args.size()) {
+            numLevels = std::stoi(args[++i]);
+        } else if (args[i] == "--min-segment-mu" && i + 1 < args.size()) {
+            minSegmentMU = std::stod(args[++i]);
+        }
+    }
+
+    std::cout << "\n=== Leaf Sequencing ===\n";
+    std::cout << "Levels: " << numLevels << " | Min segment MU: " << minSegmentMU << "\n";
+
+    LeafSequencerOptions opts;
+    opts.numLevels = numLevels;
+    opts.minSegmentMU = minSegmentMU;
+
+    // Use leaf position resolution from machine geometry if available
+    if (state.plan) {
+        double res = state.plan->getMachine().getGeometry().leafPositionResolution;
+        if (res > 0.0) opts.leafPositionResolution = res;
+    }
+
+    auto progressCb = [](int current, int total) {
+        std::cout << "\r  Beam " << current << "/" << total << std::flush;
+    };
+
+    try {
+        auto result = LeafSequencingPipeline::run(
+            state.optimizedWeights, *state.stf, *state.dij,
+            *state.plan, *state.patientData, *state.doseGrid,
+            opts, progressCb);
+
+        state.leafSequences = std::move(result.beamSequences);
+        state.deliverableWeights = std::move(result.deliverableWeights);
+        state.deliverableStats = std::move(result.deliverableStats);
+
+        std::cout << "\n\nPer-beam summary:\n";
+        std::cout << std::setw(6) << "Beam" << std::setw(10) << "Segments"
+                  << std::setw(12) << "MU" << std::setw(12) << "Fidelity" << "\n";
+        for (size_t i = 0; i < state.leafSequences.size(); ++i) {
+            const auto& seq = state.leafSequences[i];
+            std::cout << std::setw(6) << i
+                      << std::setw(10) << seq.segments.size()
+                      << std::setw(12) << std::fixed << std::setprecision(1) << seq.totalMU
+                      << std::setw(12) << std::setprecision(4) << seq.fluenceFidelity << "\n";
+        }
+        std::cout << "\nTotal: " << result.totalSegments << " segments, "
+                  << std::fixed << std::setprecision(1) << result.totalMU << " MU, "
+                  << "mean fidelity " << std::setprecision(4) << result.meanFidelity << "\n";
+
+        std::cout << "\n--- Deliverable Dose Statistics ---\n";
+        PlanAnalysis::print(state.deliverableStats);
+
+    } catch (const std::exception& e) {
+        std::cerr << "\nError: " << e.what() << "\n";
+        return 1;
+    }
+
+    std::cout << "=== Done ===\n";
+    return 0;
+}
+
 // ── doseCalc command: compute Dij with optional caching ──
 int doseCalc(const std::vector<std::string>& args, WorkflowState& state) {
     if (!state.stf || state.stf->isEmpty()) {
@@ -499,6 +583,9 @@ int optimize(const std::vector<std::string>& args, WorkflowState& state) {
     double tolerance = 1e-5;
     double targetDose = 66.0;
     double oarMaxDose = 30.0;
+    double smooth = 0.0;
+    double l2Reg = 0.0;
+    double l1Reg = 0.0;
 
     for (size_t i = 0; i < args.size(); ++i) {
         if (args[i] == "--max-iter" && i + 1 < args.size()) {
@@ -509,23 +596,41 @@ int optimize(const std::vector<std::string>& args, WorkflowState& state) {
             targetDose = std::stod(args[++i]);
         } else if (args[i] == "--oar-max-dose" && i + 1 < args.size()) {
             oarMaxDose = std::stod(args[++i]);
+        } else if (args[i] == "--smooth" && i + 1 < args.size()) {
+            smooth = std::stod(args[++i]);
+        } else if (args[i] == "--l2-reg" && i + 1 < args.size()) {
+            l2Reg = std::stod(args[++i]);
+        } else if (args[i] == "--l1-reg" && i + 1 < args.size()) {
+            l1Reg = std::stod(args[++i]);
         }
     }
 
     std::cout << "\n=== Optimization ===\n";
     std::cout << "Max iter: " << maxIter << " | Tolerance: " << tolerance
               << " | Target dose: " << targetDose << " Gy\n";
+    if (smooth > 0.0) std::cout << "Spatial smoothing: " << smooth << "\n";
+    if (l2Reg > 0.0) std::cout << "L2 regularization: " << l2Reg << "\n";
+    if (l1Reg > 0.0) std::cout << "L1 regularization (MU penalty): " << l1Reg << "\n";
 
     OptimizationConfig config;
     config.maxIterations = maxIter;
     config.tolerance = tolerance;
     config.targetDose = targetDose;
+    config.spatialSmoothingWeight = smooth;
+    config.l2RegWeight = l2Reg;
+    config.l1RegWeight = l1Reg;
+
+    // Store prescribed dose in plan (single source of truth)
+    if (state.plan) {
+        state.plan->setPrescribedDose(targetDose);
+    }
 
     auto protocol = ObjectiveProtocol::lungIMRT(targetDose);
 
     try {
         auto result = OptimizationPipeline::run(
-            *state.dij, config, protocol, *state.patientData, *state.doseGrid);
+            *state.dij, config, protocol, *state.patientData, *state.doseGrid,
+            state.stf ? state.stf.get() : nullptr);
 
         state.optimizedWeights = std::move(result.weights);
         state.doseResult = result.doseResult;
@@ -589,6 +694,12 @@ int main(int argc, char* argv[]) {
         std::vector<std::string> optArgs;
         for (int i = 2; i < argc; ++i) optArgs.emplace_back(argv[i]);
         return optimize(optArgs, state);
+    }
+
+    if (command == "leafSeq") {
+        std::vector<std::string> lsArgs;
+        for (int i = 2; i < argc; ++i) lsArgs.emplace_back(argv[i]);
+        return leafSeq(lsArgs, state);
     }
 
     if (command == "doseCalc") {

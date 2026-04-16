@@ -18,10 +18,12 @@ class PlanningPanel;
 class StfPanel;
 class PhaseSpacePanel;
 class OptimizationPanel;
+class LeafSequencingPanel;
 class DoseStatsPanel;
 class DVHPanel;
 class SliceView;
 class View3D;
+class BevView;
 
 class Application {
 public:
@@ -60,6 +62,7 @@ private:
     std::unique_ptr<SliceView> m_axialView;
     std::unique_ptr<SliceView> m_sagittalView;
     std::unique_ptr<SliceView> m_coronalView;
+    std::unique_ptr<BevView> m_bevView;
     
     // Panels
     std::unique_ptr<PatientPanel> m_patientPanel;
@@ -67,6 +70,7 @@ private:
     std::unique_ptr<StfPanel> m_stfPanel;
     std::unique_ptr<PhaseSpacePanel> m_phaseSpacePanel;
     std::unique_ptr<OptimizationPanel> m_optimizationPanel;
+    std::unique_ptr<LeafSequencingPanel> m_leafSequencingPanel;
     std::unique_ptr<DoseStatsPanel> m_doseStatsPanel;
     std::unique_ptr<DVHPanel> m_dvhPanel;
 

@@ -262,11 +262,12 @@ void PatientPanel::renderDoseList() {
         return;
     }
 
-    if (ImGui::BeginTable("DoseList", 4,
+    if (ImGui::BeginTable("DoseList", 5,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("##sel", ImGuiTableColumnFlags_WidthFixed, 30.0f);
         ImGui::TableSetupColumn("Name");
-        ImGui::TableSetupColumn("Max (Gy)", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("Performed on", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("Max (Gy)", ImGuiTableColumnFlags_WidthStretch, 0.5f);
         ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, 25.0f);
         ImGui::TableHeadersRow();
 
@@ -344,6 +345,27 @@ void PatientPanel::renderDoseList() {
                 }
             } else {
                 ImGui::Text("%s", entry->name.c_str());
+            }
+
+            // Performed on (show linked optimization name for leaf sequencing doses)
+            ImGui::TableNextColumn();
+            {
+                auto seqIt = m_state.seqCache.find(entry->id);
+                if (seqIt != m_state.seqCache.end()) {
+                    int linkedId = seqIt->second.linkedOptDoseId;
+                    bool found = false;
+                    for (int j = 0; j < dm.count(); ++j) {
+                        const auto* optEntry = dm.getEntry(j);
+                        if (optEntry && optEntry->id == linkedId) {
+                            ImGui::Text("%s", optEntry->name.c_str());
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) ImGui::TextDisabled("-");
+                } else {
+                    ImGui::TextDisabled("-");
+                }
             }
 
             // Max dose

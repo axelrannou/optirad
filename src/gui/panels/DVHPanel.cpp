@@ -20,7 +20,9 @@ void DVHPanel::recompute() {
     if (!sel || !sel->dose || !sel->grid || !m_state.patientData) return;
 
     // Primary dose (cached in DoseManager)
-    m_stats = dm.getOrComputeStats(selIdx, *m_state.patientData);
+    double rxDose = (m_state.plan && m_state.plan->getPrescribedDose() > 0)
+                    ? m_state.plan->getPrescribedDose() : 60.0;
+    m_stats = dm.getOrComputeStats(selIdx, *m_state.patientData, rxDose);
     double maxDose = sel->dose->getMax();
     m_dvhMaxDose = static_cast<float>(maxDose);
     m_dvhCurves = PlanAnalysis::computeDVHCurves(m_stats, m_dvhMaxDose);
@@ -29,7 +31,7 @@ void DVHPanel::recompute() {
     int cmpIdx = dm.getCompareIdx();
     auto* cmp = dm.getCompare();
     if (cmp && cmp->dose && cmp->grid) {
-        m_compareStats = dm.getOrComputeStats(cmpIdx, *m_state.patientData);
+        m_compareStats = dm.getOrComputeStats(cmpIdx, *m_state.patientData, rxDose);
         double cmpMax = cmp->dose->getMax();
         if (cmpMax > maxDose) {
             m_dvhMaxDose = static_cast<float>(cmpMax);

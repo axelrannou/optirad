@@ -24,6 +24,13 @@ void LBFGSOptimizer::setHotspotThreshold(double threshold) { m_hotspotThreshold 
 void LBFGSOptimizer::setHotspotPenalty(double penalty) { m_hotspotPenalty = penalty; }
 void LBFGSOptimizer::setIterationCallback(IterationCallback cb) { m_iterCallback = std::move(cb); }
 
+void LBFGSOptimizer::setSpatialSmoothing(double lambda, const std::vector<std::vector<int>>& neighbors) {
+    m_spatialSmoothingWeight = lambda;
+    m_neighbors = neighbors;
+}
+void LBFGSOptimizer::setL2Regularization(double alpha) { m_l2RegWeight = alpha; }
+void LBFGSOptimizer::setL1Regularization(double beta) { m_l1RegWeight = beta; }
+
 OptimizationResult LBFGSOptimizer::optimize(
     const DoseInfluenceMatrix& dij,
     const std::vector<ObjectiveFunction*>& objectives,
@@ -318,6 +325,48 @@ double LBFGSOptimizer::computeObjectiveAndGradient(
     
     // Compute gradient using optimized transpose product: grad = Dij^T * gVox
     dij.accumulateTransposeProduct(gVox, grad);
+    
+    // ── Spatial smoothing (quadratic difference penalty in bixel space) ──
+    // f_smooth = lambda * sum_i sum_{j in N(i)} (w_i - w_j)^2
+    // grad_smooth[i] = 2 * lambda * sum_{j in N(i)} (w_i - w_j)
+    if (m_spatialSmoothingWeight > 0.0 && !m_neighbors.empty()) {
+        double smoothObj = 0.0;
+        for (int i = 0; i < n; ++i) {
+            double gradSum = 0.0;
+            for (int j : m_neighbors[i]) {
+                double diff = weights[i] - weights[j];
+                smoothObj += diff * diff;
+                gradSum += diff;
+            }
+            grad[i] += 2.0 * m_spatialSmoothingWeight * gradSum;
+        }
+        // Each pair counted twice (from both sides), so divide obj by 2
+        objVal += m_spatialSmoothingWeight * smoothObj * 0.5;
+    }
+    
+    // ── L2 regularization (Tikhonov: alpha * sum w_i^2) ──
+    if (m_l2RegWeight > 0.0) {
+        double l2Obj = 0.0;
+        #pragma omp parallel for reduction(+:l2Obj)
+        for (int i = 0; i < n; ++i) {
+            l2Obj += weights[i] * weights[i];
+            grad[i] += 2.0 * m_l2RegWeight * weights[i];
+        }
+        objVal += m_l2RegWeight * l2Obj;
+    }
+    
+    // ── L1 regularization (Total MU: beta * sum w_i, w_i >= 0) ──
+    if (m_l1RegWeight > 0.0) {
+        double l1Obj = 0.0;
+        #pragma omp parallel for reduction(+:l1Obj)
+        for (int i = 0; i < n; ++i) {
+            l1Obj += weights[i];
+            if (weights[i] > 0.0) {
+                grad[i] += m_l1RegWeight;
+            }
+        }
+        objVal += m_l1RegWeight * l1Obj;
+    }
     
     return objVal;
 }

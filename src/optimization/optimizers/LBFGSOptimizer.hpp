@@ -29,6 +29,11 @@ public:
     void setHotspotThreshold(double threshold);  // fraction of Rx (e.g. 1.0 = 100%)
     void setHotspotPenalty(double penalty);
 
+    // Spatial smoothing and regularization
+    void setSpatialSmoothing(double lambda, const std::vector<std::vector<int>>& neighbors);
+    void setL2Regularization(double alpha);
+    void setL1Regularization(double beta);
+
     void setIterationCallback(IterationCallback cb) override;
 
 private:
@@ -51,6 +56,14 @@ private:
     double m_prescriptionDose = 0.0;   // 0 = disabled
     double m_hotspotThreshold = 1.04;  // fraction of Rx (104%)
     double m_hotspotPenalty = 2000.0;  // penalty weight
+    
+    // Spatial smoothing (quadratic difference penalty)
+    double m_spatialSmoothingWeight = 0.0;  // lambda
+    std::vector<std::vector<int>> m_neighbors; // bixel neighbor map
+    
+    // Regularization
+    double m_l2RegWeight = 0.0;  // alpha (Tikhonov)
+    double m_l1RegWeight = 0.0;  // beta  (Total MU)
     
     // Convergence tracking
     int m_stallCount = 0;              // consecutive stalled iterations

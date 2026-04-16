@@ -9,6 +9,7 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <unordered_map>
 
 namespace optirad {
 
@@ -46,6 +47,14 @@ private:
     float m_ntoThresholdPct = 104.0f;  // % of prescription dose
     int m_ntoPenalty = 2000.0f;
 
+    // Spatial smoothing and regularization
+    bool m_smoothingEnabled = false;
+    float m_spatialSmoothingWeight = 0.1f;
+    bool m_l2RegEnabled = false;
+    float m_l2RegWeight = 0.001f;
+    bool m_l1RegEnabled = false;
+    float m_l1RegWeight = 0.01f;
+
     // Async state
     std::atomic<bool> m_isOptimizing{false};
     std::atomic<bool> m_optimizationDone{false};
@@ -61,7 +70,15 @@ private:
     std::mutex m_iterMutex;
     std::vector<IterationInfo> m_iterationLog;
 
-    void renderConvergenceCurve();
+    // Display cache: convergence log + status per optimization dose ID
+    struct OptDisplayCache {
+        std::vector<IterationInfo> log;
+        std::string statusMessage;
+    };
+    std::unordered_map<int, OptDisplayCache> m_displayCache;
+    int m_doseVersion = -1;
+
+    void renderConvergenceCurve(const std::vector<IterationInfo>& log);
 };
 
 } // namespace optirad

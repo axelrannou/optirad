@@ -6,10 +6,12 @@
 #include "panels/StfPanel.hpp"
 #include "panels/PhaseSpacePanel.hpp"
 #include "panels/OptimizationPanel.hpp"
+#include "panels/LeafSequencingPanel.hpp"
 #include "panels/DoseStatsPanel.hpp"
 #include "panels/DVHPanel.hpp"
 #include "views/SliceView.hpp"
 #include "views/View3D.hpp"
+#include "views/BevView.hpp"
 #include "views/renderers/PhaseSpaceRenderer.hpp"
 #include "utils/Logger.hpp"
 
@@ -152,6 +154,7 @@ bool Application::init() {
     m_stfPanel = std::make_unique<StfPanel>(m_appState);
     m_phaseSpacePanel = std::make_unique<PhaseSpacePanel>(m_appState);
     m_optimizationPanel = std::make_unique<OptimizationPanel>(m_appState);
+    m_leafSequencingPanel = std::make_unique<LeafSequencingPanel>(m_appState);
     m_doseStatsPanel = std::make_unique<DoseStatsPanel>(m_appState);
     m_dvhPanel = std::make_unique<DVHPanel>(m_appState);
     
@@ -162,6 +165,7 @@ bool Application::init() {
     m_axialView = std::make_unique<SliceView>(SliceOrientation::Axial);
     m_sagittalView = std::make_unique<SliceView>(SliceOrientation::Sagittal);
     m_coronalView = std::make_unique<SliceView>(SliceOrientation::Coronal);
+    m_bevView = std::make_unique<BevView>(m_appState);
     
     return true;
 }
@@ -218,6 +222,7 @@ void Application::setupDockLayout() {
     // Sidebar 2: STF (top) + Optimization (bottom)
     ImGui::DockBuilderDockWindow("STF Generation", sidebar2Top);
     ImGui::DockBuilderDockWindow("Optimization", sidebar2Bottom);
+    ImGui::DockBuilderDockWindow("Leaf Sequencing", sidebar2Bottom);
     
     // Phase Space (hidden but docked in sidebar2 STF node as a tab)
     ImGui::DockBuilderDockWindow("Phase Space", sidebar2Top);
@@ -228,6 +233,7 @@ void Application::setupDockLayout() {
     ImGui::DockBuilderDockWindow("Coronal", coronalNode);
     ImGui::DockBuilderDockWindow("3D View", view3dNode);
     ImGui::DockBuilderDockWindow("DVH", view3dNode);  // tabbed with 3D View
+    ImGui::DockBuilderDockWindow("BEV", view3dNode);  // tabbed with 3D View
     
     // Bottom: Dose Statistics
     ImGui::DockBuilderDockWindow("Dose Statistics", bottomNode);
@@ -337,6 +343,7 @@ void Application::run() {
             m_phaseSpacePanel->render();
         }
         m_optimizationPanel->render();
+        m_leafSequencingPanel->render();
         m_doseStatsPanel->render();
         
         // Pass dose data to slice views AFTER panels render
@@ -358,6 +365,7 @@ void Application::run() {
         // Render 3D View inside an ImGui window
         render3DViewWindow();
         m_dvhPanel->render();
+        m_bevView->render();
 
         //Auto-switch to 3D View for first render
         if (!focus3DView) {
@@ -470,6 +478,11 @@ void Application::renderMenuBar() {
                 m_optimizationPanel->setVisible(optVis);
             }
             
+            bool lsVis = m_leafSequencingPanel->isVisible();
+            if (ImGui::MenuItem("Leaf Sequencing Panel", nullptr, &lsVis)) {
+                m_leafSequencingPanel->setVisible(lsVis);
+            }
+            
             bool doseVis = m_doseStatsPanel->isVisible();
             if (ImGui::MenuItem("Dose Statistics", nullptr, &doseVis)) {
                 m_doseStatsPanel->setVisible(doseVis);
@@ -502,6 +515,11 @@ void Application::renderMenuBar() {
                 m_view3DVisible = view3DVis;
             }
             
+            bool bevVis = m_bevView->isVisible();
+            if (ImGui::MenuItem("BEV", nullptr, &bevVis)) {
+                m_bevView->setVisible(bevVis);
+            }
+            
             ImGui::Separator();
             
             if (ImGui::MenuItem("Reset Layout")) {
@@ -512,11 +530,13 @@ void Application::renderMenuBar() {
                 m_stfPanel->setVisible(true);
                 m_phaseSpacePanel->setVisible(false);
                 m_optimizationPanel->setVisible(true);
+                m_leafSequencingPanel->setVisible(true);
                 m_doseStatsPanel->setVisible(true);
                 m_dvhPanel->setVisible(true);
                 m_axialView->setVisible(true);
                 m_sagittalView->setVisible(true);
                 m_coronalView->setVisible(true);
+                m_bevView->setVisible(true);
                 m_view3DVisible = true;
                 // Force rebuild on next frame by removing the existing node
                 ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");

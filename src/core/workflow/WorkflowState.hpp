@@ -9,7 +9,9 @@
 #include "dose/DoseInfluenceMatrix.hpp"
 #include "dose/DoseMatrix.hpp"
 #include "dose/DoseManager.hpp"
+#include "dose/PlanAnalysis.hpp"
 #include "geometry/Grid.hpp"
+#include "core/Aperture.hpp"
 #include <memory>
 #include <vector>
 #include <string>
@@ -37,6 +39,12 @@ struct WorkflowState {
     std::vector<double> optimizedWeights;
     std::shared_ptr<DoseMatrix> doseResult;
 
+    // ── Leaf sequencing state ──
+    std::vector<LeafSequenceResult> leafSequences;
+    std::vector<double> deliverableWeights;
+    std::shared_ptr<DoseMatrix> deliverableDoseResult;
+    std::vector<StructureDoseStats> deliverableStats;
+
     // ── Multi-dose management ──
     DoseManager doseManager;
 
@@ -49,6 +57,7 @@ struct WorkflowState {
     }
     bool dijComputed() const { return dij != nullptr && dij->getNumNonZeros() > 0; }
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
+    bool leafSequenceDone() const { return !leafSequences.empty(); }
     bool doseAvailable() const { return doseManager.count() > 0 && doseManager.getSelected() != nullptr; }
 
     bool isPhaseSpaceMachine() const {
@@ -79,8 +88,15 @@ struct WorkflowState {
         optimizedWeights.clear();
         syncSelectedDose();
     }
+    void resetLeafSequence() {
+        leafSequences.clear();
+        deliverableWeights.clear();
+        deliverableDoseResult.reset();
+        deliverableStats.clear();
+    }
     void resetOptimization() {
         optimizedWeights.clear();
+        resetLeafSequence();
         syncSelectedDose();
     }
     void resetAllDoses() {

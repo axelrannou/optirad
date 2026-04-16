@@ -31,6 +31,29 @@ void OptimizationPanel::render() {
         return;
     }
 
+    // Auto-restore display state when selected dose changes
+    if (!m_isOptimizing) {
+        int ver = m_state.doseManager.version();
+        if (ver != m_doseVersion) {
+            m_doseVersion = ver;
+            // Save current display state for the previous optimization dose
+            // (already saved on completion — only needed if user re-selects)
+
+            // Restore display from cache for the active optimization dose
+            int optId = m_state.activeOptDoseId;
+            auto it = m_displayCache.find(optId);
+            if (it != m_displayCache.end()) {
+                std::lock_guard<std::mutex> lock(m_iterMutex);
+                m_iterationLog = it->second.log;
+                m_optStatusMessage = it->second.statusMessage;
+            } else {
+                std::lock_guard<std::mutex> lock(m_iterMutex);
+                m_iterationLog.clear();
+                m_optStatusMessage.clear();
+            }
+        }
+    }
+
     // ── Initialize objectives from curated structure list ──
     // Only include clinically relevant structures with protocol-appropriate defaults.
     // User can still add/remove objectives via the table UI.
@@ -199,6 +222,33 @@ void OptimizationPanel::render() {
         ImGui::InputFloat("Threshold (%Rx)", &m_ntoThresholdPct, 0.0f, 0.0f, "%.1f");
         ImGui::InputInt("Penalty", &m_ntoPenalty);
         if (!m_ntoEnabled) ImGui::EndDisabled();
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Fluence Smoothing & Regularization");
+        ImGui::Checkbox("Spatial Smoothing", &m_smoothingEnabled);
+        if (!m_smoothingEnabled) ImGui::BeginDisabled();
+        ImGui::InputFloat("Smoothing Weight", &m_spatialSmoothingWeight, 0.001f, 0.01f, "%.4f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Quadratic difference penalty between adjacent bixels.\n"
+                              "Higher values produce smoother fluence maps.\n"
+                              "Typical range: 0.01 - 1.0");
+        if (!m_smoothingEnabled) ImGui::EndDisabled();
+
+        ImGui::Checkbox("L2 Regularization", &m_l2RegEnabled);
+        if (!m_l2RegEnabled) ImGui::BeginDisabled();
+        ImGui::InputFloat("L2 Weight", &m_l2RegWeight, 0.0001f, 0.001f, "%.4f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Tikhonov regularization: penalizes large individual bixel weights.\n"
+                              "Typical range: 0.0001 - 0.01");
+        if (!m_l2RegEnabled) ImGui::EndDisabled();
+
+        ImGui::Checkbox("Total MU Penalty (L1)", &m_l1RegEnabled);
+        if (!m_l1RegEnabled) ImGui::BeginDisabled();
+        ImGui::InputFloat("L1 Weight", &m_l1RegWeight, 0.001f, 0.01f, "%.4f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Penalizes total monitor units. Reduces scatter/leakage radiation.\n"
+                              "Typical range: 0.001 - 0.1");
+        if (!m_l1RegEnabled) ImGui::EndDisabled();
     }
     if (m_isOptimizing) ImGui::EndDisabled();
 
@@ -229,7 +279,10 @@ void OptimizationPanel::render() {
             }
         }
 
-        renderConvergenceCurve();
+        {
+            std::lock_guard<std::mutex> lock(m_iterMutex);
+            renderConvergenceCurve(m_iterationLog);
+        }
 
         if (m_optimizationDone) {
             m_optThread.join();
@@ -243,11 +296,21 @@ void OptimizationPanel::render() {
 
                 if (m_pipelineResult.doseResult) {
                     int optNum = m_state.doseManager.nextOptimizationNumber();
-                    m_state.doseManager.addDose(
+                    int doseId = m_state.doseManager.addDose(
                         "Optimization #" + std::to_string(optNum),
                         m_pipelineResult.doseResult,
                         m_state.computeGrid);
                     m_state.doseManager.incrementOptimizationCount();
+
+                    // Cache optimization weights BEFORE syncSelectedDose
+                    m_state.cacheOptimization(doseId);
+
+                    // Cache display state for this optimization dose
+                    {
+                        std::lock_guard<std::mutex> lock(m_iterMutex);
+                        m_displayCache[doseId] = {m_iterationLog, m_optStatusMessage};
+                    }
+
                     m_state.syncSelectedDose();
                     m_state.optimizationJustFinished = true;
 
@@ -295,9 +358,18 @@ void OptimizationPanel::render() {
             bool ntoEnabled = m_ntoEnabled;
             float ntoThresholdPct = m_ntoThresholdPct;
             int ntoPenalty = m_ntoPenalty;
+            bool smoothingEnabled = m_smoothingEnabled;
+            float spatialSmoothingWeight = m_spatialSmoothingWeight;
+            bool l2RegEnabled = m_l2RegEnabled;
+            float l2RegWeight = m_l2RegWeight;
+            bool l1RegEnabled = m_l1RegEnabled;
+            float l1RegWeight = m_l1RegWeight;
 
             m_optThread = std::thread([this, objectivesCopy, maxIter, tolerance,
-                                       ntoEnabled, ntoThresholdPct, ntoPenalty]() {
+                                       ntoEnabled, ntoThresholdPct, ntoPenalty,
+                                       smoothingEnabled, spatialSmoothingWeight,
+                                       l2RegEnabled, l2RegWeight,
+                                       l1RegEnabled, l1RegWeight]() {
                 try {
                     const auto& ctGrid = m_state.patientData->getGrid();
                     const auto& doseGrid = *m_state.computeGrid;
@@ -336,6 +408,14 @@ void OptimizationPanel::render() {
                     config.ntoEnabled = ntoEnabled;
                     config.ntoThresholdPct = static_cast<double>(ntoThresholdPct) / 100.0;
                     config.ntoPenalty = static_cast<double>(ntoPenalty);
+                    config.spatialSmoothingWeight = smoothingEnabled ? static_cast<double>(spatialSmoothingWeight) : 0.0;
+                    config.l2RegWeight = l2RegEnabled ? static_cast<double>(l2RegWeight) : 0.0;
+                    config.l1RegWeight = l1RegEnabled ? static_cast<double>(l1RegWeight) : 0.0;
+
+                    // Store prescribed dose in plan (single source of truth)
+                    if (m_state.plan) {
+                        m_state.plan->setPrescribedDose(config.targetDose);
+                    }
 
                     m_pipelineResult = OptimizationPipeline::runWithObjectives(
                         *m_state.dij, config, std::move(objectives),
@@ -347,7 +427,8 @@ void OptimizationPanel::render() {
                             m_currentImprovement.store(info.improvement);
                             std::lock_guard<std::mutex> lock(m_iterMutex);
                             m_iterationLog.push_back(info);
-                        });
+                        },
+                        m_state.stf ? m_state.stf.get() : nullptr);
 
                     m_optStatusMessage = (m_pipelineResult.converged ? "Converged" : "Max iter reached") +
                         std::string(" in ") + std::to_string(m_pipelineResult.iterations) +
@@ -372,19 +453,23 @@ void OptimizationPanel::render() {
             ImGui::Text("Max dose: %.2f Gy | Mean dose: %.2f Gy",
                 m_state.doseResult->getMax(), m_state.doseResult->getMean());
         }
-        renderConvergenceCurve();
+        // Use cached log for the selected optimization (not the live m_iterationLog)
+        {
+            int optId = m_state.activeOptDoseId;
+            auto cacheIt = m_displayCache.find(optId);
+            if (cacheIt != m_displayCache.end()) {
+                renderConvergenceCurve(cacheIt->second.log);
+            } else {
+                std::lock_guard<std::mutex> lock(m_iterMutex);
+                renderConvergenceCurve(m_iterationLog);
+            }
+        }
     }
 
     ImGui::End();
 }
 
-void OptimizationPanel::renderConvergenceCurve() {
-    // Snapshot iteration log under lock
-    std::vector<IterationInfo> log;
-    {
-        std::lock_guard<std::mutex> lock(m_iterMutex);
-        log = m_iterationLog;
-    }
+void OptimizationPanel::renderConvergenceCurve(const std::vector<IterationInfo>& log) {
     if (log.size() < 2) return;
 
     const auto& tc = getThemeColors();

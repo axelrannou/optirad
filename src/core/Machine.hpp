@@ -70,8 +70,13 @@ struct MachineGeometry {
     std::string mlcType;
     int numLeaves = 0;
     std::vector<double> leafWidths; // mm (e.g., 5.0 and 10.0)
+    int numInnerPairs = 0;          // Number of central inner-width leaf pairs (e.g., 40 for Millennium 120)
     double maxLeafTravel = 0.0;     // mm
     bool interdigitation = false;
+    double leafPositionResolution = 0.5; // mm (Varian spec: 0.5mm)
+    double tongueAndGrooveWidth = 0.0;   // mm (typical ~0.4mm)
+    double leafTipRadius = 0.0;          // mm (rounded tip for penumbra modeling)
+    double leafTransmission = 0.0;       // fraction (e.g., 0.018 = 1.8% for 6MV)
 
     // Phase-space files directory (absolute path to folder containing .IAEAphsp/.IAEAheader pairs)
     std::string phaseSpaceDir;

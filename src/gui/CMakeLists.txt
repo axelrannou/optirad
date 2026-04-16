@@ -45,8 +45,10 @@ add_library(optirad_gui
     panels/PlanningPanel.cpp
     panels/StfPanel.cpp
     panels/PhaseSpacePanel.cpp
+    panels/LeafSequencingPanel.cpp
     views/SliceView.cpp
     views/DVHView.cpp
+    views/BevView.cpp
     views/View3D.cpp
     views/renderers/CubeRenderer.cpp
     views/renderers/AxisLabels.cpp

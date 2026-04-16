@@ -146,6 +146,12 @@ public:
     /// Increment the optimization counter (call after adding an optimization dose).
     void incrementOptimizationCount() { ++m_optimizationCount; }
 
+    /// Return the next sequential leaf sequencing number (for naming).
+    int nextLeafSeqNumber() const { return m_leafSeqCount + 1; }
+
+    /// Increment the leaf sequencing counter.
+    void incrementLeafSeqCount() { ++m_leafSeqCount; }
+
 private:
     std::vector<DoseEntry> m_entries;
     std::unordered_map<int, std::vector<StructureDoseStats>> m_statsCache;
@@ -154,6 +160,7 @@ private:
     int m_nextId = 1;
     int m_version = 0;
     int m_optimizationCount = 0;
+    int m_leafSeqCount = 0;
 };
 
 } // namespace optirad

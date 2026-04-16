@@ -7,6 +7,7 @@
 #include "dose/DoseMatrix.hpp"
 #include "dose/PlanAnalysis.hpp"
 #include "core/PatientData.hpp"
+#include "core/Stf.hpp"
 #include "geometry/Grid.hpp"
 #include <memory>
 #include <vector>
@@ -26,6 +27,13 @@ struct OptimizationConfig {
     bool ntoEnabled = true;
     double ntoThresholdPct = 1.04;  // fraction of Rx (104%)
     double ntoPenalty = 2000.0;
+
+    // Spatial smoothing (quadratic difference penalty)
+    double spatialSmoothingWeight = 0.0;  // lambda
+
+    // Regularization
+    double l2RegWeight = 0.0;   // alpha (Tikhonov: sum w_i^2)
+    double l1RegWeight = 0.0;   // beta  (Total MU: sum w_i)
 };
 
 /// Result of the optimization pipeline.
@@ -48,7 +56,8 @@ public:
         const OptimizationConfig& config,
         const ObjectiveProtocol& protocol,
         const PatientData& patientData,
-        const Grid& doseGrid);
+        const Grid& doseGrid,
+        const Stf* stf = nullptr);
 
     /// Run optimization using pre-built objectives.
     static OptimizationPipelineResult runWithObjectives(
@@ -57,7 +66,8 @@ public:
         BuiltObjectives objectives,
         const PatientData& patientData,
         const Grid& doseGrid,
-        IterationCallback iterCallback = nullptr);
+        IterationCallback iterCallback = nullptr,
+        const Stf* stf = nullptr);
 };
 
 } // namespace optirad

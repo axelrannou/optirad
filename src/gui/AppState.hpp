@@ -9,13 +9,24 @@
 #include "dose/DoseInfluenceMatrix.hpp"
 #include "dose/DoseMatrix.hpp"
 #include "dose/DoseManager.hpp"
+#include "dose/PlanAnalysis.hpp"
 #include "geometry/Grid.hpp"
+#include "core/Aperture.hpp"
 #include <memory>
 #include <vector>
 #include <string>
 #include <atomic>
+#include <unordered_map>
 
 namespace optirad {
+
+/// Cached leaf sequencing results, keyed by deliverable dose entry ID.
+struct LeafSeqCacheEntry {
+    std::vector<LeafSequenceResult> sequences;
+    std::vector<double> deliverableWeights;
+    std::vector<StructureDoseStats> deliverableStats;
+    int linkedOptDoseId = -1; // the optimization dose these were derived from
+};
 
 /// Shared application state for the GUI pipeline.
 /// Mirrors the CLI AppState: load DICOM → create Plan → generate STF → dose calc → optimize.
@@ -37,8 +48,19 @@ struct GuiAppState {
     std::vector<double> optimizedWeights;
     std::shared_ptr<DoseMatrix> doseResult;
 
+    // ── Leaf sequencing state ──
+    std::vector<LeafSequenceResult> leafSequences;
+    std::vector<double> deliverableWeights;
+    std::shared_ptr<DoseMatrix> deliverableDoseResult;
+    std::vector<StructureDoseStats> deliverableStats;
+
     // ── Multi-dose management ──
     DoseManager doseManager;
+
+    // ── Pipeline result caches (keyed by dose entry ID) ──
+    std::unordered_map<int, std::vector<double>> optWeightsCache;
+    std::unordered_map<int, LeafSeqCacheEntry> seqCache;
+    int activeOptDoseId = -1; // which optimization dose produced current weights
 
     // ── Async task state ──
     std::atomic<bool> cancelFlag{false};
@@ -58,6 +80,7 @@ struct GuiAppState {
     }
     bool dijComputed() const { return dij != nullptr && dij->getNumNonZeros() > 0; }
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
+    bool leafSequenceDone() const { return !leafSequences.empty(); }
     bool doseAvailable() const { return doseManager.count() > 0 && doseManager.getSelected() != nullptr; }
 
     /// Check if the current plan uses a phase-space machine
@@ -65,7 +88,24 @@ struct GuiAppState {
         return plan && plan->getMachine().isPhaseSpace();
     }
 
-    /// Sync doseResult/doseGrid from DoseManager's current selection (for backward compat).
+    /// Cache current optimization weights for a dose entry ID.
+    void cacheOptimization(int doseId) {
+        optWeightsCache[doseId] = optimizedWeights;
+        activeOptDoseId = doseId;
+    }
+
+    /// Cache current leaf sequencing results for a deliverable dose entry ID.
+    void cacheLeafSequencing(int doseId, int linkedOptDoseId) {
+        LeafSeqCacheEntry entry;
+        entry.sequences = leafSequences;
+        entry.deliverableWeights = deliverableWeights;
+        entry.deliverableStats = deliverableStats;
+        entry.linkedOptDoseId = linkedOptDoseId;
+        seqCache[doseId] = std::move(entry);
+    }
+
+    /// Sync doseResult/doseGrid from DoseManager's current selection,
+    /// and restore cached optimization / leaf sequencing results.
     void syncSelectedDose() {
         auto* sel = doseManager.getSelected();
         if (sel) {
@@ -73,8 +113,63 @@ struct GuiAppState {
             doseGrid = sel->grid;
         } else {
             doseResult.reset();
-            // Don't clear doseGrid here — it may still be used by the dose engine
         }
+
+        int selId = sel ? sel->id : -1;
+
+        // Try to restore optimization weights for the selected dose
+        auto optIt = optWeightsCache.find(selId);
+        if (optIt != optWeightsCache.end()) {
+            // Selected dose IS an optimization dose
+            optimizedWeights = optIt->second;
+            activeOptDoseId = selId;
+
+            // Check if leaf sequencing was done for this optimization
+            // (reverse-scan: find seqCache entry whose linkedOptDoseId matches)
+            bool foundSeq = false;
+            for (const auto& [seqDoseId, seqEntry] : seqCache) {
+                if (seqEntry.linkedOptDoseId == selId) {
+                    leafSequences = seqEntry.sequences;
+                    deliverableWeights = seqEntry.deliverableWeights;
+                    deliverableStats = seqEntry.deliverableStats;
+                    foundSeq = true;
+                    break;
+                }
+            }
+            if (!foundSeq) {
+                leafSequences.clear();
+                deliverableWeights.clear();
+                deliverableStats.clear();
+            }
+            return;
+        }
+
+        // Check if selected dose is a deliverable dose
+        auto seqIt = seqCache.find(selId);
+        if (seqIt != seqCache.end()) {
+            const auto& entry = seqIt->second;
+            leafSequences = entry.sequences;
+            deliverableWeights = entry.deliverableWeights;
+            deliverableStats = entry.deliverableStats;
+
+            // Also restore the linked optimization weights
+            auto linkedIt = optWeightsCache.find(entry.linkedOptDoseId);
+            if (linkedIt != optWeightsCache.end()) {
+                optimizedWeights = linkedIt->second;
+                activeOptDoseId = entry.linkedOptDoseId;
+            } else {
+                optimizedWeights.clear();
+                activeOptDoseId = -1;
+            }
+            return;
+        }
+
+        // No cached results for this dose — clear pipeline state
+        optimizedWeights.clear();
+        leafSequences.clear();
+        deliverableWeights.clear();
+        deliverableStats.clear();
+        activeOptDoseId = -1;
     }
 
     // Reset downstream state when upstream changes.
@@ -93,11 +188,21 @@ struct GuiAppState {
         // Restore display dose from DoseManager.
         syncSelectedDose();
     }
+    void resetLeafSequence() {
+        leafSequences.clear();
+        deliverableWeights.clear();
+        deliverableDoseResult.reset();
+        deliverableStats.clear();
+    }
     void resetOptimization() {
         optimizedWeights.clear();
+        resetLeafSequence();
         syncSelectedDose();
     }
-    void resetAllDoses() { doseManager.clear(); doseResult.reset(); doseGrid.reset(); computeGrid.reset(); }
+    void resetAllDoses() {
+        doseManager.clear(); doseResult.reset(); doseGrid.reset(); computeGrid.reset();
+        optWeightsCache.clear(); seqCache.clear(); activeOptDoseId = -1;
+    }
 };
 
 } // namespace optirad
