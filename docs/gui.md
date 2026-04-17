@@ -3,7 +3,7 @@
 The GUI module provides a modern Dear ImGui-based graphical interface for interactive treatment planning with 2D/3D visualization, async task execution, and a panel-based layout.
 
 **Library:** `optirad_gui`  
-**Dependencies:** `optirad_core`, `optirad_io`, `optirad_geometry`, `optirad_optimization`, `optirad_phsp`, `imgui`, OpenGL, GLFW, GLEW, glm  
+**Dependencies:** `optirad_workflow`, `optirad_core`, `optirad_io`, `optirad_geometry`, `optirad_optimization`, `optirad_phsp`, `imgui`, OpenGL, GLFW, GLEW, glm  
 **Optional:** OpenMP
 
 ## Files
@@ -27,7 +27,9 @@ The GUI module provides a modern Dear ImGui-based graphical interface for intera
 | `StfPanel.hpp/cpp` | STF details, per-beam visibility |
 | `PhaseSpacePanel.hpp/cpp` | Phase-space beam loading and statistics |
 | `OptimizationPanel.hpp/cpp` | Objective config, optimizer settings |
-| `DoseStatsPanel.hpp/cpp` | Plan analysis, DVH curves |
+| `DoseStatsPanel.hpp/cpp` | Plan analysis statistics table |
+| `DVHPanel.hpp/cpp` | Dedicated DVH panel with comparison overlay |
+| `LeafSequencingPanel.hpp/cpp` | Leaf sequencing controls and deliverable-dose results |
 | `BeamPanel.hpp/cpp` | Beam information display |
 | `LogPanel.hpp/cpp` | Log message viewer |
 
@@ -39,6 +41,7 @@ The GUI module provides a modern Dear ImGui-based graphical interface for intera
 | `SliceView.hpp/cpp` | 2D slice rendering with dose overlay |
 | `View3D.hpp/cpp` | 3D viewport with orbit camera |
 | `DVHView.hpp/cpp` | DVH curve plotting |
+| `BevView.hpp/cpp` | Beam's Eye View with fluence and aperture visualization |
 
 ### 3D Renderers (`views/renderers/`)
 
@@ -70,50 +73,69 @@ Internally holds:
 - `GuiAppState` — Shared state container
 - 3× `SliceView` — Axial, Sagittal, Coronal
 - `View3D` — 3D viewport
-- 8 Panels — Patient, Planning, STF, PhaseSpace, Optimization, DoseStats, Beam, Log
+- `DVHView` and `BevView` — Specialized dose-analysis and beam-eye displays
+- 10 Panels — Patient, Planning, STF, PhaseSpace, Optimization, DoseStats, DVH, LeafSequencing, Beam, Log
 
 ### GuiAppState
 
-Central shared state container for the GUI. Extends the CLI's `AppState` with async task management and workflow queries.
+Central shared state container for the GUI. It builds on the shared workflow-state model and adds async task handling, multi-dose bookkeeping, and GUI refresh state.
 
 ```cpp
 struct GuiAppState {
-    // Pipeline data (shared with all panels/views)
-    std::shared_ptr<PatientData>              patientData;
-    std::shared_ptr<Plan>                     plan;
-    std::shared_ptr<StfProperties>            stfProps;
-    std::shared_ptr<Stf>                      stf;
-    std::vector<std::shared_ptr<PhaseSpaceBeamSource>> phaseSpaceSources;
-    std::shared_ptr<DoseInfluenceMatrix>      dij;
-    std::shared_ptr<Grid>                     doseGrid;
-    std::vector<double>                       optimizedWeights;
-    std::shared_ptr<DoseMatrix>               doseResult;
+  // Core workflow state
+  std::shared_ptr<PatientData> patientData;
+  std::shared_ptr<Plan> plan;
+  std::shared_ptr<StfProperties> stfProps;
+  std::shared_ptr<Stf> stf;
+  std::vector<std::shared_ptr<PhaseSpaceBeamSource>> phaseSpaceSources;
+  std::shared_ptr<DoseInfluenceMatrix> dij;
+  std::shared_ptr<Grid> doseGrid;
+  std::shared_ptr<Grid> computeGrid;
 
-    // Async task management
-    std::atomic<bool> cancelFlag{false};
-    std::string taskStatus;
-    float taskProgress = 0.f;
-    bool taskRunning = false;
+  // Optimization and sequencing state
+  std::vector<double> optimizedWeights;
+  std::shared_ptr<DoseMatrix> doseResult;
+  std::vector<LeafSequenceResult> leafSequences;
+  std::vector<double> deliverableWeights;
+  std::shared_ptr<DoseMatrix> deliverableDoseResult;
+  std::vector<StructureDoseStats> deliverableStats;
 
-    // Workflow queries
-    bool dicomLoaded() const;
-    bool planCreated() const;
-    bool stfGenerated() const;
-    bool phaseSpaceLoaded() const;
-    bool dijComputed() const;
-    bool optimizationDone() const;
-    bool isPhaseSpaceMachine() const;
+  // Multi-dose management and caches
+  DoseManager doseManager;
+  std::unordered_map<int, std::vector<double>> optWeightsCache;
+  std::unordered_map<int, LeafSeqCacheEntry> seqCache;
 
-    // Cascade reset helpers
-    void resetPlan();           // Resets plan + all downstream
-    void resetStf();            // Resets STF + all downstream
-    void resetPhaseSpace();
-    void resetDij();
-    void resetOptimization();
+  // Async task management
+  std::atomic<bool> cancelFlag{false};
+  std::string taskStatus;
+  float taskProgress = 0.f;
+  bool taskRunning = false;
+  std::atomic<bool> optimizationJustFinished{false};
+
+  // Workflow queries and reset helpers
+  bool dicomLoaded() const;
+  bool planCreated() const;
+  bool stfGenerated() const;
+  bool phaseSpaceLoaded() const;
+  bool dijComputed() const;
+  bool optimizationDone() const;
+  bool leafSequenceDone() const;
+  bool doseAvailable() const;
+  bool isPhaseSpaceMachine() const;
+  void syncSelectedDose();
+  void resetPlan();
+  void resetStf();
+  void resetPhaseSpace();
+  void resetDij();
+  void resetLeafSequence();
+  void resetOptimization();
+  void resetAllDoses();
 };
 ```
 
-**Cascade resets:** When upstream data changes, all downstream data is invalidated. For example, `resetPlan()` also resets STF, Dij, and optimization results.
+**Cascade resets:** When upstream data changes, downstream pipeline state is invalidated while the selected display dose can remain available through `DoseManager`.
+
+**Multi-dose support:** The GUI can keep multiple dose maps alive at once, including imported dose, optimization results, and deliverable dose after leaf sequencing. Panels use `DoseManager` versioning and cached per-dose statistics so switching views does not force recomputation every time.
 
 ## Panels
 
@@ -122,8 +144,12 @@ struct GuiAppState {
 ```cpp
 class IPanel {
     virtual ~IPanel() = default;
-    virtual void render(GuiAppState& state) = 0;
-    virtual const char* getName() const = 0;
+  virtual std::string getName() const = 0;
+  virtual void update() = 0;
+  virtual void render() = 0;
+
+  void setVisible(bool visible);
+  bool isVisible() const;
 };
 ```
 
@@ -193,7 +219,21 @@ class IPanel {
   - D2, D5, D50, D95, D98
   - V20, V40, V50, V60
   - CI, HI (for targets)
-- Interactive DVH curves (per-structure visibility toggles)
+
+### DVHPanel
+
+- Displays DVH curves for the selected dose map
+- Supports an optional comparison dose overlay
+- Tracks dose-version changes and recomputes only when needed
+- Uses per-structure visibility toggles and configurable maximum dose range
+
+### LeafSequencingPanel
+
+- Activates after optimization completes
+- Configures sequencing parameters such as number of intensity levels and minimum segment MU
+- Runs `LeafSequencingPipeline` asynchronously
+- Displays per-beam aperture decomposition results, sequencing progress, and deliverable dose statistics
+- Integrates with `DoseManager` so deliverable dose becomes selectable like any other dose map
 
 ### BeamPanel
 
@@ -252,6 +292,16 @@ Dose-volume histogram plot using ImGui drawing primitives.
 - Per-structure visibility toggles
 - Dose axis (Gy) × Volume axis (%)
 
+### BevView
+
+Beam's Eye View for inspection of sequenced and optimized beam fluence.
+
+- Displays a fluence heatmap for the selected beam
+- Overlays MLC leaf positions for a selected segment or the combined fluence
+- Optionally draws projected patient structure contours in BEV coordinates
+- Supports zoom and pan similar to `SliceView`
+- Refreshes automatically when dose or sequencing selection changes
+
 ## 3D Renderers
 
 ### VolumeRenderer
@@ -304,7 +354,7 @@ Text labels at the ends of coordinate axes (L/R, A/P, S/I) for patient orientati
 
 ## Async Task Execution
 
-Long-running computations (STF generation, dose calculation, optimization) run in background threads:
+Long-running computations (STF generation, dose calculation, optimization, leaf sequencing) run in background threads:
 
 ```cpp
 // Example: async dose calculation
@@ -336,3 +386,4 @@ std::thread([&state]() {
 - [Dose Module](dose.md) — Dose calculation invoked from PlanningPanel
 - [Optimization Module](optimization.md) — Optimization invoked from OptimizationPanel
 - [Phase-Space Module](phsp.md) — Phase-space data rendered by PhaseSpaceRenderer
+- [Sequencing Module](sequencing.md) — Leaf sequencing data shown in `LeafSequencingPanel` and `BevView`

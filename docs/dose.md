@@ -1,6 +1,6 @@
 # Dose Calculation Module (`optirad_dose`)
 
-The dose module provides the dose calculation engine, sparse dose influence matrix, ray tracing algorithms, plan analysis, and supporting mathematical tools.
+The dose module provides the dose calculation engine, sparse dose influence matrix, ray tracing algorithms, plan analysis, dose storage, multi-dose management, and supporting mathematical tools.
 
 **Library:** `optirad_dose`  
 **Dependencies:** `optirad_core`, `optirad_geometry`  
@@ -15,6 +15,7 @@ The dose module provides the dose calculation engine, sparse dose influence matr
 | `engines/PencilBeamEngine.hpp/cpp` | Bortfeld SVD pencil beam engine |
 | `DoseInfluenceMatrix.hpp/cpp` | Sparse Dij matrix (COO → CSR) |
 | `DoseMatrix.hpp/cpp` | 3D dose result grid |
+| `DoseManager.hpp` | Multi-dose selection, comparison, and stats cache |
 | `DijSerializer.hpp/cpp` | Binary serialization + caching |
 | `SiddonRayTracer.hpp/cpp` | Siddon 1985 ray-voxel tracing |
 | `SSDCalculator.hpp/cpp` | Source-to-surface distance |
@@ -238,6 +239,56 @@ class DoseMatrix {
     size_t size() const;
 };
 ```
+
+### DoseManager
+
+`DoseManager` tracks multiple dose maps in the GUI, including imported dose, optimization results, and deliverable dose after leaf sequencing.
+
+```cpp
+struct DoseEntry {
+    int id = 0;
+    std::string name;
+    std::shared_ptr<DoseMatrix> dose;
+    std::shared_ptr<Grid> grid;
+};
+
+class DoseManager {
+public:
+    int addDose(const std::string& name,
+                std::shared_ptr<DoseMatrix> dose,
+                std::shared_ptr<Grid> grid);
+    void removeDose(int idx);
+    const DoseEntry* getSelected() const;
+    const DoseEntry* getCompare() const;
+    void setSelected(int idx);
+    void setCompare(int idx);
+    int count() const;
+    int version() const;
+    const std::vector<DoseEntry>& getEntries() const;
+    void clear();
+    void renameDose(int idx, const std::string& newName);
+
+    const std::vector<StructureDoseStats>& getOrComputeStats(
+        int entryIdx,
+        const PatientData& patient,
+        double prescribedDose = 60.0);
+
+    void invalidateStatsCache(int entryId);
+    void clearStatsCache();
+    int nextOptimizationNumber() const;
+    void incrementOptimizationCount();
+    int nextLeafSeqNumber() const;
+    void incrementLeafSeqCount();
+};
+```
+
+Key responsibilities:
+
+- hold multiple named dose maps,
+- manage current selection and optional comparison selection,
+- cache per-dose `PlanAnalysis` statistics,
+- expose a monotonically increasing `version()` so GUI panels know when to refresh,
+- and provide stable IDs so optimization and sequencing caches can be linked to specific dose entries.
 
 ## Ray Tracing
 

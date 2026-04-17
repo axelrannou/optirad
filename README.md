@@ -8,15 +8,17 @@ A modern, modular C++17 treatment planning system (TPS) for radiotherapy optimiz
 
 - **DICOM Import/Export**: Load CT images, RT Structure Sets, RT Plans, and RT Dose via DCMTK
 - **Structure Management**: Import and visualize ROIs (targets, OARs, external) with contour rasterization
+- **Automatic BODY Contouring**: Generate an EXTERNAL/BODY structure from CT when no external contour is available
 - **Dose Calculation**: Bortfeld SVD pencil beam engine with Siddon ray tracing, FFT lateral convolution, and electron density conversion
 - **Dose Influence Matrix**: Sparse Dij (COO → CSR) with binary caching and deterministic filenames
 - **Optimization**: L-BFGS-B optimizer with squared deviation/overdose/underdose and DVH-based objectives, NTO/hotspot control
+- **Leaf Sequencing**: Step-and-shoot MLC aperture decomposition with deliverable dose recomputation
 - **Plan Analysis**: DVH computation, Dx%, VxGy, Conformity Index (CI), Homogeneity Index (HI), per-structure statistics
 - **Phase-Space Beams**: IAEA phase-space file support (IAEA(NDS)-0484 format) for Monte Carlo beam sources
 - **Steering (STF Generation)**: Target-aware ray generation with 3D margin expansion via morphological dilation
 - **2D Visualization**: Interactive slice views (Axial/Sagittal/Coronal) with window/level, dose overlay, and contour rendering
 - **3D Visualization**: GPU volume raycasting, marching cubes structure meshes, beam and phase-space particle rendering
-- **GUI**: Modern Dear ImGui-based interface with 8 panels, 3 views, async task execution
+- **GUI**: Dear ImGui-based interface with 10 panels, 4 views, async task execution, and multi-dose comparison
 - **CLI**: Interactive REPL with full planning pipeline (load → plan → STF → dose → optimize → analyze)
 - **Machine Support**: Generic pencil beam machines (JSON) and Varian TrueBeam 6MV phase-space machines
 
@@ -160,7 +162,9 @@ cd build
 | **STF Panel** | STF generation details, per-beam visibility toggles, progress tracking |
 | **Phase-Space Panel** | Phase-space beam loading, per-beam visibility, particle statistics, energy histograms |
 | **Optimization Panel** | Per-structure objective configuration (5 types), optimizer settings, NTO/hotspot control, async optimization |
-| **Dose Stats Panel** | Plan analysis: stats table (min/max/mean, Dx%, VxGy, CI, HI), interactive DVH curves |
+| **Dose Stats Panel** | Plan analysis: stats table (min/max/mean, Dx%, VxGy, CI, HI) for the selected dose map |
+| **DVH Panel** | Dose-volume histogram display for the selected dose map with optional comparison overlay |
+| **Leaf Sequencing Panel** | Step-and-shoot sequencing controls, per-beam aperture results, and deliverable dose statistics |
 | **Beam Panel** | Beam information display |
 | **Log Panel** | Log message viewer |
 
@@ -171,6 +175,7 @@ cd build
 | **Slice View** | 2D slice rendering (Axial/Sagittal/Coronal) with CT window/level, dose overlay (jet colormap), contour rendering |
 | **3D View** | 3D viewport with orbit camera: GPU volume raycasting, structure meshes (marching cubes), beam rays, phase-space particles |
 | **DVH View** | Dose-volume histogram curves per structure |
+| **BEV View** | Beam's Eye View showing fluence heatmaps, MLC apertures, and projected contours |
 
 #### Window/Level Presets
 
@@ -249,12 +254,15 @@ optirad/
 ├── README.md
 ├── docs/                               # Technical documentation
 │   ├── architecture.md                 # Global architecture overview
+│   ├── acknowledgments.md              # Attribution and upstream references
 │   ├── core.md                         # Core module
 │   ├── geometry.md                     # Geometry module
 │   ├── io.md                           # I/O module
 │   ├── dose.md                         # Dose calculation module
 │   ├── optimization.md                 # Optimization module
 │   ├── phsp.md                         # Phase-space module
+│   ├── segmentation.md                 # Segmentation module
+│   ├── sequencing.md                   # Sequencing module
 │   ├── steering.md                     # Steering module
 │   ├── gui.md                          # GUI module
 │   └── utils.md                        # Utilities module
@@ -268,8 +276,11 @@ optirad/
 │   │   ├── Plan.hpp/cpp                # Treatment plan
 │   │   ├── Beam.hpp/cpp                # Beam definition (gantry/couch, rays, BEV/LPS)
 │   │   ├── Ray.hpp                     # Ray/bixel definition
+│   │   ├── Aperture.hpp                # Step-and-shoot aperture and sequencing result types
+│   │   ├── FluenceMap.hpp              # 2D fluence map extracted from optimizer weights
 │   │   ├── Machine.hpp/cpp             # Linac parameters (Generic + PhaseSpace types)
-│   │   └── Stf.hpp/cpp                 # Steering file (beam collection)
+│   │   ├── Stf.hpp/cpp                 # Steering file (beam collection)
+│   │   └── workflow/                   # Shared planning pipeline orchestration
 │   │
 │   ├── geometry/                       # Geometry and spatial operations
 │   │   ├── Grid.hpp/cpp                # 3D grid (voxel↔patient transforms)
@@ -279,6 +290,9 @@ optirad/
 │   │   ├── CoordinateSystem.hpp/cpp    # Patient↔world, voxel↔world transforms
 │   │   ├── MathUtils.hpp               # Vec3, Mat3, rotation matrices, BEV↔LPS
 │   │   └── VoxelDilation.hpp           # 3D morphological dilation (26-connectivity)
+│   │
+│   ├── segmentation/                   # Automatic contour generation
+│   │   └── BodyContourGenerator.hpp/cpp # BODY / EXTERNAL contour generation from CT
 │   │
 │   ├── io/                             # Input/Output
 │   │   ├── IDataImporter.hpp           # Abstract importer interface
@@ -293,6 +307,7 @@ optirad/
 │   │   ├── DoseEngineFactory.hpp/cpp   # Factory: create engines by name
 │   │   ├── DoseInfluenceMatrix.hpp/cpp # Sparse Dij matrix (COO → CSR)
 │   │   ├── DoseMatrix.hpp/cpp          # 3D dose grid result
+│   │   ├── DoseManager.hpp             # Multi-dose selection, comparison, and stats cache
 │   │   ├── DijSerializer.hpp/cpp       # Binary Dij serialization + caching
 │   │   ├── SiddonRayTracer.hpp/cpp     # Siddon 1985 ray-voxel intersection
 │   │   ├── SSDCalculator.hpp/cpp       # Source-to-surface distance
@@ -323,6 +338,10 @@ optirad/
 │   │   ├── PhaseSpaceData.hpp/cpp      # Particle container with filtering/sampling
 │   │   └── PhaseSpaceBeamSource.hpp/cpp # Full PSF pipeline (read → filter → transform)
 │   │
+│   ├── sequencing/                     # Leaf sequencing and deliverable dose
+│   │   ├── LeafSequencer.hpp/cpp       # Step-and-shoot aperture decomposition
+│   │   └── DeliverableDoseCalculator.hpp/cpp # Deliverable weight and dose reconstruction
+│   │
 │   ├── steering/                       # Steering file generation (header-only)
 │   │   ├── StfProperties.hpp           # Lightweight STF properties
 │   │   ├── IStfGenerator.hpp           # Abstract STF generator interface
@@ -341,6 +360,8 @@ optirad/
 │   │   │   ├── PhaseSpacePanel.hpp/cpp # Phase-space loading, statistics
 │   │   │   ├── OptimizationPanel.hpp/cpp # Objective config, optimizer settings
 │   │   │   ├── DoseStatsPanel.hpp/cpp  # Plan analysis, DVH curves
+│   │   │   ├── DVHPanel.hpp/cpp        # Dedicated DVH panel with dose comparison
+│   │   │   ├── LeafSequencingPanel.hpp/cpp # Leaf sequencing controls and results
 │   │   │   ├── BeamPanel.hpp/cpp       # Beam information
 │   │   │   └── LogPanel.hpp/cpp        # Log viewer
 │   │   └── views/
@@ -348,6 +369,7 @@ optirad/
 │   │       ├── SliceView.hpp/cpp       # 2D slice rendering with dose overlay
 │   │       ├── View3D.hpp/cpp          # 3D viewport with orbit camera
 │   │       ├── DVHView.hpp/cpp         # DVH curve plotting
+│   │       ├── BevView.hpp/cpp         # Beam's Eye View rendering
 │   │       └── renderers/
 │   │           ├── VolumeRenderer.hpp/cpp       # GPU raycasting volume renderer
 │   │           ├── StructureRenderer.hpp/cpp    # Marching cubes surface meshes
@@ -414,7 +436,7 @@ optirad/
 ### 3. Pipeline Pattern
 
 Full treatment planning pipeline:
-`Load DICOM → Create Plan → Generate STF → Calculate Dij → Optimize → Analyze`
+`Load DICOM → Create Plan → Generate STF → Calculate Dij → Optimize → Sequence Leaves → Analyze`
 
 ### 4. Modern C++17
 
@@ -426,8 +448,8 @@ Full treatment planning pipeline:
 ### 5. Parallelism
 
 - OpenMP for compute-heavy tasks (dose calculation, STF generation, dilation)
-- TBB for parallel RT-STRUCT parsing
-- `std::thread` for async GUI tasks with progress callbacks
+- TBB for parallel RT-STRUCT parsing and BODY contour generation
+- `std::thread` for async GUI tasks with progress callbacks, including dose calculation, optimization, and leaf sequencing
 
 ## External Libraries
 
@@ -455,6 +477,19 @@ See the [docs/](docs/) folder for detailed technical documentation:
 - [Dose Module](docs/dose.md) — Dose engines, Dij matrix, ray tracing, plan analysis
 - [Optimization Module](docs/optimization.md) — L-BFGS-B optimizer, objective functions, constraints
 - [Phase-Space Module](docs/phsp.md) — IAEA format, beam sources
+- [Segmentation Module](docs/segmentation.md) — BODY contour generation from CT
+- [Sequencing Module](docs/sequencing.md) — Leaf sequencing and deliverable dose recomputation
 - [Steering Module](docs/steering.md) — STF generation
 - [GUI Module](docs/gui.md) — Application, panels, views, 3D renderers
 - [Utilities Module](docs/utils.md) — Logger, Config, Timer, math, interpolation
+- [Acknowledgments](docs/acknowledgments.md) — Upstream references, matRad provenance, and attribution
+
+## Acknowledgments
+
+OptiRad was developed with reference to parts of the matRad project, especially for selected planning algorithms, data conventions, and comparison workflows. A detailed mapping of derived or matRad-inspired components is available in [docs/acknowledgments.md](docs/acknowledgments.md).
+
+## License
+
+OptiRad is licensed under the GNU General Public License v3.0. See the root [LICENSE](LICENSE) file for the full text.
+
+Third-party software notices, including matRad attribution and bundled/implied dependency licenses, are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

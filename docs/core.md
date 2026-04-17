@@ -1,6 +1,6 @@
 # Core Module (`optirad_core`)
 
-The core module defines the central domain model for OptiRad: patient data, treatment plans, beams, machines, and steering files.
+The core module defines the central domain model for OptiRad: patient data, treatment plans, beams, machines, steering files, fluence containers, and workflow-facing sequencing types.
 
 **Library:** `optirad_core`  
 **Dependencies:** `optirad_utils`, `optirad_geometry`  
@@ -15,8 +15,11 @@ The core module defines the central domain model for OptiRad: patient data, trea
 | `Plan.hpp/cpp` | Treatment plan |
 | `Beam.hpp/cpp` | Beam definition and ray generation |
 | `Ray.hpp` | Single beamlet/ray |
+| `Aperture.hpp` | Step-and-shoot aperture and sequencing result types |
+| `FluenceMap.hpp` | 2D fluence map extracted from optimizer weights |
 | `Machine.hpp/cpp` | Linear accelerator parameters |
 | `Stf.hpp/cpp` | Steering file (beam collection) |
+| `workflow/*.hpp/cpp` | Shared orchestration pipelines (`optirad_workflow`) |
 
 ## Classes
 
@@ -178,6 +181,73 @@ class Ray {
 };
 ```
 
+### Aperture and Sequencing Types
+
+The core module also defines the data structures shared between optimization, sequencing, and GUI BEV rendering.
+
+```cpp
+struct Aperture {
+    std::vector<double> bankA;
+    std::vector<double> bankB;
+    double weight = 0.0;
+    int segmentIndex = 0;
+};
+
+struct LeafSequenceResult {
+    std::vector<Aperture> segments;
+    size_t beamIndex = 0;
+    double totalMU = 0.0;
+    double fluenceFidelity = 0.0;
+    std::vector<int> quantizedFluence;
+    double calFac = 0.0;
+    int numLevels = 0;
+    std::vector<double> leafPairBoundariesZ;
+    std::vector<double> leafPairFluence;
+    int leafPairFluenceCols = 0;
+    double originX = 0.0;
+};
+
+struct LeafSequencerOptions {
+    int numLevels = 15;
+    double minSegmentMU = 0.0;
+    double leafPositionResolution = 0.5;
+};
+```
+
+- `Aperture` stores one step-and-shoot segment as a pair of leaf-bank openings at isocenter plane plus MU weight.
+- `LeafSequenceResult` stores the per-beam deliverable representation, fidelity metrics, and fluence data reused by the sequencing module and `BevView`.
+- `LeafSequencerOptions` configures intensity quantization, minimum segment MU filtering, and leaf-position snapping.
+
+### FluenceMap
+
+`FluenceMap` is a lightweight 2D BEV grid extracted from the global optimizer weight vector for one beam.
+
+```cpp
+class FluenceMap {
+public:
+    static FluenceMap fromBeamWeights(const Beam& beam,
+                                      const std::vector<double>& weights,
+                                      size_t globalOffset);
+
+    double getValue(int row, int col) const;
+    std::vector<double> getProfile(int row) const;
+    std::vector<int> mapToLeafPairs(const MachineGeometry& mlc) const;
+    double getMaxFluence() const;
+
+    int getNumRows() const;
+    int getNumCols() const;
+    double getBixelWidth() const;
+    double getOriginX() const;
+    double getOriginZ() const;
+};
+```
+
+The map is organized in BEV coordinates:
+
+- rows correspond to beam-space `Z`,
+- columns correspond to beam-space `X`,
+- and `mapToLeafPairs()` bridges the optimizer grid to physical MLC leaf-pair geometry.
+
 ### Machine
 
 Defines a linear accelerator's physical parameters. Two machine types are supported:
@@ -254,6 +324,99 @@ class Stf {
 };
 ```
 
+## Workflow Orchestration (`optirad_workflow`)
+
+The `src/core/workflow/` subdirectory is built as a separate orchestration library named `optirad_workflow`. It extracts the common planning pipelines used by both the CLI and the GUI.
+
+### WorkflowState
+
+`WorkflowState` is the shared pipeline state container used to carry data across planning stages.
+
+```cpp
+struct WorkflowState {
+    std::shared_ptr<PatientData> patientData;
+    std::shared_ptr<Plan> plan;
+    std::shared_ptr<StfProperties> stfProps;
+    std::shared_ptr<Stf> stf;
+    std::vector<std::shared_ptr<PhaseSpaceBeamSource>> phaseSpaceSources;
+    std::shared_ptr<DoseInfluenceMatrix> dij;
+    std::shared_ptr<Grid> doseGrid;
+    std::shared_ptr<Grid> computeGrid;
+    std::vector<double> optimizedWeights;
+    std::shared_ptr<DoseMatrix> doseResult;
+    std::vector<LeafSequenceResult> leafSequences;
+    std::vector<double> deliverableWeights;
+    std::shared_ptr<DoseMatrix> deliverableDoseResult;
+    std::vector<StructureDoseStats> deliverableStats;
+    DoseManager doseManager;
+
+    bool dicomLoaded() const;
+    bool planCreated() const;
+    bool stfGenerated() const;
+    bool phaseSpaceLoaded() const;
+    bool dijComputed() const;
+    bool optimizationDone() const;
+    bool leafSequenceDone() const;
+    bool doseAvailable() const;
+
+    void syncSelectedDose();
+    void resetPlan();
+    void resetStf();
+    void resetPhaseSpace();
+    void resetDij();
+    void resetLeafSequence();
+    void resetOptimization();
+    void resetAllDoses();
+};
+```
+
+### Pipeline Builders
+
+The workflow layer groups the main shared execution paths:
+
+| Type | Purpose |
+|------|---------|
+| `PlanBuilder` | Build a `Plan`, `StfProperties`, and generic-machine `Stf` from a `PlanConfig` |
+| `DoseCalculationPipeline` | Create dose grid, check cache, compute Dij, and save cache output |
+| `OptimizationPipeline` | Build objectives, run the optimizer, compute forward dose, and generate statistics |
+| `PhaseSpaceBuilder` | Build one `PhaseSpaceBeamSource` per beam for phase-space machines |
+| `LeafSequencingPipeline` | Convert optimized weights into fluence maps, sequence apertures, compute deliverable dose, and report statistics |
+
+Representative configuration types:
+
+```cpp
+struct PlanConfig {
+    std::string radiationMode = "photons";
+    std::string machineName = "Generic";
+    int numFractions = 30;
+    double bixelWidth = 7.0;
+    std::vector<double> gantryAngles;
+    std::vector<double> couchAngles;
+};
+
+struct DoseCalcPipelineOptions {
+    std::array<double, 3> resolution = {2.5, 2.5, 2.5};
+    bool useCache = true;
+    double absoluteThreshold = 1e-6;
+    double relativeThreshold = 0.01;
+    int numThreads = 0;
+};
+
+struct OptimizationConfig {
+    int maxIterations = 400;
+    double tolerance = 1e-5;
+    double targetDose = 66.0;
+    bool ntoEnabled = true;
+    double ntoThresholdPct = 1.04;
+    double ntoPenalty = 2000.0;
+    double spatialSmoothingWeight = 0.0;
+    double l2RegWeight = 0.0;
+    double l1RegWeight = 0.0;
+};
+```
+
+These pipeline types keep CLI and GUI behavior aligned while isolating the treatment-planning business logic from presentation code.
+
 ## Usage Example
 
 ```cpp
@@ -276,5 +439,8 @@ plan->setStfProperties(stfProps);
 ## Related Documentation
 
 - [Geometry Module](geometry.md) — Grid, Volume, coordinate systems used by core
+- [Dose Module](dose.md) — Dij, dose storage, and `DoseManager` used by workflow state
+- [Sequencing Module](sequencing.md) — Uses `Aperture`, `LeafSequenceResult`, and `FluenceMap`
 - [Steering Module](steering.md) — STF generation from plan configuration
 - [I/O Module](io.md) — Machine loading from JSON files
+- [Architecture](architecture.md) — Global pipeline and module dependency graph
