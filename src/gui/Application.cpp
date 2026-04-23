@@ -259,16 +259,6 @@ void Application::run() {
             if (!m_appState.dicomLoaded()) {
                 m_appState.patientData = std::shared_ptr<PatientData>(
                     data, [](PatientData*) {});
-
-                // Add imported RT Dose to DoseManager (once)
-                if (!m_importedDoseAdded && data->hasImportedDose()) {
-                    m_appState.doseManager.addDose(
-                        "Imported (DICOM)",
-                        data->getImportedDose(),
-                        data->getImportedDoseGrid());
-                    m_appState.syncSelectedDose();
-                    m_importedDoseAdded = true;
-                }
             }
 
             m_view3D->setPatientData(data);
@@ -347,10 +337,10 @@ void Application::run() {
         m_doseStatsPanel->render();
         
         // Pass dose data to slice views AFTER panels render
-        if (m_appState.doseAvailable() && m_appState.doseResult && m_appState.doseGrid) {
-            m_axialView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
-            m_sagittalView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
-            m_coronalView->setDoseData(m_appState.doseResult.get(), m_appState.doseGrid.get());
+        if (m_appState.doseAvailable() && m_appState.doseResult && m_appState.displayGrid) {
+            m_axialView->setDoseData(m_appState.doseResult.get(), m_appState.displayGrid.get());
+            m_sagittalView->setDoseData(m_appState.doseResult.get(), m_appState.displayGrid.get());
+            m_coronalView->setDoseData(m_appState.doseResult.get(), m_appState.displayGrid.get());
         } else {
             m_axialView->setDoseData(nullptr, nullptr);
             m_sagittalView->setDoseData(nullptr, nullptr);

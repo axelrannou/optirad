@@ -25,12 +25,12 @@ void LeafSequencingPanel::render() {
 
     // Auto-restore display state when selected dose changes
     if (!m_isRunning) {
-        int ver = m_state.doseManager.version();
+        int ver = m_state.doseStore.version();
         if (ver != m_doseVersion) {
             m_doseVersion = ver;
             // Find the active seq cache entry for this dose selection
             // Check if selected dose is a deliverable dose directly
-            auto* sel = m_state.doseManager.getSelected();
+            auto* sel = m_state.doseStore.getSelected();
             int selId = sel ? sel->id : -1;
             auto it = m_displayCache.find(selId);
             if (it != m_displayCache.end()) {
@@ -92,12 +92,12 @@ void LeafSequencingPanel::render() {
                 // Add deliverable dose to DoseManager
                 if (m_pipelineResult.deliverableDose) {
                     m_state.deliverableDoseResult = m_pipelineResult.deliverableDose;
-                    int seqNum = m_state.doseManager.nextLeafSeqNumber();
-                    int doseId = m_state.doseManager.addDose(
+                    int seqNum = m_state.nextLeafSeqNumber();
+                    int doseId = m_state.doseStore.addDose(
                         "Leaf Sequencing #" + std::to_string(seqNum),
                         m_pipelineResult.deliverableDose,
                         m_state.computeGrid);
-                    m_state.doseManager.incrementLeafSeqCount();
+                    m_state.incrementLeafSeqCount();
 
                     // Cache leaf seq results BEFORE syncSelectedDose
                     m_state.cacheLeafSequencing(doseId, m_state.activeOptDoseId);
@@ -143,7 +143,7 @@ void LeafSequencingPanel::render() {
                         *m_state.dij,
                         *m_state.plan,
                         *m_state.patientData,
-                        *m_state.doseGrid,
+                        *m_state.displayGrid,
                         opts,
                         [this](int cur, int tot) {
                             m_currentBeam.store(cur);

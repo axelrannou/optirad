@@ -1,6 +1,6 @@
 #pragma once
 
-#include "DoseMatrix.hpp"
+#include "dose/DoseMatrix.hpp"
 #include "core/PatientData.hpp"
 #include "geometry/Grid.hpp"
 #include <vector>

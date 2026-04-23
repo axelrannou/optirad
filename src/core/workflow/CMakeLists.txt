@@ -4,6 +4,7 @@ add_library(optirad_workflow
     PhaseSpaceBuilder.cpp
     OptimizationPipeline.cpp
     LeafSequencingPipeline.cpp
+    PlanAnalysis.cpp
 )
 
 target_include_directories(optirad_workflow PUBLIC

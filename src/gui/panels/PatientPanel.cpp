@@ -255,7 +255,7 @@ void PatientPanel::renderStructureList() {
 }
 
 void PatientPanel::renderDoseList() {
-    auto& dm = m_state.doseManager;
+    auto& dm = m_state.doseStore;
 
     if (dm.count() == 0) {
         ImGui::TextDisabled("No dose data");
@@ -411,6 +411,13 @@ void PatientPanel::importDicom(const std::string& path) {
     if (m_patientData) {
         Logger::info("DICOM import successful");
         m_showImportDialog = false;
+
+        // Add imported RT Dose to DoseStore if present
+        auto [doseMatrix, doseGrid] = m_importer.takeImportedDose();
+        if (doseMatrix) {
+            m_state.doseStore.addDose("Imported (DICOM)", doseMatrix, doseGrid);
+            m_state.syncSelectedDose();
+        }
     } else {
         Logger::error("DICOM import failed");
     }

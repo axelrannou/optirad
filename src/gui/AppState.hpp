@@ -8,8 +8,8 @@
 #include "phsp/PhaseSpaceBeamSource.hpp"
 #include "dose/DoseInfluenceMatrix.hpp"
 #include "dose/DoseMatrix.hpp"
-#include "dose/DoseManager.hpp"
-#include "dose/PlanAnalysis.hpp"
+#include "dose/DoseStore.hpp"
+#include "core/workflow/PlanAnalysis.hpp"
 #include "geometry/Grid.hpp"
 #include "core/Aperture.hpp"
 #include <memory>
@@ -41,8 +41,8 @@ struct GuiAppState {
 
     // ── Dose calculation state ──
     std::shared_ptr<DoseInfluenceMatrix> dij;
-    std::shared_ptr<Grid> doseGrid;        // Display grid (synced with doseResult for rendering)
-    std::shared_ptr<Grid> computeGrid;     // Computation grid for Dij / optimization
+    std::shared_ptr<Grid> displayGrid;      // Grid synced with doseResult for rendering
+    std::shared_ptr<Grid> computeGrid;      // Computation grid for Dij / optimization
 
     // ── Optimization state ──
     std::vector<double> optimizedWeights;
@@ -55,12 +55,22 @@ struct GuiAppState {
     std::vector<StructureDoseStats> deliverableStats;
 
     // ── Multi-dose management ──
-    DoseManager doseManager;
+    DoseStore doseStore;
 
     // ── Pipeline result caches (keyed by dose entry ID) ──
     std::unordered_map<int, std::vector<double>> optWeightsCache;
     std::unordered_map<int, LeafSeqCacheEntry> seqCache;
+    std::unordered_map<int, std::vector<StructureDoseStats>> statsCache;
     int activeOptDoseId = -1; // which optimization dose produced current weights
+
+    // ── Workflow naming counters ──
+    int optimizationCount = 0;
+    int leafSeqCount = 0;
+
+    int nextOptimizationNumber() const { return optimizationCount + 1; }
+    void incrementOptimizationCount() { ++optimizationCount; }
+    int nextLeafSeqNumber() const { return leafSeqCount + 1; }
+    void incrementLeafSeqCount() { ++leafSeqCount; }
 
     // ── Async task state ──
     std::atomic<bool> cancelFlag{false};
@@ -81,7 +91,7 @@ struct GuiAppState {
     bool dijComputed() const { return dij != nullptr && dij->getNumNonZeros() > 0; }
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
     bool leafSequenceDone() const { return !leafSequences.empty(); }
-    bool doseAvailable() const { return doseManager.count() > 0 && doseManager.getSelected() != nullptr; }
+    bool doseAvailable() const { return doseStore.count() > 0 && doseStore.getSelected() != nullptr; }
 
     /// Check if the current plan uses a phase-space machine
     bool isPhaseSpaceMachine() const {
@@ -104,13 +114,28 @@ struct GuiAppState {
         seqCache[doseId] = std::move(entry);
     }
 
-    /// Sync doseResult/doseGrid from DoseManager's current selection,
+    /// Return cached per-structure stats for a dose entry, computing if needed.
+    const std::vector<StructureDoseStats>& getOrComputeStats(
+            int entryIdx, const PatientData& patient, double prescribedDose = 60.0) {
+        static const std::vector<StructureDoseStats> empty;
+        auto* entry = doseStore.getEntry(entryIdx);
+        if (!entry || !entry->dose || !entry->grid) return empty;
+        auto it = statsCache.find(entry->id);
+        if (it != statsCache.end()) return it->second;
+        auto stats = PlanAnalysis::computeStats(*entry->dose, patient, *entry->grid, prescribedDose);
+        auto [ins, _] = statsCache.emplace(entry->id, std::move(stats));
+        return ins->second;
+    }
+
+    void invalidateStatsCache(int entryId) { statsCache.erase(entryId); }
+
+    /// Sync doseResult/displayGrid from DoseStore's current selection,
     /// and restore cached optimization / leaf sequencing results.
     void syncSelectedDose() {
-        auto* sel = doseManager.getSelected();
+        auto* sel = doseStore.getSelected();
         if (sel) {
             doseResult = sel->dose;
-            doseGrid = sel->grid;
+            displayGrid = sel->grid;
         } else {
             doseResult.reset();
         }
@@ -173,7 +198,7 @@ struct GuiAppState {
     }
 
     // Reset downstream state when upstream changes.
-    // After clearing pipeline state, re-sync display dose from DoseManager so
+    // After clearing pipeline state, re-sync display dose from DoseStore so
     // SliceViews / stats / DVH keep showing the currently selected dose.
     void resetPlan() {
         plan.reset(); stfProps.reset(); stf.reset(); phaseSpaceSources.clear();
@@ -185,7 +210,7 @@ struct GuiAppState {
         dij.reset();
         computeGrid.reset();
         optimizedWeights.clear();
-        // Restore display dose from DoseManager.
+        // Restore display dose from DoseStore.
         syncSelectedDose();
     }
     void resetLeafSequence() {
@@ -200,8 +225,8 @@ struct GuiAppState {
         syncSelectedDose();
     }
     void resetAllDoses() {
-        doseManager.clear(); doseResult.reset(); doseGrid.reset(); computeGrid.reset();
-        optWeightsCache.clear(); seqCache.clear(); activeOptDoseId = -1;
+        doseStore.clear(); doseResult.reset(); displayGrid.reset(); computeGrid.reset();
+        optWeightsCache.clear(); seqCache.clear(); statsCache.clear(); activeOptDoseId = -1;
     }
 };
 

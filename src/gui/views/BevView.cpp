@@ -93,7 +93,7 @@ void BevView::renderControls() {
     // Segment slider (only if viewing a deliverable dose with leaf sequencing data)
     bool isDeliverableDose = false;
     {
-        auto* sel = m_state.doseManager.getSelected();
+        auto* sel = m_state.doseStore.getSelected();
         if (sel) isDeliverableDose = (m_state.seqCache.find(sel->id) != m_state.seqCache.end());
     }
     if (isDeliverableDose && m_state.leafSequenceDone() &&
@@ -130,7 +130,7 @@ void BevView::renderControls() {
     if (beam) {
         bool viewingDeliverable = false;
         {
-            auto* sel = m_state.doseManager.getSelected();
+            auto* sel = m_state.doseStore.getSelected();
             if (sel) viewingDeliverable = (m_state.seqCache.find(sel->id) != m_state.seqCache.end());
         }
         const auto& fs = beam->getFieldSize();
@@ -180,7 +180,7 @@ void BevView::renderBevContent() {
     m_bevMaxZ = zMax + bw;
 
     // Update fluence texture
-    int ver = m_state.doseManager.version();
+    int ver = m_state.doseStore.version();
     if (ver != m_doseVersion) {
         m_needsUpdate = true;
         m_doseVersion = ver;
@@ -226,7 +226,7 @@ void BevView::renderBevContent() {
 
         bool useLeafBounds = false;
         {
-            auto* sel = m_state.doseManager.getSelected();
+            auto* sel = m_state.doseStore.getSelected();
             if (sel && m_state.seqCache.find(sel->id) != m_state.seqCache.end() &&
                 m_state.leafSequenceDone() &&
                 m_beamIndex < static_cast<int>(m_state.leafSequences.size())) {
@@ -263,7 +263,7 @@ void BevView::renderBevContent() {
     // Draw MLC leaves (only for deliverable doses)
     bool isDeliverableDose = false;
     {
-        auto* sel = m_state.doseManager.getSelected();
+        auto* sel = m_state.doseStore.getSelected();
         if (sel) isDeliverableDose = (m_state.seqCache.find(sel->id) != m_state.seqCache.end());
     }
     if (isDeliverableDose && m_state.leafSequenceDone() &&
@@ -314,7 +314,7 @@ void BevView::updateFluenceTexture() {
     // Determine if viewing deliverable dose (leaf-pair resolution) or optimization dose (bixel resolution)
     bool isDeliverable = false;
     {
-        auto* sel = m_state.doseManager.getSelected();
+        auto* sel = m_state.doseStore.getSelected();
         if (sel) isDeliverable = (m_state.seqCache.find(sel->id) != m_state.seqCache.end());
     }
 

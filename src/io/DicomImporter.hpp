@@ -37,12 +37,19 @@ public:
 
     // Import RT Dose (returns dose matrix + its grid, or nullptr if not available)
     std::pair<std::shared_ptr<DoseMatrix>, std::shared_ptr<Grid>> importRTDose();
+
+    /// Take the imported RT Dose cached during importAll() (moves out, clears internal cache).
+    std::pair<std::shared_ptr<DoseMatrix>, std::shared_ptr<Grid>> takeImportedDose() {
+        return {std::move(m_importedDoseMatrix), std::move(m_importedDoseGrid)};
+    }
     
 private:
     std::vector<std::filesystem::path> m_ctFiles;
     std::filesystem::path m_rtStructFile;
     std::filesystem::path m_rtPlanFile;
     std::filesystem::path m_rtDoseFile;
+    std::shared_ptr<DoseMatrix> m_importedDoseMatrix;
+    std::shared_ptr<Grid>       m_importedDoseGrid;
     
     void scanDirectory(const std::filesystem::path& dir);
     std::string getSOPClassUID(const std::filesystem::path& file) const;

@@ -8,8 +8,8 @@
 #include "phsp/PhaseSpaceBeamSource.hpp"
 #include "dose/DoseInfluenceMatrix.hpp"
 #include "dose/DoseMatrix.hpp"
-#include "dose/DoseManager.hpp"
-#include "dose/PlanAnalysis.hpp"
+#include "dose/DoseStore.hpp"
+#include "core/workflow/PlanAnalysis.hpp"
 #include "geometry/Grid.hpp"
 #include "core/Aperture.hpp"
 #include <memory>
@@ -32,7 +32,7 @@ struct WorkflowState {
 
     // ── Dose calculation state ──
     std::shared_ptr<DoseInfluenceMatrix> dij;
-    std::shared_ptr<Grid> doseGrid;
+    std::shared_ptr<Grid> displayGrid;  // Grid synced with doseResult for display/analysis
     std::shared_ptr<Grid> computeGrid;
 
     // ── Optimization state ──
@@ -46,7 +46,7 @@ struct WorkflowState {
     std::vector<StructureDoseStats> deliverableStats;
 
     // ── Multi-dose management ──
-    DoseManager doseManager;
+    DoseStore doseStore;
 
     // ── Workflow queries ──
     bool dicomLoaded() const { return patientData != nullptr; }
@@ -58,18 +58,18 @@ struct WorkflowState {
     bool dijComputed() const { return dij != nullptr && dij->getNumNonZeros() > 0; }
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
     bool leafSequenceDone() const { return !leafSequences.empty(); }
-    bool doseAvailable() const { return doseManager.count() > 0 && doseManager.getSelected() != nullptr; }
+    bool doseAvailable() const { return doseStore.count() > 0 && doseStore.getSelected() != nullptr; }
 
     bool isPhaseSpaceMachine() const {
         return plan && plan->getMachine().isPhaseSpace();
     }
 
-    /// Sync doseResult/doseGrid from DoseManager's current selection.
+    /// Sync doseResult/displayGrid from DoseStore's current selection.
     void syncSelectedDose() {
-        auto* sel = doseManager.getSelected();
+        auto* sel = doseStore.getSelected();
         if (sel) {
             doseResult = sel->dose;
-            doseGrid = sel->grid;
+            displayGrid = sel->grid;
         } else {
             doseResult.reset();
         }
@@ -100,9 +100,9 @@ struct WorkflowState {
         syncSelectedDose();
     }
     void resetAllDoses() {
-        doseManager.clear();
+        doseStore.clear();
         doseResult.reset();
-        doseGrid.reset();
+        displayGrid.reset();
         computeGrid.reset();
     }
 };
