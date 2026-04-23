@@ -9,7 +9,7 @@
 #include "core/workflow/OptimizationPipeline.hpp"
 #include "core/workflow/LeafSequencingPipeline.hpp"
 #include "optimization/ObjectiveProtocol.hpp"
-#include "dose/PlanAnalysis.hpp"
+#include "core/workflow/PlanAnalysis.hpp"
 #include "utils/Logger.hpp"
 
 #include <iostream>
@@ -479,7 +479,7 @@ int leafSeq(const std::vector<std::string>& args, WorkflowState& state) {
     try {
         auto result = LeafSequencingPipeline::run(
             state.optimizedWeights, *state.stf, *state.dij,
-            *state.plan, *state.patientData, *state.doseGrid,
+            *state.plan, *state.patientData, *state.displayGrid,
             opts, progressCb);
 
         state.leafSequences = std::move(result.beamSequences);
@@ -557,7 +557,7 @@ int doseCalc(const std::vector<std::string>& args, WorkflowState& state) {
         auto result = DoseCalculationPipeline::run(
             *state.plan, *state.stf, *state.patientData, opts, progressCb);
         state.dij = result.dij;
-        state.doseGrid = result.doseGrid;
+        state.displayGrid = result.doseGrid;
         state.computeGrid = result.doseGrid;
 
         std::cout << "\nDij: " << state.dij->getNumVoxels() << " x " << state.dij->getNumBixels()
@@ -629,7 +629,7 @@ int optimize(const std::vector<std::string>& args, WorkflowState& state) {
 
     try {
         auto result = OptimizationPipeline::run(
-            *state.dij, config, protocol, *state.patientData, *state.doseGrid,
+            *state.dij, config, protocol, *state.patientData, *state.displayGrid,
             state.stf ? state.stf.get() : nullptr);
 
         state.optimizedWeights = std::move(result.weights);

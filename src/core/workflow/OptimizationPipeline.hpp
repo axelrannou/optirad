@@ -5,7 +5,7 @@
 #include "optimization/IOptimizer.hpp"
 #include "dose/DoseInfluenceMatrix.hpp"
 #include "dose/DoseMatrix.hpp"
-#include "dose/PlanAnalysis.hpp"
+#include "core/workflow/PlanAnalysis.hpp"
 #include "core/PatientData.hpp"
 #include "core/Stf.hpp"
 #include "geometry/Grid.hpp"

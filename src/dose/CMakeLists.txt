@@ -6,7 +6,6 @@ add_library(optirad_dose
     SiddonRayTracer.cpp
     SSDCalculator.cpp
     RadDepthCalculator.cpp
-    PlanAnalysis.cpp
     engines/PencilBeamEngine.cpp
 )
 

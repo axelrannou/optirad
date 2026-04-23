@@ -33,7 +33,7 @@ void OptimizationPanel::render() {
 
     // Auto-restore display state when selected dose changes
     if (!m_isOptimizing) {
-        int ver = m_state.doseManager.version();
+        int ver = m_state.doseStore.version();
         if (ver != m_doseVersion) {
             m_doseVersion = ver;
             // Save current display state for the previous optimization dose
@@ -295,12 +295,12 @@ void OptimizationPanel::render() {
                 m_state.optimizedWeights = std::move(m_pipelineResult.weights);
 
                 if (m_pipelineResult.doseResult) {
-                    int optNum = m_state.doseManager.nextOptimizationNumber();
-                    int doseId = m_state.doseManager.addDose(
+                    int optNum = m_state.nextOptimizationNumber();
+                    int doseId = m_state.doseStore.addDose(
                         "Optimization #" + std::to_string(optNum),
                         m_pipelineResult.doseResult,
                         m_state.computeGrid);
-                    m_state.doseManager.incrementOptimizationCount();
+                    m_state.incrementOptimizationCount();
 
                     // Cache optimization weights BEFORE syncSelectedDose
                     m_state.cacheOptimization(doseId);

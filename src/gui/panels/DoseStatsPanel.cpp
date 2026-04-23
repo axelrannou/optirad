@@ -13,21 +13,21 @@ void DoseStatsPanel::computeStats() {
     m_stats.clear();
     m_compareStats.clear();
 
-    auto& dm = m_state.doseManager;
+    auto& dm = m_state.doseStore;
     int selIdx = dm.getSelectedIdx();
     auto* sel = dm.getSelected();
     if (!sel || !sel->dose || !sel->grid || !m_state.patientData) return;
 
-    // Primary dose stats (cached in DoseManager)
+    // Primary dose stats (cached in GuiAppState)
     double rxDose = (m_state.plan && m_state.plan->getPrescribedDose() > 0)
                     ? m_state.plan->getPrescribedDose() : 60.0;
-    m_stats = dm.getOrComputeStats(selIdx, *m_state.patientData, rxDose);
+    m_stats = m_state.getOrComputeStats(selIdx, *m_state.patientData, rxDose);
 
     // Comparison dose stats (also cached)
     int cmpIdx = dm.getCompareIdx();
     auto* cmp = dm.getCompare();
     if (cmp && cmp->dose && cmp->grid) {
-        m_compareStats = dm.getOrComputeStats(cmpIdx, *m_state.patientData, rxDose);
+        m_compareStats = m_state.getOrComputeStats(cmpIdx, *m_state.patientData, rxDose);
     }
 }
 
@@ -43,14 +43,14 @@ void DoseStatsPanel::render() {
     }
 
     // Auto-refresh when dose manager version changes
-    int currentVersion = m_state.doseManager.version();
+    int currentVersion = m_state.doseStore.version();
     if (currentVersion != m_doseVersion) {
         computeStats();
         m_doseVersion = currentVersion;
     }
 
     // Comparison selector
-    if (m_state.doseManager.count() >= 2) {
+    if (m_state.doseStore.count() >= 2) {
         renderCompareSelector();
     }
 
@@ -62,7 +62,7 @@ void DoseStatsPanel::render() {
 }
 
 void DoseStatsPanel::renderCompareSelector() {
-    auto& dm = m_state.doseManager;
+    auto& dm = m_state.doseStore;
     int selIdx = dm.getSelectedIdx();
     int cmpIdx = dm.getCompareIdx();
 

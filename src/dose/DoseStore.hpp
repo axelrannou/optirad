@@ -1,13 +1,10 @@
 #pragma once
 
 #include "dose/DoseMatrix.hpp"
-#include "dose/PlanAnalysis.hpp"
 #include "geometry/Grid.hpp"
 #include <memory>
 #include <vector>
 #include <string>
-#include <algorithm>
-#include <unordered_map>
 
 namespace optirad {
 
@@ -19,9 +16,9 @@ struct DoseEntry {
     std::shared_ptr<Grid> grid;
 };
 
-/// Manages a collection of dose maps (imported + optimization results).
-/// Lives in GuiAppState so all panels can access it.
-class DoseManager {
+/// Stores a collection of named dose maps (imported + computed results).
+/// Selection/comparison state is maintained for GUI panels.
+class DoseStore {
 public:
     /// Add a new dose map. Auto-selects it as current. Returns the entry id.
     int addDose(const std::string& name,
@@ -41,7 +38,6 @@ public:
     /// Remove dose at given list index.
     void removeDose(int idx) {
         if (idx < 0 || idx >= static_cast<int>(m_entries.size())) return;
-        invalidateStatsCache(m_entries[idx].id);
         m_entries.erase(m_entries.begin() + idx);
         // Adjust selection
         if (m_entries.empty()) {
@@ -102,7 +98,6 @@ public:
     /// Clear all dose entries.
     void clear() {
         m_entries.clear();
-        m_statsCache.clear();
         m_selectedIdx = -1;
         m_compareIdx = -1;
         ++m_version;
@@ -115,52 +110,12 @@ public:
         ++m_version;
     }
 
-    /// Return cached stats for a dose entry, computing them if not cached.
-    /// The cache is keyed by DoseEntry::id, so switching back to a previously
-    /// viewed dose is instant (no recomputation).
-    const std::vector<StructureDoseStats>& getOrComputeStats(
-            int entryIdx,
-            const PatientData& patient,
-            double prescribedDose = 60.0) {
-        static const std::vector<StructureDoseStats> empty;
-        auto* entry = getEntry(entryIdx);
-        if (!entry || !entry->dose || !entry->grid) return empty;
-
-        auto it = m_statsCache.find(entry->id);
-        if (it != m_statsCache.end()) return it->second;
-
-        auto stats = PlanAnalysis::computeStats(*entry->dose, patient, *entry->grid, prescribedDose);
-        auto [inserted, _] = m_statsCache.emplace(entry->id, std::move(stats));
-        return inserted->second;
-    }
-
-    /// Invalidate cached stats for a specific entry id.
-    void invalidateStatsCache(int entryId) { m_statsCache.erase(entryId); }
-
-    /// Clear the entire stats cache.
-    void clearStatsCache() { m_statsCache.clear(); }
-
-    /// Return the next sequential optimization number (for naming).
-    int nextOptimizationNumber() const { return m_optimizationCount + 1; }
-
-    /// Increment the optimization counter (call after adding an optimization dose).
-    void incrementOptimizationCount() { ++m_optimizationCount; }
-
-    /// Return the next sequential leaf sequencing number (for naming).
-    int nextLeafSeqNumber() const { return m_leafSeqCount + 1; }
-
-    /// Increment the leaf sequencing counter.
-    void incrementLeafSeqCount() { ++m_leafSeqCount; }
-
 private:
     std::vector<DoseEntry> m_entries;
-    std::unordered_map<int, std::vector<StructureDoseStats>> m_statsCache;
     int m_selectedIdx = -1;
     int m_compareIdx = -1;
     int m_nextId = 1;
     int m_version = 0;
-    int m_optimizationCount = 0;
-    int m_leafSeqCount = 0;
 };
 
 } // namespace optirad

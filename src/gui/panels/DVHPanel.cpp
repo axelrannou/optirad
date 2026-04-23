@@ -14,15 +14,15 @@ void DVHPanel::recompute() {
     m_compareStats.clear();
     m_compareDvhCurves.clear();
 
-    auto& dm = m_state.doseManager;
+    auto& dm = m_state.doseStore;
     int selIdx = dm.getSelectedIdx();
     auto* sel = dm.getSelected();
     if (!sel || !sel->dose || !sel->grid || !m_state.patientData) return;
 
-    // Primary dose (cached in DoseManager)
+    // Primary dose (cached in GuiAppState)
     double rxDose = (m_state.plan && m_state.plan->getPrescribedDose() > 0)
                     ? m_state.plan->getPrescribedDose() : 60.0;
-    m_stats = dm.getOrComputeStats(selIdx, *m_state.patientData, rxDose);
+    m_stats = m_state.getOrComputeStats(selIdx, *m_state.patientData, rxDose);
     double maxDose = sel->dose->getMax();
     m_dvhMaxDose = static_cast<float>(maxDose);
     m_dvhCurves = PlanAnalysis::computeDVHCurves(m_stats, m_dvhMaxDose);
@@ -31,7 +31,7 @@ void DVHPanel::recompute() {
     int cmpIdx = dm.getCompareIdx();
     auto* cmp = dm.getCompare();
     if (cmp && cmp->dose && cmp->grid) {
-        m_compareStats = dm.getOrComputeStats(cmpIdx, *m_state.patientData, rxDose);
+        m_compareStats = m_state.getOrComputeStats(cmpIdx, *m_state.patientData, rxDose);
         double cmpMax = cmp->dose->getMax();
         if (cmpMax > maxDose) {
             m_dvhMaxDose = static_cast<float>(cmpMax);
@@ -58,7 +58,7 @@ void DVHPanel::render() {
     }
 
     // Auto-refresh when dose manager version changes
-    int currentVersion = m_state.doseManager.version();
+    int currentVersion = m_state.doseStore.version();
     if (currentVersion != m_doseVersion) {
         recompute();
         m_doseVersion = currentVersion;
@@ -96,8 +96,8 @@ void DVHPanel::renderDVH() {
     }
 
     if (hasComparison) {
-        auto* cmpEntry = m_state.doseManager.getCompare();
-        auto* selEntry = m_state.doseManager.getSelected();
+        auto* cmpEntry = m_state.doseStore.getCompare();
+        auto* selEntry = m_state.doseStore.getSelected();
         if (selEntry && cmpEntry) {
             ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
                 "Solid = %s | Dashed = %s", selEntry->name.c_str(), cmpEntry->name.c_str());

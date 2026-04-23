@@ -74,9 +74,6 @@ private:
     std::unique_ptr<DoseStatsPanel> m_doseStatsPanel;
     std::unique_ptr<DVHPanel> m_dvhPanel;
 
-    // Track whether imported dose was already added to DoseManager
-    bool m_importedDoseAdded = false;
-
     bool focus3DView = false;
 };
 

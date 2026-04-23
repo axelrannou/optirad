@@ -95,10 +95,11 @@ std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath
         patientData->setStructureSet(std::move(structures));
     }
 
-    // Import RT Dose if available
+    // Import RT Dose if available — cache it for the caller to take via takeImportedDose()
     auto [doseMatrix, doseGrid] = importRTDose();
     if (doseMatrix) {
-        patientData->setImportedDose(doseMatrix, doseGrid);
+        m_importedDoseMatrix = doseMatrix;
+        m_importedDoseGrid   = doseGrid;
         Logger::info("RT Dose imported: max=" + std::to_string(doseMatrix->getMax()) + " Gy");
     }
     

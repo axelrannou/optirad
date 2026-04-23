@@ -3,7 +3,7 @@
 #include "IPanel.hpp"
 #include "../AppState.hpp"
 #include "DoseColors.hpp"
-#include "dose/PlanAnalysis.hpp"
+#include "core/workflow/PlanAnalysis.hpp"
 #include <string>
 #include <vector>
 
