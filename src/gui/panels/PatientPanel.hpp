@@ -42,6 +42,9 @@ private:
     // Dose name inline editing
     int m_editingDoseIdx = -1;
     char m_editDoseName[128] = "";
+
+    // RT Plan export
+    char m_exportPath[512] = "";
 };
 
 } // namespace optirad

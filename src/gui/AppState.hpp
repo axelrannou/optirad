@@ -12,6 +12,7 @@
 #include "core/workflow/PlanAnalysis.hpp"
 #include "geometry/Grid.hpp"
 #include "core/Aperture.hpp"
+#include "io/DicomContext.hpp"
 #include <memory>
 #include <vector>
 #include <string>
@@ -56,6 +57,9 @@ struct GuiAppState {
 
     // ── Multi-dose management ──
     DoseStore doseStore;
+
+    // ── DICOM context (captured during import for use in export) ──
+    DicomContext dicomContext;
 
     // ── Pipeline result caches (keyed by dose entry ID) ──
     std::unordered_map<int, std::vector<double>> optWeightsCache;

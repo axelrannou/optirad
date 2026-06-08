@@ -1,4 +1,5 @@
 #include "PatientPanel.hpp"
+#include "io/DicomExporter.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
 #include <filesystem>
@@ -15,18 +16,47 @@ PatientPanel::PatientPanel(GuiAppState& state) : m_state(state) {
     // Default to project data/ directory
     snprintf(m_dicomPath, sizeof(m_dicomPath), "%s", OPTIRAD_DATA_DIR);
     m_dicomPath[sizeof(m_dicomPath) - 1] = '\0';
+    // Default export path
+    snprintf(m_exportPath, sizeof(m_exportPath), "%s/export", OPTIRAD_DATA_DIR);
+    m_exportPath[sizeof(m_exportPath) - 1] = '\0';
 }
 
 void PatientPanel::render() {
     if (!m_visible) return;
 
     ImGui::Begin("Patient Data", &m_visible);
-    
-    // Import button
-    if (ImGui::Button("Import DICOM Directory", ImVec2(-1, 0))) {
-        m_showImportDialog = true;
+
+    // ── Import / Export buttons (50 / 50) ──
+    {
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float btnW    = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
+
+        if (ImGui::Button("Import DICOM", ImVec2(btnW, 0)))
+            m_showImportDialog = true;
+
+        ImGui::SameLine();
+
+        const DoseEntry* selEntry = m_state.doseStore.getSelected();
+        const bool hasDose = selEntry && selEntry->dose;
+        const bool hasSeq  = hasDose && m_state.seqCache.count(selEntry->id) > 0;
+
+        if (!hasDose) ImGui::BeginDisabled();
+        const char* exportLabel = hasSeq ? "Export Dose + RT Plan" : "Export Dose";
+        if (ImGui::Button(exportLabel, ImVec2(btnW, 0))) {
+            const std::string outDir =
+                (m_exportPath[0] != '\0') ? m_exportPath : (OPTIRAD_DATA_DIR "/export");
+            DicomExporter exporter;
+            bool ok = exporter.exportRTDose(*selEntry->dose, m_state.dicomContext,
+                                             outDir, selEntry->name);
+            if (ok && hasSeq) {
+                const auto& seqEntry = m_state.seqCache.at(selEntry->id);
+                ok = exporter.exportRTPlan(*m_state.plan, *m_state.stf,
+                                           seqEntry.sequences, m_state.dicomContext, outDir);
+            }
+        }
+        if (!hasDose) ImGui::EndDisabled();
     }
-    
+
     ImGui::Separator();
     
     // Show patient info if loaded
@@ -411,6 +441,9 @@ void PatientPanel::importDicom(const std::string& path) {
     if (m_patientData) {
         Logger::info("DICOM import successful");
         m_showImportDialog = false;
+
+        // Capture DICOM context (UIDs for RT Plan export)
+        m_state.dicomContext = m_importer.getContext();
 
         // Add imported RT Dose to DoseStore if present
         auto [doseMatrix, doseGrid] = m_importer.takeImportedDose();

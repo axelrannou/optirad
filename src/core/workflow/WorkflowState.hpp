@@ -12,6 +12,7 @@
 #include "core/workflow/PlanAnalysis.hpp"
 #include "geometry/Grid.hpp"
 #include "core/Aperture.hpp"
+#include "io/DicomContext.hpp"
 #include <memory>
 #include <vector>
 #include <string>
@@ -47,6 +48,9 @@ struct WorkflowState {
 
     // ── Multi-dose management ──
     DoseStore doseStore;
+
+    // ── DICOM context (captured during import for use in export) ──
+    DicomContext dicomContext;
 
     // ── Workflow queries ──
     bool dicomLoaded() const { return patientData != nullptr; }

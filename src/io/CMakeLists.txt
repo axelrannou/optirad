@@ -1,5 +1,6 @@
 add_library(optirad_io
     DicomImporter.cpp
+    DicomExporter.cpp
     RTStructParser.cpp
     MachineLoader.cpp
 )

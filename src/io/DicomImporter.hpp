@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IDataImporter.hpp"
+#include "DicomContext.hpp"
 #include "dose/DoseMatrix.hpp"
 #include "geometry/Grid.hpp"
 #include <vector>
@@ -42,7 +43,10 @@ public:
     std::pair<std::shared_ptr<DoseMatrix>, std::shared_ptr<Grid>> takeImportedDose() {
         return {std::move(m_importedDoseMatrix), std::move(m_importedDoseGrid)};
     }
-    
+
+    /// Returns the DICOM context (UIDs) captured during the last import.
+    const DicomContext& getContext() const { return m_context; }
+
 private:
     std::vector<std::filesystem::path> m_ctFiles;
     std::filesystem::path m_rtStructFile;
@@ -50,7 +54,8 @@ private:
     std::filesystem::path m_rtDoseFile;
     std::shared_ptr<DoseMatrix> m_importedDoseMatrix;
     std::shared_ptr<Grid>       m_importedDoseGrid;
-    
+    DicomContext m_context;
+
     void scanDirectory(const std::filesystem::path& dir);
     std::string getSOPClassUID(const std::filesystem::path& file) const;
     void sortCTFilesByPosition();

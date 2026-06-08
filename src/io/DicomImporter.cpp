@@ -1,4 +1,5 @@
 #include "DicomImporter.hpp"
+#include "DicomContext.hpp"
 #include "RTStructParser.hpp"
 #include "core/Patient.hpp"
 #include "core/PatientData.hpp"
@@ -94,6 +95,19 @@ std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath
         
         patientData->setStructureSet(std::move(structures));
     }
+
+    // Capture RT Struct SOPInstanceUID for the DICOM context (used during export)
+#ifdef OPTIRAD_HAS_DCMTK
+    if (!m_rtStructFile.empty()) {
+        DcmFileFormat rtStructFF;
+        if (rtStructFF.loadFile(m_rtStructFile.c_str()).good()) {
+            OFString rtStructSopUID;
+            if (rtStructFF.getDataset()->findAndGetOFString(DCM_SOPInstanceUID, rtStructSopUID).good()) {
+                m_context.rtStructSOPInstanceUID = rtStructSopUID.c_str();
+            }
+        }
+    }
+#endif
 
     // Import RT Dose if available — cache it for the caller to take via takeImportedDose()
     auto [doseMatrix, doseGrid] = importRTDose();
@@ -349,14 +363,30 @@ std::unique_ptr<Patient> DicomImporter::importPatient(const std::string& path) {
         DcmFileFormat fileFormat;
         if (fileFormat.loadFile(m_ctFiles[0].c_str()).good()) {
             DcmDataset* dataset = fileFormat.getDataset();
-            
+
             OFString patientName, patientID;
             dataset->findAndGetOFString(DCM_PatientName, patientName);
             dataset->findAndGetOFString(DCM_PatientID, patientID);
-            
+
             patient->setName(patientName.c_str());
             patient->setID(patientID.c_str());
             Logger::info("Loaded patient: " + std::string(patientName.c_str()));
+
+            // Capture DICOM context UIDs for later export
+            OFString studyUID, forUID, studyDate, studyTime, birthDate, sex;
+            dataset->findAndGetOFString(DCM_StudyInstanceUID,    studyUID);
+            dataset->findAndGetOFString(DCM_FrameOfReferenceUID, forUID);
+            dataset->findAndGetOFString(DCM_StudyDate,           studyDate);
+            dataset->findAndGetOFString(DCM_StudyTime,           studyTime);
+            dataset->findAndGetOFString(DCM_PatientBirthDate,    birthDate);
+            dataset->findAndGetOFString(DCM_PatientSex,          sex);
+
+            m_context.studyInstanceUID  = studyUID.c_str();
+            m_context.frameOfReferenceUID = forUID.c_str();
+            m_context.studyDate         = studyDate.c_str();
+            m_context.studyTime         = studyTime.c_str();
+            m_context.patientBirthDate  = birthDate.c_str();
+            m_context.patientSex        = sex.c_str();
         }
     }
 #else

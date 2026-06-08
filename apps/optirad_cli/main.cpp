@@ -1,4 +1,5 @@
 #include "io/DicomImporter.hpp"
+#include "io/DicomExporter.hpp"
 #include "core/PatientData.hpp"
 #include "core/Plan.hpp"
 #include "core/Stf.hpp"
@@ -30,6 +31,7 @@ int loadPhaseSpace(const std::vector<std::string>& args, WorkflowState& state);
 int doseCalc(const std::vector<std::string>& args, WorkflowState& state);
 int optimize(const std::vector<std::string>& args, WorkflowState& state);
 int leafSeq(const std::vector<std::string>& args, WorkflowState& state);
+int exportRTPlan(const std::vector<std::string>& args, WorkflowState& state);
 
 void printUsage(const char* progName) {
     std::cout << "Usage: " << progName << " <command> [options]\n\n"
@@ -39,6 +41,7 @@ void printUsage(const char* progName) {
               << "  doseCalc [options]               Calculate Dij (requires plan)\n"
               << "  optimize [options]               Run optimization (requires Dij)\n"
               << "  leafSeq [options]                Run leaf sequencing (requires optimization)\n"
+              << "  exportRTPlan [options]           Export RT Plan DICOM (requires leaf sequencing)\n"
               << "  loadPhaseSpace [options]          Load phase-space beam source (phase-space machines only)\n"
               << "  interactive                      Enter interactive mode\n"
               << "  help                             Show this help message\n\n"
@@ -66,6 +69,8 @@ void printUsage(const char* progName) {
               << "Leaf sequencing options:\n"
               << "  --num-levels <n>                 Intensity quantization levels (default: 15)\n"
               << "  --min-segment-mu <MU>            Min MU per segment (default: 0)\n\n"
+              << "Export RT Plan options:\n"
+              << "  --output <dir>                   Output directory for RT Plan file (default: ./rtplan_export)\n\n"
               << "Phase-space options:\n"
               << "  --collimator <deg>               Collimator angle (default: 0)\n"
               << "  --max-particles <n>              Max particles per beam (default: 1000000)\n"
@@ -177,6 +182,12 @@ int loadDicom(const std::string& path, WorkflowState& state) {
         }
     }
 
+    // Store DICOM context for later export
+    state.dicomContext = importer.getContext();
+    if (state.dicomContext.isValid()) {
+        std::cout << "DICOM context captured (StudyUID: " << state.dicomContext.studyInstanceUID << ")\n";
+    }
+
     std::cout << "\n=== DICOM import complete ===\n";
     return 0;
 }
@@ -272,6 +283,7 @@ int runInteractive(WorkflowState& state) {
                       << "  doseCalc [options]            Calculate Dij (requires plan)\n"
                       << "  optimize [options]            Run optimization (requires Dij)\n"
                       << "  leafSeq [options]             Run leaf sequencing (requires optimization)\n"
+                      << "  exportRTPlan [options]        Export RT Plan DICOM (requires leaf sequencing)\n"
                       << "  loadPhaseSpace [options]       Load phase-space beam source (PSF machines only)\n"
                       << "  phsp-info                     Show phase-space source metrics\n"
                       << "  info                          Show current state and available STF properties\n"
@@ -326,6 +338,9 @@ int runInteractive(WorkflowState& state) {
         } else if (cmd == "leafSeq") {
             std::vector<std::string> lsArgs(tokens.begin() + 1, tokens.end());
             leafSeq(lsArgs, state);
+        } else if (cmd == "exportRTPlan") {
+            std::vector<std::string> epArgs(tokens.begin() + 1, tokens.end());
+            exportRTPlan(epArgs, state);
         } else if (cmd == "phsp-info") {
             if (state.phaseSpaceSources.empty()) {
                 std::cout << "No phase-space sources loaded.\n";
@@ -649,6 +664,46 @@ int optimize(const std::vector<std::string>& args, WorkflowState& state) {
     return 0;
 }
 
+// ── exportRTPlan command: write RT Plan DICOM after leaf sequencing ──
+int exportRTPlan(const std::vector<std::string>& args, WorkflowState& state) {
+    if (!state.leafSequenceDone()) {
+        std::cerr << "Error: Leaf sequencing not done. Use 'leafSeq' first.\n";
+        return 1;
+    }
+    if (!state.plan || !state.stf) {
+        std::cerr << "Error: Plan or STF not available.\n";
+        return 1;
+    }
+
+    std::string outputDir = "./rtplan_export";
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--output" && i + 1 < args.size()) {
+            outputDir = args[++i];
+        }
+    }
+
+    std::cout << "\n=== Export RT Plan DICOM ===\n";
+    std::cout << "Output directory: " << outputDir << "\n";
+    if (state.dicomContext.isValid()) {
+        std::cout << "Study UID: " << state.dicomContext.studyInstanceUID << "\n";
+    } else {
+        std::cout << "Note: no DICOM context — standalone UIDs will be generated\n";
+    }
+
+    DicomExporter exporter;
+    bool ok = exporter.exportRTPlan(*state.plan, *state.stf,
+                                    state.leafSequences,
+                                    state.dicomContext,
+                                    outputDir);
+    if (!ok) {
+        std::cerr << "Error: RT Plan export failed (check log for details)\n";
+        return 1;
+    }
+
+    std::cout << "=== Done ===\n";
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     Logger::init();
 
@@ -706,6 +761,12 @@ int main(int argc, char* argv[]) {
         std::vector<std::string> dcArgs;
         for (int i = 2; i < argc; ++i) dcArgs.emplace_back(argv[i]);
         return doseCalc(dcArgs, state);
+    }
+
+    if (command == "exportRTPlan") {
+        std::vector<std::string> epArgs;
+        for (int i = 2; i < argc; ++i) epArgs.emplace_back(argv[i]);
+        return exportRTPlan(epArgs, state);
     }
 
     std::cerr << "Unknown command: " << command << "\n";
