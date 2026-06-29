@@ -2,6 +2,7 @@
 
 #include "Beam.hpp"
 #include "Machine.hpp"
+#include "sequencing/MlcLeafBounds.hpp"
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -93,47 +94,19 @@ public:
             return mapping;
         }
 
-        // Build leaf pair boundaries.
-        // Millennium 120: 60 leaf pairs total (120 leaves = 60 pairs per bank).
-        // Organization: 10 outer pairs (10mm) + 40 inner pairs (5mm) + 10 outer pairs (10mm).
-        int numPairs = mlc.numLeaves / 2;
-        std::vector<double> leafBoundaries; // cumulative Y positions from bottom
-        leafBoundaries.push_back(0.0);
-
-        if (mlc.leafWidths.size() == 2) {
-            // Mixed width: [inner, outer] = [5mm, 10mm]
-            double innerWidth = mlc.leafWidths[0];
-            double outerWidth = mlc.leafWidths[1];
-            int innerPairs = (mlc.numInnerPairs > 0) ? mlc.numInnerPairs : 40;
-            int outerPerSide = (numPairs - innerPairs) / 2;
-
-            // Bottom outer
-            for (int i = 0; i < outerPerSide; ++i)
-                leafBoundaries.push_back(leafBoundaries.back() + outerWidth);
-            // Inner
-            for (int i = 0; i < innerPairs; ++i)
-                leafBoundaries.push_back(leafBoundaries.back() + innerWidth);
-            // Top outer
-            for (int i = 0; i < outerPerSide; ++i)
-                leafBoundaries.push_back(leafBoundaries.back() + outerWidth);
-        } else {
-            // Uniform width
-            double w = mlc.leafWidths[0];
-            for (int i = 0; i < numPairs; ++i)
-                leafBoundaries.push_back(leafBoundaries.back() + w);
+        const auto leafBoundaries = buildMlcLeafBounds(mlc);
+        if (leafBoundaries.empty()) {
+            for (int r = 0; r < m_nRows; ++r) mapping[r] = r;
+            return mapping;
         }
 
-        double totalLeafSpan = leafBoundaries.back();
-        double leafCenterOffset = totalLeafSpan / 2.0;
+        int numPairs = mlc.numLeaves / 2;
 
         // Map each fluence row (by its Z-center position) to the corresponding leaf pair
         for (int r = 0; r < m_nRows; ++r) {
             double zPos = m_originZ + r * m_bixelWidth;
-            // Convert to leaf coordinate (0 = bottom leaf edge)
-            double leafCoord = zPos + leafCenterOffset;
-
             for (int lp = 0; lp < numPairs; ++lp) {
-                if (leafCoord >= leafBoundaries[lp] && leafCoord < leafBoundaries[lp + 1]) {
+                if (zPos >= leafBoundaries[lp] && zPos < leafBoundaries[lp + 1]) {
                     mapping[r] = lp;
                     break;
                 }

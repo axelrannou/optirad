@@ -263,3 +263,14 @@ add_executable(test_body_contour_generator
 target_include_directories(test_body_contour_generator PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_body_contour_generator PRIVATE optirad_segmentation optirad_geometry GTest::gtest GTest::gtest_main)
 add_test(NAME BodyContourGeneratorTest COMMAND test_body_contour_generator)
+
+# ============================================================================
+# UNIT TESTS (GoogleTest) - Sequencing Module
+# ============================================================================
+
+add_executable(test_mlc_geometry
+    sequencing/test_mlc_geometry.cpp
+)
+target_include_directories(test_mlc_geometry PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_mlc_geometry PRIVATE optirad_sequencing GTest::gtest GTest::gtest_main)
+add_test(NAME MlcGeometryTest COMMAND test_mlc_geometry)

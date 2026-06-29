@@ -1,4 +1,5 @@
 #include "LeafSequencer.hpp"
+#include "MlcLeafBounds.hpp"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -34,31 +35,7 @@ LeafSequenceResult LeafSequencer::sequenceBeam(
 
     // ── Step 0: Build full leaf pair boundary array in BEV coordinates ──
     int numPairs = (mlc.numLeaves > 0) ? mlc.numLeaves / 2 : 0;
-    std::vector<double> fullLeafBounds; // size = numPairs + 1
-
-    if (numPairs > 0 && !mlc.leafWidths.empty()) {
-        fullLeafBounds.push_back(0.0);
-        if (mlc.leafWidths.size() == 2) {
-            double innerW = mlc.leafWidths[0];
-            double outerW = mlc.leafWidths[1];
-            int innerPairs = (mlc.numInnerPairs > 0) ? mlc.numInnerPairs : 40;
-            int outerPerSide = (numPairs - innerPairs) / 2;
-            for (int i = 0; i < outerPerSide; ++i)
-                fullLeafBounds.push_back(fullLeafBounds.back() + outerW);
-            for (int i = 0; i < innerPairs; ++i)
-                fullLeafBounds.push_back(fullLeafBounds.back() + innerW);
-            for (int i = 0; i < outerPerSide; ++i)
-                fullLeafBounds.push_back(fullLeafBounds.back() + outerW);
-        } else {
-            double w = mlc.leafWidths[0];
-            for (int i = 0; i < numPairs; ++i)
-                fullLeafBounds.push_back(fullLeafBounds.back() + w);
-        }
-        double totalSpan = fullLeafBounds.back();
-        double offset = totalSpan / 2.0;
-        for (auto& b : fullLeafBounds)
-            b -= offset;
-    }
+    const std::vector<double> fullLeafBounds = buildMlcLeafBounds(mlc);
 
     // ── Step 1: Determine field leaf pairs (all that overlap the fluence grid Z extent) ──
     double fluenceZMin = originZ - bw * 0.5;

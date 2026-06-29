@@ -330,23 +330,75 @@ void BevView::updateFluenceTexture() {
         if (!seq.leafPairFluence.empty() && seq.leafPairFluenceCols > 0) {
             texCols = seq.leafPairFluenceCols;
             int numLP = static_cast<int>(seq.leafPairFluence.size()) / texCols;
-            texRows = numLP;
 
             maxFluence = *std::max_element(seq.leafPairFluence.begin(), seq.leafPairFluence.end());
             if (maxFluence <= 0) maxFluence = 1.0;
 
-            pixels.resize(static_cast<size_t>(texRows) * texCols * 4);
-            for (int r = 0; r < texRows; ++r) {
-                for (int c = 0; c < texCols; ++c) {
-                    double val = seq.leafPairFluence[static_cast<size_t>(r) * texCols + c];
-                    float t = static_cast<float>(val / maxFluence);
-                    size_t idx = (static_cast<size_t>(r) * texCols + c) * 4;
-                    if (val > 0.001 * maxFluence) {
-                        jetColormap(t, pixels[idx], pixels[idx + 1], pixels[idx + 2]);
-                        pixels[idx + 3] = 200;
-                    } else {
-                        pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = 0;
-                        pixels[idx + 3] = 0;
+            // Build a physically-correct texture: each pixel row spans a uniform
+            // physical Z step equal to the minimum leaf width.  This ensures that
+            // wider leaf pairs (e.g. 5mm HD120 outer) occupy proportionally more
+            // pixel rows than narrow ones (e.g. 2.5mm inner), so the texture
+            // aligns correctly with the MLC leaf boundaries drawn by renderMlcLeaves().
+            const bool hasBounds = (!seq.leafPairBoundariesZ.empty() &&
+                static_cast<int>(seq.leafPairBoundariesZ.size()) >= numLP + 1);
+
+            if (hasBounds) {
+                // Find minimum leaf-pair width to use as the pixel step
+                double minLeafW = 1e30;
+                for (int li = 0; li < numLP; ++li)
+                    minLeafW = std::min(minLeafW,
+                        seq.leafPairBoundariesZ[li + 1] - seq.leafPairBoundariesZ[li]);
+                if (minLeafW <= 0.0 || minLeafW > 1e20) minLeafW = 2.5;
+
+                double zBot = seq.leafPairBoundariesZ.front();
+                double zTop = seq.leafPairBoundariesZ.back();
+                texRows = std::max(1, static_cast<int>(std::round((zTop - zBot) / minLeafW)));
+                double pixH = (zTop - zBot) / texRows;
+
+                pixels.assign(static_cast<size_t>(texRows) * texCols * 4, 0);
+
+                for (int pr = 0; pr < texRows; ++pr) {
+                    double zCenter = zBot + (pr + 0.5) * pixH;
+                    // Identify which leaf pair owns this Z position
+                    int li = -1;
+                    for (int lp = 0; lp < numLP; ++lp) {
+                        if (zCenter >= seq.leafPairBoundariesZ[lp] &&
+                            zCenter <  seq.leafPairBoundariesZ[lp + 1]) {
+                            li = lp;
+                            break;
+                        }
+                    }
+                    if (li < 0) continue;
+
+                    for (int c = 0; c < texCols; ++c) {
+                        double val = seq.leafPairFluence[static_cast<size_t>(li) * texCols + c];
+                        float t = static_cast<float>(val / maxFluence);
+                        size_t idx = (static_cast<size_t>(pr) * texCols + c) * 4;
+                        if (val > 0.001 * maxFluence) {
+                            jetColormap(t, pixels[idx], pixels[idx + 1], pixels[idx + 2]);
+                            pixels[idx + 3] = 200;
+                        } else {
+                            pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = 0;
+                            pixels[idx + 3] = 0;
+                        }
+                    }
+                }
+            } else {
+                // Fallback (no boundary data): one row per leaf pair
+                texRows = numLP;
+                pixels.resize(static_cast<size_t>(texRows) * texCols * 4);
+                for (int r = 0; r < texRows; ++r) {
+                    for (int c = 0; c < texCols; ++c) {
+                        double val = seq.leafPairFluence[static_cast<size_t>(r) * texCols + c];
+                        float t = static_cast<float>(val / maxFluence);
+                        size_t idx = (static_cast<size_t>(r) * texCols + c) * 4;
+                        if (val > 0.001 * maxFluence) {
+                            jetColormap(t, pixels[idx], pixels[idx + 1], pixels[idx + 2]);
+                            pixels[idx + 3] = 200;
+                        } else {
+                            pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = 0;
+                            pixels[idx + 3] = 0;
+                        }
                     }
                 }
             }

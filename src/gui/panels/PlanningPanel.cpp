@@ -10,8 +10,8 @@
 namespace optirad {
 
 static const char* kRadiationModes[] = { "photons" };
-static const char* kMachines[] = { "Generic", "Varian_TrueBeam6MV" };
-static const bool kIsPhaseSpace[] = { false, true };
+static const char* kMachines[] = { "Generic", "HD120", "Varian_TrueBeam6MV" };
+static const bool kIsPhaseSpace[] = { false, false, true };
 
 // Helper callback for ImGui InputText with std::string
 static int InputTextCallback(ImGuiInputTextCallbackData* data) {

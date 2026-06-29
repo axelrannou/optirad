@@ -546145,7 +546145,7 @@
     "num_leaves": 120,
     "leaf_width_mm": [5.0, 10.0],
     "num_inner_pairs": 40,
-    "max_travel_mm": 160.0,
+    "max_travel_mm": 200.0,
     "interdigitation": true,
     "leaf_position_resolution_mm": 0.5,
     "tongue_and_groove_width_mm": 0.4,
