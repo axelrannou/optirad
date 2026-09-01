@@ -46,12 +46,20 @@ void PatientPanel::render() {
             const std::string outDir =
                 (m_exportPath[0] != '\0') ? m_exportPath : (OPTIRAD_DATA_DIR "/export");
             DicomExporter exporter;
-            bool ok = exporter.exportRTDose(*selEntry->dose, m_state.dicomContext,
-                                             outDir, selEntry->name);
-            if (ok && hasSeq) {
+
+            // Export the RT Plan first so its SOP Instance UID can be cross-referenced
+            // from the RT Dose (required by the RT Dose IOD when DoseSummationType is PLAN).
+            std::string planSOPInstanceUID;
+            bool ok = true;
+            if (hasSeq) {
                 const auto& seqEntry = m_state.seqCache.at(selEntry->id);
                 ok = exporter.exportRTPlan(*m_state.plan, *m_state.stf,
-                                           seqEntry.sequences, m_state.dicomContext, outDir);
+                                           seqEntry.sequences, m_state.dicomContext, outDir,
+                                           &planSOPInstanceUID);
+            }
+            if (ok) {
+                exporter.exportRTDose(*selEntry->dose, m_state.dicomContext,
+                                       outDir, selEntry->name, planSOPInstanceUID);
             }
         }
         if (!hasDose) ImGui::EndDisabled();

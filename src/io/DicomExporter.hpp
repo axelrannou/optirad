@@ -27,17 +27,24 @@ public:
                       const Stf& stf,
                       const std::vector<LeafSequenceResult>& sequences,
                       const DicomContext& context,
-                      const std::string& outputDir) override;
+                      const std::string& outputDir,
+                      std::string* outSOPInstanceUID = nullptr) override;
 
     /// Export a dose volume as a DICOM RT Dose file.
     /// @param dose       Dose matrix (values in Gy).
     /// @param context    DICOM context from the original import (for UIDs).
     /// @param outputDir  Directory where the RD.*.dcm file will be written.
     /// @param label      Optional comment string stored in DoseComment tag.
+    /// @param referencedRTPlanSOPInstanceUID  Optional SOP Instance UID of an RT Plan
+    ///                                        exported alongside this dose; when set,
+    ///                                        a Referenced RT Plan Sequence is written
+    ///                                        (required by the RT Dose IOD when
+    ///                                        DoseSummationType is PLAN).
     bool exportRTDose(const DoseMatrix& dose,
                       const DicomContext& context,
                       const std::string& outputDir,
-                      const std::string& label = "");
+                      const std::string& label = "",
+                      const std::string& referencedRTPlanSOPInstanceUID = "");
 
     /// Generate a new DICOM UID using DCMTK's UID generator.
     /// Returns an empty string when DCMTK is not available.

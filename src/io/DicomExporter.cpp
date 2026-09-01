@@ -83,7 +83,8 @@ bool DicomExporter::exportRTPlan(const Plan& plan,
                                   const Stf& stf,
                                   const std::vector<LeafSequenceResult>& sequences,
                                   const DicomContext& context,
-                                  const std::string& outputDir)
+                                  const std::string& outputDir,
+                                  std::string* outSOPInstanceUID)
 {
 #ifndef OPTIRAD_HAS_DCMTK
     Logger::error("DicomExporter: DCMTK not available — cannot export RT Plan");
@@ -448,6 +449,7 @@ bool DicomExporter::exportRTPlan(const Plan& plan,
     }
 
     Logger::info("DicomExporter: RT Plan written to " + filename);
+    if (outSOPInstanceUID) *outSOPInstanceUID = sopInstanceUID;
     return true;
 #endif
 }
@@ -455,7 +457,8 @@ bool DicomExporter::exportRTPlan(const Plan& plan,
 bool DicomExporter::exportRTDose(const DoseMatrix& dose,
                                   const DicomContext& context,
                                   const std::string& outputDir,
-                                  const std::string& label)
+                                  const std::string& label,
+                                  const std::string& referencedRTPlanSOPInstanceUID)
 {
 #ifndef OPTIRAD_HAS_DCMTK
     Logger::error("DicomExporter: DCMTK not available — cannot export RT Dose");
@@ -491,13 +494,16 @@ bool DicomExporter::exportRTDose(const DoseMatrix& dose,
     if (maxDose <= 0.0) maxDose = 1.0;
     const double doseGridScaling = maxDose / static_cast<double>(0xFFFFFFFEu);
 
-    // ── Build uint32 pixel array (frame-major, row-major, column-minor) ──
+    // ── Build uint32 pixel array ──
+    // Grid convention (matches DicomImporter): dims[0]/at(i,..)=DICOM Rows (Y),
+    // dims[1]/at(.,j,.)=DICOM Columns (X). DICOM pixel data is row-major with
+    // Columns varying fastest, so the column index (j) must be the inner loop.
     std::vector<Uint32> pixelData(nx * ny * nz);
     for (size_t k = 0; k < nz; ++k) {
-        for (size_t j = 0; j < ny; ++j) {
-            for (size_t i = 0; i < nx; ++i) {
+        for (size_t i = 0; i < nx; ++i) {
+            for (size_t j = 0; j < ny; ++j) {
                 double d = dose.at(i, j, k);
-                pixelData[k * ny * nx + j * nx + i] =
+                pixelData[k * nx * ny + i * ny + j] =
                     static_cast<Uint32>(d / doseGridScaling + 0.5);
             }
         }
@@ -555,8 +561,8 @@ bool DicomExporter::exportRTDose(const DoseMatrix& dose,
     ds->putAndInsertString(DCM_SamplesPerPixel,          "1");
     ds->putAndInsertString(DCM_PhotometricInterpretation, "MONOCHROME2");
     ds->putAndInsertString(DCM_NumberOfFrames,           std::to_string(nz).c_str());
-    ds->putAndInsertUint16(DCM_Rows,                     static_cast<Uint16>(ny));
-    ds->putAndInsertUint16(DCM_Columns,                  static_cast<Uint16>(nx));
+    ds->putAndInsertUint16(DCM_Rows,                     static_cast<Uint16>(nx));
+    ds->putAndInsertUint16(DCM_Columns,                  static_cast<Uint16>(ny));
     ds->putAndInsertUint16(DCM_BitsAllocated,            32);
     ds->putAndInsertUint16(DCM_BitsStored,               32);
     ds->putAndInsertUint16(DCM_HighBit,                  31);
@@ -564,9 +570,9 @@ bool DicomExporter::exportRTDose(const DoseMatrix& dose,
 
     // Image geometry
     auto spacing = grid.getSpacing();
-    // PixelSpacing = row spacing (y-direction), col spacing (x-direction)
+    // PixelSpacing = row spacing (spacing[0]), col spacing (spacing[1])
     ds->putAndInsertString(DCM_PixelSpacing,
-        (toDS(spacing[1], 6) + "\\" + toDS(spacing[0], 6)).c_str());
+        (toDS(spacing[0], 6) + "\\" + toDS(spacing[1], 6)).c_str());
 
     auto origin = grid.getOrigin();
     ds->putAndInsertString(DCM_ImagePositionPatient,
@@ -595,9 +601,30 @@ bool DicomExporter::exportRTDose(const DoseMatrix& dose,
     if (!label.empty())
         ds->putAndInsertString(DCM_DoseComment, label.c_str());
 
-    // Pixel data (uint32 values)
-    ds->putAndInsertUint32Array(DCM_PixelData, pixelData.data(),
-                                static_cast<unsigned long>(pixelData.size()));
+    // Referenced RT Plan Sequence — required by the RT Dose IOD when
+    // DoseSummationType is PLAN; without it, some viewers (e.g. 3D Slicer's
+    // RT plugin) refuse to load the file even though a generic reader would accept it.
+    if (!referencedRTPlanSOPInstanceUID.empty()) {
+        auto* refPlanSeq = new DcmSequenceOfItems(DCM_ReferencedRTPlanSequence);
+        auto* refPlanItem = new DcmItem();
+        refPlanItem->putAndInsertString(DCM_ReferencedSOPClassUID,    UID_RTPlanStorage);
+        refPlanItem->putAndInsertString(DCM_ReferencedSOPInstanceUID, referencedRTPlanSOPInstanceUID.c_str());
+        refPlanSeq->insert(refPlanItem);
+        ds->insert(refPlanSeq, OFTrue);
+    }
+
+    // Pixel data (uint32 values). PixelData has the ambiguous "px" dictionary VR,
+    // and DCMTK's Uint32-array putter only accepts VR OL/UL, so the 32-bit words
+    // must be written via the Uint16-array putter instead (VR ox / OW), matching
+    // how RTDOSE files with BitsAllocated=32 are conventionally encoded.
+    OFCondition pixStatus = ds->putAndInsertUint16Array(
+        DcmTag(DCM_PixelData), reinterpret_cast<const Uint16*>(pixelData.data()),
+        static_cast<unsigned long>(pixelData.size() * 2));
+    if (pixStatus.bad()) {
+        Logger::error("DicomExporter: failed to write RT Dose pixel data: "
+                      + std::string(pixStatus.text()));
+        return false;
+    }
 
     // ── Write the file ──
     std::string filename = (fs::path(outputDir) / ("RD." + sopInstanceUID + ".dcm")).string();

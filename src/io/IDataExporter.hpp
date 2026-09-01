@@ -20,12 +20,16 @@ public:
     /// @param sequences    Leaf sequencing results (one per beam, ordered by beamIndex).
     /// @param context      DICOM UIDs captured during the original import.
     /// @param outputDir    Directory to write the RT Plan DICOM file into.
+    /// @param outSOPInstanceUID  Optional: receives the generated SOP Instance UID of
+    ///                           the RT Plan on success, so it can be cross-referenced
+    ///                           from an RT Dose exported alongside it.
     /// @return             true on success, false on failure.
     virtual bool exportRTPlan(const Plan& plan,
                               const Stf& stf,
                               const std::vector<LeafSequenceResult>& sequences,
                               const DicomContext& context,
-                              const std::string& outputDir) = 0;
+                              const std::string& outputDir,
+                              std::string* outSOPInstanceUID = nullptr) = 0;
 };
 
 } // namespace optirad
