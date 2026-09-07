@@ -1,9 +1,17 @@
 #include "DoseStatsPanel.hpp"
 #include "../Theme.hpp"
+#include "DoseStatsCsv.hpp"
+#include "utils/Logger.hpp"
 #include <imgui.h>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <string>
+
+#ifndef OPTIRAD_DATA_DIR
+#define OPTIRAD_DATA_DIR "."
+#endif
 
 namespace optirad {
 
@@ -54,11 +62,56 @@ void DoseStatsPanel::render() {
         renderCompareSelector();
     }
 
+    if (ImGui::Button("Export CSV")) {
+        exportStatsCSV();
+    }
+
     ImGui::Spacing();
 
     renderStatsTable();
 
     ImGui::End();
+}
+
+void DoseStatsPanel::exportStatsCSV() {
+    namespace fs = std::filesystem;
+
+    if (m_stats.empty() || !m_state.patientData) {
+        Logger::error("DoseStats CSV export: no statistics available");
+        return;
+    }
+
+    auto* sel = m_state.doseStore.getSelected();
+    std::string doseName = sel ? sel->name : "Dose";
+
+    std::string patientID;
+    if (auto* patient = m_state.patientData->getPatient()) patientID = patient->getID();
+    if (patientID.empty()) patientID = "UnknownPatient";
+
+    const std::string outDir =
+        (!m_state.exportDir.empty()) ? m_state.exportDir : (OPTIRAD_DATA_DIR "/export");
+    if (!fs::exists(outDir)) {
+        std::error_code ec;
+        if (!fs::create_directories(outDir, ec)) {
+            Logger::error("DoseStats CSV export: cannot create output directory: " + outDir
+                          + " (" + ec.message() + ")");
+            return;
+        }
+    }
+
+    const std::string filename =
+        (fs::path(outDir) / ("DoseStats_" + sanitizeFilename(patientID) + "_" +
+                              sanitizeFilename(doseName) + ".csv")).string();
+    std::ofstream f(filename);
+    if (!f) {
+        Logger::error("DoseStats CSV export: cannot open file for writing: " + filename);
+        return;
+    }
+
+    writeDoseStatsCsvHeader(f);
+    writeDoseStatsCsvRows(f, doseName, m_stats);
+
+    Logger::info("DoseStats CSV export: written to " + filename);
 }
 
 void DoseStatsPanel::renderCompareSelector() {

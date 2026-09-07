@@ -1,9 +1,11 @@
 #include "PatientPanel.hpp"
 #include "io/DicomExporter.hpp"
 #include "utils/Logger.hpp"
+#include "DoseStatsCsv.hpp"
 #include <imgui.h>
 #include <filesystem>
 #include <algorithm>
+#include <fstream>
 #include <string>
 
 #ifndef OPTIRAD_DATA_DIR
@@ -19,10 +21,13 @@ PatientPanel::PatientPanel(GuiAppState& state) : m_state(state) {
     // Default export path
     snprintf(m_exportPath, sizeof(m_exportPath), "%s/export", OPTIRAD_DATA_DIR);
     m_exportPath[sizeof(m_exportPath) - 1] = '\0';
+    m_state.exportDir = m_exportPath;
 }
 
 void PatientPanel::render() {
     if (!m_visible) return;
+
+    m_state.exportDir = m_exportPath;
 
     ImGui::Begin("Patient Data", &m_visible);
 
@@ -300,6 +305,11 @@ void PatientPanel::renderDoseList() {
         return;
     }
 
+    if (ImGui::Button("Export All Stats (CSV)")) {
+        exportAllStatsCSV();
+    }
+    ImGui::Spacing();
+
     if (ImGui::BeginTable("DoseList", 5,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("##sel", ImGuiTableColumnFlags_WidthFixed, 30.0f);
@@ -464,6 +474,54 @@ void PatientPanel::importDicom(const std::string& path) {
     }
     
     m_isImporting = false;
+}
+
+void PatientPanel::exportAllStatsCSV() {
+    namespace fs = std::filesystem;
+
+    if (!m_patientData) {
+        Logger::error("DoseStats CSV export: no patient data loaded");
+        return;
+    }
+
+    auto& dm = m_state.doseStore;
+    if (dm.count() == 0) return;
+
+    std::string patientID;
+    if (auto* patient = m_patientData->getPatient()) patientID = patient->getID();
+    if (patientID.empty()) patientID = "UnknownPatient";
+
+    const std::string outDir =
+        (!m_state.exportDir.empty()) ? m_state.exportDir : (OPTIRAD_DATA_DIR "/export");
+    if (!fs::exists(outDir)) {
+        std::error_code ec;
+        if (!fs::create_directories(outDir, ec)) {
+            Logger::error("DoseStats CSV export: cannot create output directory: " + outDir
+                          + " (" + ec.message() + ")");
+            return;
+        }
+    }
+
+    const std::string filename =
+        (fs::path(outDir) / ("DoseStats_" + sanitizeFilename(patientID) + "_All.csv")).string();
+    std::ofstream f(filename);
+    if (!f) {
+        Logger::error("DoseStats CSV export: cannot open file for writing: " + filename);
+        return;
+    }
+
+    double rxDose = (m_state.plan && m_state.plan->getPrescribedDose() > 0)
+                    ? m_state.plan->getPrescribedDose() : 60.0;
+
+    writeDoseStatsCsvHeader(f);
+    for (int i = 0; i < dm.count(); ++i) {
+        const auto* entry = dm.getEntry(i);
+        if (!entry || !entry->dose || !entry->grid) continue;
+        const auto& stats = m_state.getOrComputeStats(i, *m_patientData, rxDose);
+        writeDoseStatsCsvRows(f, entry->name, stats);
+    }
+
+    Logger::info("DoseStats CSV export: written to " + filename);
 }
 
 void PatientPanel::update() {

@@ -61,6 +61,9 @@ struct GuiAppState {
     // ── DICOM context (captured during import for use in export) ──
     DicomContext dicomContext;
 
+    // ── Output directory shared by Export Dose / RT Plan / Dose Stats CSV ──
+    std::string exportDir;
+
     // ── Pipeline result caches (keyed by dose entry ID) ──
     std::unordered_map<int, std::vector<double>> optWeightsCache;
     std::unordered_map<int, LeafSeqCacheEntry> seqCache;

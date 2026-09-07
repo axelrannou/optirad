@@ -29,6 +29,7 @@ private:
     void renderDoseList();
     
     void importDicom(const std::string& path);
+    void exportAllStatsCSV();
     
     GuiAppState& m_state;
     std::unique_ptr<PatientData> m_patientData;

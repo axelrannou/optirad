@@ -34,6 +34,7 @@ private:
     void computeStats();
     void renderStatsTable();
     void renderCompareSelector();
+    void exportStatsCSV();
 };
 
 } // namespace optirad
