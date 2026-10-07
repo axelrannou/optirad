@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <fstream>
 #include <string>
+#include <unordered_map>
 
 #ifndef OPTIRAD_DATA_DIR
 #define OPTIRAD_DATA_DIR "."
@@ -321,6 +322,12 @@ void PatientPanel::renderDoseList() {
 
         bool taskBusy = m_state.taskRunning;
 
+        std::unordered_map<int, const DoseEntry*> entriesById;
+        entriesById.reserve(static_cast<size_t>(dm.count()));
+        for (const auto& entry : dm.getEntries()) {
+            entriesById.emplace(entry.id, &entry);
+        }
+
         int toRemove = -1;
         for (int i = 0; i < dm.count(); ++i) {
             const auto* entry = dm.getEntry(i);
@@ -401,16 +408,12 @@ void PatientPanel::renderDoseList() {
                 auto seqIt = m_state.seqCache.find(entry->id);
                 if (seqIt != m_state.seqCache.end()) {
                     int linkedId = seqIt->second.linkedOptDoseId;
-                    bool found = false;
-                    for (int j = 0; j < dm.count(); ++j) {
-                        const auto* optEntry = dm.getEntry(j);
-                        if (optEntry && optEntry->id == linkedId) {
-                            ImGui::Text("%s", optEntry->name.c_str());
-                            found = true;
-                            break;
-                        }
+                    auto linkedIt = entriesById.find(linkedId);
+                    if (linkedIt != entriesById.end()) {
+                        ImGui::Text("%s", linkedIt->second->name.c_str());
+                    } else {
+                        ImGui::TextDisabled("-");
                     }
-                    if (!found) ImGui::TextDisabled("-");
                 } else {
                     ImGui::TextDisabled("-");
                 }
@@ -419,7 +422,7 @@ void PatientPanel::renderDoseList() {
             // Max dose
             ImGui::TableNextColumn();
             if (entry->dose) {
-                ImGui::Text("%.2f", entry->dose->getMax());
+                ImGui::Text("%.2f", entry->maxDoseGy);
             } else {
                 ImGui::TextDisabled("-");
             }

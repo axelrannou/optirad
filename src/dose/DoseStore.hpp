@@ -14,6 +14,8 @@ struct DoseEntry {
     std::string name;
     std::shared_ptr<DoseMatrix> dose;
     std::shared_ptr<Grid> grid;
+    double maxDoseGy = 0.0;
+    double meanDoseGy = 0.0;
 };
 
 /// Stores a collection of named dose maps (imported + computed results).
@@ -29,6 +31,10 @@ public:
         entry.name = name;
         entry.dose = std::move(dose);
         entry.grid = std::move(grid);
+        if (entry.dose) {
+            entry.maxDoseGy = entry.dose->getMax();
+            entry.meanDoseGy = entry.dose->getMean();
+        }
         m_entries.push_back(std::move(entry));
         m_selectedIdx = static_cast<int>(m_entries.size()) - 1;
         ++m_version;

@@ -314,8 +314,9 @@ void OptimizationPanel::render() {
                     m_state.syncSelectedDose();
                     m_state.optimizationJustFinished = true;
 
+                    const auto* selectedDose = m_state.doseStore.getSelected();
                     Logger::info("Max dose: " +
-                        std::to_string(m_pipelineResult.doseResult->getMax()) + " Gy");
+                        std::to_string(selectedDose ? selectedDose->maxDoseGy : 0.0) + " Gy");
                 }
             }
         }
@@ -450,8 +451,11 @@ void OptimizationPanel::render() {
         ImGui::Spacing();
         ImGui::TextColored(getThemeColors().passText, "%s", m_optStatusMessage.c_str());
         if (m_state.doseResult) {
+            const auto* selectedDose = m_state.doseStore.getSelected();
+            double maxDose = selectedDose ? selectedDose->maxDoseGy : 0.0;
+            double meanDose = selectedDose ? selectedDose->meanDoseGy : 0.0;
             ImGui::Text("Max dose: %.2f Gy | Mean dose: %.2f Gy",
-                m_state.doseResult->getMax(), m_state.doseResult->getMean());
+                maxDose, meanDose);
         }
         // Use cached log for the selected optimization (not the live m_iterationLog)
         {
