@@ -253,6 +253,23 @@ if(OpenMP_CXX_FOUND)
 endif()
 add_test(NAME DoseEngineTest COMMAND test_dose_engine)
 
+add_executable(test_gamma_analysis
+    validation/test_gamma_analysis.cpp
+)
+target_include_directories(test_gamma_analysis PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_gamma_analysis PRIVATE optirad_validation GTest::gtest GTest::gtest_main)
+add_test(NAME GammaAnalysisTest COMMAND test_gamma_analysis)
+
+add_executable(test_water_phantom
+    validation/test_water_phantom.cpp
+)
+target_include_directories(test_water_phantom PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_water_phantom PRIVATE optirad_validation GTest::gtest GTest::gtest_main)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(test_water_phantom PRIVATE OpenMP::OpenMP_CXX)
+endif()
+add_test(NAME WaterPhantomBenchmark COMMAND test_water_phantom)
+
 # ============================================================================
 # UNIT TESTS (GoogleTest) - Segmentation Module
 # ============================================================================

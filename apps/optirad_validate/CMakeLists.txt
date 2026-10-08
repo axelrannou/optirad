@@ -1,0 +1,11 @@
+add_executable(optirad_validate main.cpp)
+target_include_directories(optirad_validate PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(optirad_validate PRIVATE optirad_validation optirad_io optirad_dose optirad_geometry)
+
+add_executable(optirad_phantom phantom_main.cpp)
+target_include_directories(optirad_phantom PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(optirad_phantom PRIVATE optirad_validation)
+
+add_executable(optirad_convergence convergence_main.cpp)
+target_include_directories(optirad_convergence PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(optirad_convergence PRIVATE optirad_validation)

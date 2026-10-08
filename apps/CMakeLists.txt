@@ -1,5 +1,6 @@
 # CLI app (always built)
 add_subdirectory(optirad_cli)
+add_subdirectory(optirad_validate)
 
 # GUI app (only if optirad_gui was built)
 if(TARGET optirad_gui)

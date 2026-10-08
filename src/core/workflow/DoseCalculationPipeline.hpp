@@ -19,7 +19,7 @@ struct DoseCalcPipelineOptions {
     std::array<double, 3> resolution = {2.5, 2.5, 2.5};
     bool useCache = true;
     double absoluteThreshold = 1e-6;
-    double relativeThreshold = 0.01;   // fraction (0.01 = 1%)
+    double relativeThreshold = 1e-4;   // fraction (1e-4 = 0.01%)
     int numThreads = 0;                // 0 = all
 };
 

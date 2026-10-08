@@ -132,13 +132,16 @@ std::string DijSerializer::buildCacheKey(
     const std::string& patientName,
     int numBeams,
     double bixelWidth,
-    double doseResX)
+    double doseResX,
+    double relativeThreshold)
 {
     std::ostringstream oss;
     oss << patientName
         << "_" << numBeams << "beams"
         << "_bw" << std::fixed << std::setprecision(1) << bixelWidth
         << "_res" << std::fixed << std::setprecision(1) << doseResX << "mm"
+        << "_thr" << std::scientific << std::setprecision(0) << relativeThreshold
+        << "_e" << kEngineVersion
         << ".dij";
     return oss.str();
 }

@@ -15,8 +15,9 @@ struct DoseCalcOptions {
 
     /// Discard dose entries below this fraction of the bixel's max dose.
     /// Applied per-bixel after computing all voxel doses for that bixel.
-    /// 0.01 = keep only values >= 1% of max. Default 0.01.
-    double relativeThreshold = 0.01;
+    /// 1e-4 = keep only values >= 0.01% of max. Scatter tails of many bixels add up, so
+    /// 1% removes ~15% of the dose at depth (validated on the water phantom).
+    double relativeThreshold = 1e-4;
 
     /// Number of OpenMP threads. 0 = use all available (default).
     int numThreads = 0;

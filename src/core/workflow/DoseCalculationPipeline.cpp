@@ -35,7 +35,8 @@ DoseCalcPipelineResult DoseCalculationPipeline::run(
                 patientName,
                 static_cast<int>(stf.getCount()),
                 plan.getStfProperties().bixelWidth,
-                options.resolution[0]);
+                options.resolution[0],
+                options.relativeThreshold);
 
         if (DijSerializer::exists(cacheFile)) {
             Logger::info("Loading Dij from cache: " + cacheFile);
@@ -78,7 +79,8 @@ DoseCalcPipelineResult DoseCalculationPipeline::run(
                 patientName,
                 static_cast<int>(stf.getCount()),
                 plan.getStfProperties().bixelWidth,
-                options.resolution[0]);
+                options.resolution[0],
+                options.relativeThreshold);
         DijSerializer::save(*result.dij, cacheFile);
         Logger::info("Saved Dij to cache: " + cacheFile);
     }

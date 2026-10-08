@@ -333,11 +333,12 @@ void PlanningPanel::render() {
             ImGui::Text("Memory / Speed Options:");
 
             ImGui::SetNextItemWidth(120);
-            ImGui::InputFloat("Relative Threshold (%%)", &m_relativeThreshold, 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("Relative Threshold (%%)", &m_relativeThreshold, 0.0f, 0.0f, "%.4f");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Discard entries below this %% of each bixel's max dose.\n"
-                                  "Higher = less RAM, slightly less accurate.\n"
-                                  "Recommended: 1%%. Set 0 to disable.");
+                                  "Higher = less RAM, less accurate at depth.\n"
+                                  "1%% is too coarse (about -15%% dose at 10 cm).\n"
+                                  "Recommended: 0.01%%. Set 0 to disable.");
 
             ImGui::SetNextItemWidth(120);
             ImGui::InputFloat("Absolute Threshold", &m_absoluteThreshold, 0.0f, 0.0f, "%.1f");

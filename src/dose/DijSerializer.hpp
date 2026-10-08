@@ -42,13 +42,18 @@ public:
      * @param numBeams      Number of beams
      * @param bixelWidth    Bixel width in mm
      * @param doseResX      Dose grid resolution x (mm)
-     * @return Filename like "JOHN_DOE_90beams_bw5.0_res2.5mm.dij"
+     * @param relativeThreshold  Dij relative threshold (fraction)
+     * @return Filename like "JOHN_DOE_90beams_bw5.0_res2.5mm_thr1e-04_e2.dij"
      */
     static std::string buildCacheKey(
         const std::string& patientName,
         int numBeams,
         double bixelWidth,
-        double doseResX);
+        double doseResX,
+        double relativeThreshold = 0.0);
+
+    /// Bump whenever the dose engine changes the Dij values, so stale caches are not reused.
+    static constexpr int kEngineVersion = 2;
 
     /**
      * Get the default cache directory path.

@@ -71,7 +71,7 @@ private:
 
     // Dose calc options
     float m_doseResolution[3] = {2.5f, 2.5f, 2.5f};
-    float m_relativeThreshold = 1.0f;
+    float m_relativeThreshold = 0.01f;
     float m_absoluteThreshold = 1e-6f;
     int m_numThreads = 0;
 };

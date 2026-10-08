@@ -537,7 +537,7 @@ int doseCalc(const std::vector<std::string>& args, WorkflowState& state) {
     double doseResolution = 2.5;
     bool useCache = true;
     double absoluteThreshold = 1e-6;
-    double relativeThreshold = 0.01;
+    double relativeThreshold = 1e-4;
     int numThreads = 0;
 
     for (size_t i = 0; i < args.size(); ++i) {

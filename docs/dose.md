@@ -58,7 +58,7 @@ class IDoseEngine {
 ```cpp
 struct DoseCalcOptions {
     double absoluteThreshold = 1e-6;    // Minimum absolute dose to store (Gy)
-    double relativeThreshold = 0.01;    // Minimum relative dose fraction per bixel
+    double relativeThreshold = 1e-4;   // Minimum relative dose fraction per bixel
     int numThreads = 0;                 // 0 = use all available threads
 };
 ```
@@ -463,7 +463,7 @@ Used by the pencil beam engine for interpolating depth-dependent kernel values a
 ```cpp
 // Create engine
 auto engine = DoseEngineFactory::create("PencilBeam");
-engine->setOptions({.absoluteThreshold = 1e-6, .relativeThreshold = 0.01});
+engine->setOptions({.absoluteThreshold = 1e-6, .relativeThreshold = 1e-4});
 engine->setProgressCallback([](int beam, int total, const std::string& msg) {
     std::cout << "Beam " << beam << "/" << total << ": " << msg << "\n";
 });

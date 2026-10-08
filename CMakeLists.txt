@@ -25,6 +25,7 @@ add_subdirectory(src/io)
 add_subdirectory(src/dose)
 add_subdirectory(src/optimization)
 add_subdirectory(src/phsp)
+add_subdirectory(src/validation)
 
 # GUI (optional - only if dependencies found)
 add_subdirectory(src/gui)
