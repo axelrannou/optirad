@@ -10,6 +10,7 @@
 #include <string>
 #include <functional>
 #include <atomic>
+#include <stdexcept>
 
 namespace optirad {
 
@@ -43,6 +44,18 @@ public:
         const DoseInfluenceMatrix& dij,
         const std::vector<double>& weights,
         const Grid& grid) = 0;
+
+    /// Compute the dose of a weight vector directly (no Dij kept in memory), over all structure voxels.
+    /// Needed for the full dose cube when the Dij skips external voxels, and for deliverable dose.
+    virtual DoseMatrix calculateDoseDirect(
+        const Plan& plan,
+        const Stf& stf,
+        const PatientData& patientData,
+        const Grid& doseGrid,
+        const std::vector<double>& weights) {
+        (void)plan; (void)stf; (void)patientData; (void)doseGrid; (void)weights;
+        throw std::runtime_error("calculateDoseDirect is not supported by engine " + getName());
+    }
 
     /// Set progress callback for GUI/CLI progress reporting
     void setProgressCallback(DoseCalcProgressCallback cb) { m_progressCallback = std::move(cb); }

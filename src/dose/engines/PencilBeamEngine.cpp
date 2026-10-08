@@ -411,6 +411,67 @@ std::vector<double> PencilBeamEngine::calcBixelDose(
 }
 
 // ────────────────────────────────────────────────
+// collectDoseVoxels: dose-grid voxels covered by the structures
+// ────────────────────────────────────────────────
+std::vector<size_t> PencilBeamEngine::collectDoseVoxels(
+    const PatientData& patientData, const Grid& doseGrid, bool excludeExternal) const
+{
+    const auto& ctGrid = patientData.getGrid();
+    const auto* structSet = patientData.getStructureSet();
+
+    // mode: 0 = all structures, 1 = non-external only, 2 = external only
+    auto gather = [&](int mode) {
+        std::unordered_set<size_t> unique;
+        if (structSet) {
+            for (size_t s = 0; s < structSet->getCount(); ++s) {
+                const auto* structure = structSet->getStructure(s);
+                if (!structure) continue;
+                if (mode == 1 && structure->isExternal()) continue;
+                if (mode == 2 && !structure->isExternal()) continue;
+                const auto& voxels = structure->getVoxelIndices();
+                unique.insert(voxels.begin(), voxels.end());
+            }
+        }
+        std::vector<size_t> ct(unique.begin(), unique.end());
+        if (ct.empty()) return ct;
+
+        // Union of both CT→dose mappings: ObjectiveBuilder uses mapVoxelIndices, so every voxel it can
+        // reference must have a Dij row; resampleMaskNearestToGrid alone misses boundary voxels.
+        std::vector<size_t> voxels = Grid::resampleMaskNearestToGrid(ctGrid, doseGrid, ct);
+        const auto forward = Grid::mapVoxelIndices(ctGrid, doseGrid, ct);
+        voxels.insert(voxels.end(), forward.begin(), forward.end());
+        std::sort(voxels.begin(), voxels.end());
+        voxels.erase(std::unique(voxels.begin(), voxels.end()), voxels.end());
+        return voxels;
+    };
+
+    std::vector<size_t> voxels = gather(excludeExternal ? 1 : 0);
+    if (voxels.empty() && excludeExternal) {
+        Logger::warn("PencilBeamEngine: no non-external structure voxels; including the external structure.");
+        voxels = gather(0);
+    } else if (excludeExternal && m_options.externalSampleStep > 1) {
+        // Keep a coarse lattice of body voxels so global terms (the optimizer's hotspot penalty) still
+        // see the dose outside the structures.
+        const auto dims = doseGrid.getDimensions();
+        const size_t step = static_cast<size_t>(m_options.externalSampleStep);
+        for (size_t idx : gather(2)) {
+            const size_t i = idx % dims[0];
+            const size_t j = (idx / dims[0]) % dims[1];
+            const size_t k = idx / (dims[0] * dims[1]);
+            if (i % step == 0 && j % step == 0 && k % step == 0) voxels.push_back(idx);
+        }
+        std::sort(voxels.begin(), voxels.end());
+        voxels.erase(std::unique(voxels.begin(), voxels.end()), voxels.end());
+    }
+    if (voxels.empty()) {
+        Logger::warn("PencilBeamEngine: No structure voxels found. Using all dose grid voxels.");
+        voxels.resize(doseGrid.getNumVoxels());
+        std::iota(voxels.begin(), voxels.end(), 0);
+    }
+    return voxels;
+}
+
+// ────────────────────────────────────────────────
 // calculateDij: main dij computation loop
 // ────────────────────────────────────────────────
 DoseInfluenceMatrix PencilBeamEngine::calculateDij(
@@ -443,34 +504,7 @@ DoseInfluenceMatrix PencilBeamEngine::calculateDij(
         Logger::warn("PencilBeamEngine: No electron density volume. Using unit density.");
     }
 
-    // Collect union of all structure voxel indices (in CT grid), then map to dose grid
-    const auto& ctGrid = patientData.getGrid();
-    const auto* structSet = patientData.getStructureSet();
-    std::unordered_set<size_t> uniqueCtIndices;
-
-    if (structSet) {
-        for (size_t s = 0; s < structSet->getCount(); ++s) {
-            const auto* structure = structSet->getStructure(s);
-            if (!structure) continue;
-            const auto& voxels = structure->getVoxelIndices();
-            uniqueCtIndices.insert(voxels.begin(), voxels.end());
-        }
-    }
-
-    std::vector<size_t> ctIndicesVec(uniqueCtIndices.begin(), uniqueCtIndices.end());
-
-    // Map to dose grid voxel indices
-    std::vector<size_t> doseVoxelIndices;
-    if (!ctIndicesVec.empty()) {
-        doseVoxelIndices = Grid::resampleMaskNearestToGrid(ctGrid, doseGrid, ctIndicesVec);
-    }
-
-    if (doseVoxelIndices.empty()) {
-        // Fallback: use all voxels in dose grid
-        Logger::warn("PencilBeamEngine: No structure voxels found. Using all dose grid voxels.");
-        doseVoxelIndices.resize(doseGrid.getNumVoxels());
-        std::iota(doseVoxelIndices.begin(), doseVoxelIndices.end(), 0);
-    }
+    std::vector<size_t> doseVoxelIndices = collectDoseVoxels(patientData, doseGrid, opts.excludeExternal);
 
     // Count total bixels across all beams
     size_t totalBixels = stf.getTotalNumOfBixels();
@@ -484,6 +518,11 @@ DoseInfluenceMatrix PencilBeamEngine::calculateDij(
 
     // Allocate Dij
     DoseInfluenceMatrix dij(numDoseVoxels, totalBixels);
+    if (doseVoxelIndices.size() < numDoseVoxels) {
+        std::vector<uint8_t> mask(numDoseVoxels, 0);
+        for (size_t idx : doseVoxelIndices) mask[idx] = 1;
+        dij.setComputedRows(std::move(mask));
+    }
 
     // Precompute bixel offsets for each beam and ray
     // bixelOffsets[bi] = global bixel index where beam bi starts
@@ -547,9 +586,9 @@ DoseInfluenceMatrix PencilBeamEngine::calculateDij(
         #pragma omp parallel reduction(+:beamEntriesBefore,beamEntriesAfter)
         {
             // Thread-local COO buffers
-            std::vector<size_t> localRows;
-            std::vector<size_t> localCols;
-            std::vector<double> localVals;
+            std::vector<uint32_t> localRows;
+            std::vector<uint32_t> localCols;
+            std::vector<float>    localVals;
 
             #pragma omp for schedule(dynamic, 4)
             for (size_t ri = 0; ri < numRays; ++ri) {
@@ -581,9 +620,9 @@ DoseInfluenceMatrix PencilBeamEngine::calculateDij(
                 for (size_t vi = 0; vi < rayData.localIndices.size(); ++vi) {
                     if (bixelDose[vi] >= threshold) {
                         size_t voxelIdx = beamData.voxelIndices[rayData.localIndices[vi]];
-                        localRows.push_back(voxelIdx);
-                        localCols.push_back(bixelCol);
-                        localVals.push_back(bixelDose[vi]);
+                        localRows.push_back(static_cast<uint32_t>(voxelIdx));
+                        localCols.push_back(static_cast<uint32_t>(bixelCol));
+                        localVals.push_back(static_cast<float>(bixelDose[vi]));
                         beamEntriesAfter++;
                     }
                 }
@@ -596,6 +635,9 @@ DoseInfluenceMatrix PencilBeamEngine::calculateDij(
             }
         } // end parallel
 
+        // One CSR block per beam: only this beam's COO entries are ever held in memory.
+        dij.endBlock();
+
         totalEntriesBefore += beamEntriesBefore;
         totalEntriesAfter += beamEntriesAfter;
         
@@ -605,7 +647,7 @@ DoseInfluenceMatrix PencilBeamEngine::calculateDij(
         Logger::info("PencilBeamEngine: Beam " + std::to_string(bi + 1) +
             ": " + std::to_string(beamEntriesAfter) + " entries kept" +
             " (threshold removed " + std::to_string(100.0 - pctKept).substr(0, 5) + "%" +
-            ", COO size ~" + std::to_string(dij.getNumNonZeros() * 24 / (1024 * 1024)) + " MB)");
+            ", Dij size ~" + std::to_string(dij.getNumNonZeros() * 8 / (1024 * 1024)) + " MB total)");
     }
 
     // Finalize: convert to CSR sparse format
@@ -660,6 +702,106 @@ DoseMatrix PencilBeamEngine::calculateDose(
         }
     }
 
+    return dose;
+}
+
+// ────────────────────────────────────────────────
+// calculateDoseDirect: dose of a weight vector without storing a Dij
+// ────────────────────────────────────────────────
+DoseMatrix PencilBeamEngine::calculateDoseDirect(
+    const Plan& plan,
+    const Stf& stf,
+    const PatientData& patientData,
+    const Grid& doseGrid,
+    const std::vector<double>& weights)
+{
+    m_bixelWidth = plan.getStfProperties().bixelWidth;
+    initDoseCalc(plan, doseGrid);
+
+    int numThreads = 1;
+#ifdef _OPENMP
+    if (m_options.numThreads > 0) omp_set_num_threads(m_options.numThreads);
+    numThreads = omp_get_max_threads();
+#endif
+
+    const std::vector<size_t> voxels = collectDoseVoxels(patientData, doseGrid, false);
+    const size_t numVoxels = doseGrid.getNumVoxels();
+    const size_t numBeams = stf.getCount();
+
+    // Per-thread accumulators avoid atomics; allocated lazily by the owning thread.
+    std::vector<std::vector<double>> acc(static_cast<size_t>(numThreads));
+
+    size_t beamStart = 0;
+    for (size_t bi = 0; bi < numBeams; ++bi) {
+        const auto* beam = stf.getBeam(bi);
+        if (!beam) continue;
+        const size_t numRays = beam->getNumOfRays();
+
+        std::vector<size_t> rayBixelOff(numRays + 1, 0);
+        for (size_t ri = 0; ri < numRays; ++ri) {
+            const auto* ray = beam->getRay(ri);
+            rayBixelOff[ri + 1] = rayBixelOff[ri] + (ray ? ray->getNumOfBixels() : 0);
+        }
+        const size_t thisBeamStart = beamStart;
+        beamStart += rayBixelOff[numRays];
+
+        if (m_cancelFlag && m_cancelFlag->load()) {
+            Logger::warn("PencilBeamEngine: Cancelled by user.");
+            break;
+        }
+        if (m_progressCallback) {
+            m_progressCallback(static_cast<int>(bi), static_cast<int>(numBeams),
+                "Beam " + std::to_string(bi + 1) + "/" + std::to_string(numBeams));
+        }
+
+        bool anyWeight = false;
+        for (size_t ri = 0; ri < numRays && !anyWeight; ++ri) {
+            const size_t col = thisBeamStart + rayBixelOff[ri];
+            anyWeight = col < weights.size() && weights[col] > 0.0;
+        }
+        if (!anyWeight) continue;
+
+        BeamData beamData = initBeam(*beam, patientData, doseGrid, voxels);
+
+        #pragma omp parallel
+        {
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+            auto& local = acc[static_cast<size_t>(tid)];
+            if (local.empty()) local.assign(numVoxels, 0.0);
+
+            #pragma omp for schedule(dynamic, 4)
+            for (size_t ri = 0; ri < numRays; ++ri) {
+                const auto* ray = beam->getRay(ri);
+                if (!ray) continue;
+                const size_t col = thisBeamStart + rayBixelOff[ri];
+                const double w = col < weights.size() ? weights[col] : 0.0;
+                if (w <= 0.0) continue;
+
+                RayVoxelData rayData = initRay(*ray, *beam, beamData);
+                if (rayData.localIndices.empty()) continue;
+                const auto bixelDose = calcBixelDose(rayData, beamData, m_SAD);
+                for (size_t vi = 0; vi < bixelDose.size(); ++vi)
+                    local[beamData.voxelIndices[rayData.localIndices[vi]]] += w * bixelDose[vi];
+            }
+        }
+    }
+
+    DoseMatrix dose;
+    dose.setGrid(doseGrid);
+    dose.allocate();
+    double* out = dose.data();
+    for (const auto& local : acc) {
+        if (local.empty()) continue;
+        #pragma omp parallel for schedule(static)
+        for (size_t i = 0; i < numVoxels; ++i) out[i] += local[i];
+    }
+
+    if (m_progressCallback) {
+        m_progressCallback(static_cast<int>(numBeams), static_cast<int>(numBeams), "Done");
+    }
     return dose;
 }
 

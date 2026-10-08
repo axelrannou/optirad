@@ -19,6 +19,15 @@ struct DoseCalcOptions {
     /// 1% removes ~15% of the dose at depth (validated on the water phantom).
     double relativeThreshold = 1e-4;
 
+    /// Skip voxels that belong only to the external/body structure (saves memory).
+    /// Dose there is only available on a coarse lattice; use calculateDoseDirect() for the full cube.
+    bool excludeExternal = true;
+
+    /// With excludeExternal, keep every n-th voxel (per axis) of the body so dose-wide terms such as the
+    /// hotspot penalty still see the dose outside the structures. 1 = keep none. Changing it alters the Dij
+    /// content, so bump DijSerializer::kEngineVersion.
+    int externalSampleStep = 3;
+
     /// Number of OpenMP threads. 0 = use all available (default).
     int numThreads = 0;
 };

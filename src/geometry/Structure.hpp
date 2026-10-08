@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cctype>
 #include <string>
 #include <vector>
 #include <array>
@@ -68,6 +69,14 @@ public:
     
     /// Rasterize contours to voxel indices using the CT grid
     void rasterizeContours(const Grid& ctGrid);
+
+    /// True for the patient outline (RT-STRUCT type EXTERNAL, or a structure named BODY/EXTERNAL).
+    bool isExternal() const {
+        if (m_type == "EXTERNAL") return true;
+        std::string upper = m_name;
+        for (auto& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return upper == "BODY" || upper == "EXTERNAL" || upper == "CORPS";
+    }
 
     /// Check if this structure is a target (PTV, GTV, or CTV) based on name and type.
     bool isTarget() const {

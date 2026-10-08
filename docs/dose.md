@@ -59,6 +59,8 @@ class IDoseEngine {
 struct DoseCalcOptions {
     double absoluteThreshold = 1e-6;    // Minimum absolute dose to store (Gy)
     double relativeThreshold = 1e-4;   // Minimum relative dose fraction per bixel
+    bool excludeExternal = true;        // no Dij rows for body-only voxels (coarse lattice kept)
+    int externalSampleStep = 3;         // keep every n-th body voxel per axis
     int numThreads = 0;                 // 0 = use all available threads
 };
 ```
@@ -142,12 +144,13 @@ class DoseInfluenceMatrix {
     // Phase 1: COO construction
     void setValue(size_t voxel, size_t bixel, double value);
     void reserveNonZeros(size_t nnz);
-    void appendBatch(const std::vector<size_t>& rows,
-                     const std::vector<size_t>& cols,
-                     const std::vector<double>& vals);
+    void appendBatch(const std::vector<uint32_t>& rows,
+                     const std::vector<uint32_t>& cols,
+                     const std::vector<float>& vals);
+    void endBlock();                   // close pending COO into one CSR block (one per beam)
 
     // Phase transition
-    void finalize();                   // COO → CSR conversion
+    void finalize();                   // closes any pending block, makes read-only
     bool isFinalized() const;
 
     // Phase 2: CSR access
@@ -164,10 +167,9 @@ class DoseInfluenceMatrix {
     size_t getNumBixels() const;
     size_t getNumNonZeros() const;
 
-    // Direct CSR data access (for serialization)
-    const std::vector<double>&  getValues() const;
-    const std::vector<size_t>&  getColIndices() const;
-    const std::vector<size_t>&  getRowPtrs() const;
+    // Block access (for serialization)
+    const std::vector<Block>& getBlocks() const;   // Block = {rowPtrs, colIndices (uint32), values (float)}
+    void addBlock(Block block);
     void loadCSR(std::vector<size_t> rowPtrs,
                  std::vector<size_t> colIndices,
                  std::vector<double>  values);
@@ -180,9 +182,11 @@ class DoseInfluenceMatrix {
 - Triplets `(row, col, value)` appended in arbitrary order
 - Thread-safe batch append via `appendBatch()`
 
-**CSR (Compressed Sparse Row) format** — Used for computation:
-- `rowPtrs[i]` = start of row `i` in `colIndices`/`values`
-- Efficient row-wise access for `computeDose()` and transpose product
+**CSR (Compressed Sparse Row) blocks** — Used for computation:
+- The engine closes one block per beam (`endBlock()`), so only one beam's COO entries are in memory at a time
+- `rowPtrs[i]` = start of row `i` in `colIndices`/`values`; columns are global bixel indices
+- 8 bytes per non-zero (uint32 column + float value); sums are accumulated in double
+- `computeDose()` and the transpose product loop over the blocks
 
 #### Key Operations
 
@@ -214,13 +218,13 @@ class DijSerializer {
 };
 ```
 
-**Binary format (v2):**
+**Binary format (v3):**
 - Magic: `"ODIJ"` (4 bytes)
-- Version: `2` (uint32)
-- Dimensions: numVoxels, numBixels, numNonZeros (uint64 each)
-- CSR arrays: rowPtrs, colIndices, values (raw binary)
+- Version: `3` (uint32)
+- Dimensions: numVoxels, numBixels, numBlocks (uint64 each)
+- Per block: nnz (uint64), rowPtrs (uint32), colIndices (uint32), values (float)
 
-**Cache key format:** `<PatientName>_<numBeams>beams_bw<bixelWidth>_res<resolution>mm.dij`
+**Cache key format:** `<PatientName>_<numBeams>beams_bw<bixelWidth>_res<resolution>mm_thr<relativeThreshold>_e<engineVersion>.dij`
 
 Example: `DOE^JOHN_90beams_bw7.0_res2.5mm.dij`
 

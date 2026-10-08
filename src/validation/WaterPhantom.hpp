@@ -24,12 +24,17 @@ struct WaterPhantomConfig {
     /// Bixel weight as a function of the bixel centre (x, z) at the isocenter plane [mm].
     /// One dose is computed per entry from the same Dij. Empty = uniform weights of 1.
     std::vector<std::function<double(double, double)>> fluences;
+
+    bool excludeExternal = false;   // Dij rows only for the target (body skipped), as in the planning default
+    bool computeDirect   = false;   // also compute each fluence with calculateDoseDirect()
 };
 
 struct WaterPhantomResult {
     std::shared_ptr<DoseMatrix> dose;                  // first entry of `doses`
     std::vector<std::shared_ptr<DoseMatrix>> doses;    // one per configured fluence
     double surfaceY = 0.0;                             // y of the water surface [mm]
+    std::vector<std::shared_ptr<DoseMatrix>> directDoses;  // empty unless computeDirect
+    bool dijHasAllRows = true;
     size_t dijNonZeros = 0;
     double dijSeconds = 0.0;
 };

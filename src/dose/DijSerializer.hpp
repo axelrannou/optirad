@@ -8,15 +8,13 @@ namespace optirad {
 /**
  * Serializes/deserializes DoseInfluenceMatrix to/from binary files.
  * 
- * Binary format (v2):
+ * Binary format (v4):
  *   - Magic bytes: "ODIJ" (4 bytes)
- *   - Version: uint32_t (2)
- *   - numVoxels: uint64_t
- *   - numBixels: uint64_t
- *   - numNonZeros: uint64_t
- *   - rowPtrs: (numVoxels+1) x uint64_t
- *   - colIndices: numNonZeros x uint64_t
- *   - values: numNonZeros x double
+ *   - Version: uint32_t (3)
+ *   - numVoxels, numBixels, numBlocks: uint64_t
+ *   - per block: nnz (uint64_t), rowPtrs (numVoxels+1) x uint32_t,
+ *                colIndices nnz x uint32_t, values nnz x float
+ *   - computed-row mask: size (uint64_t, 0 = all rows) followed by size x uint8_t
  */
 class DijSerializer {
 public:
@@ -43,17 +41,19 @@ public:
      * @param bixelWidth    Bixel width in mm
      * @param doseResX      Dose grid resolution x (mm)
      * @param relativeThreshold  Dij relative threshold (fraction)
-     * @return Filename like "JOHN_DOE_90beams_bw5.0_res2.5mm_thr1e-04_e2.dij"
+     * @param excludeExternal    Body-only voxels were skipped
+     * @return Filename like "JOHN_DOE_90beams_bw5.0_res2.5mm_thr1e-04_noext_e5.dij"
      */
     static std::string buildCacheKey(
         const std::string& patientName,
         int numBeams,
         double bixelWidth,
         double doseResX,
-        double relativeThreshold = 0.0);
+        double relativeThreshold = 0.0,
+        bool excludeExternal = false);
 
     /// Bump whenever the dose engine changes the Dij values, so stale caches are not reused.
-    static constexpr int kEngineVersion = 2;
+    static constexpr int kEngineVersion = 5;
 
     /**
      * Get the default cache directory path.

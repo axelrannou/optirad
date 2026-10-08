@@ -68,3 +68,62 @@ TEST_F(WaterPhantomBenchmark, FieldDivergesWithDepth) {
 }
 
 } // namespace optirad::tests
+
+namespace optirad::tests {
+
+namespace {
+
+WaterPhantomConfig smallConfig() {
+    WaterPhantomConfig c;
+    c.resolutionMm = 5.0;
+    c.bixelWidthMm = 5.0;
+    c.fieldSizeMm = 40.0;
+    c.lateralHalfSizeMm = 60.0;
+    c.depthMm = 150.0;
+    c.relativeThreshold = 0.0;
+    c.computeDirect = true;
+    return c;
+}
+
+} // namespace
+
+// The direct dose must equal Dij x weights (up to the float storage of the Dij).
+TEST(DirectDoseTest, MatchesDijDose) {
+    const auto r = WaterPhantom::compute(smallConfig());
+    ASSERT_TRUE(r.dijHasAllRows);
+    ASSERT_EQ(r.directDoses.size(), 1u);
+    const auto& a = *r.doses[0];
+    const auto& b = *r.directDoses[0];
+    ASSERT_EQ(a.size(), b.size());
+    const double max = a.getMax();
+    ASSERT_GT(max, 0.0);
+    for (size_t i = 0; i < a.size(); ++i) EXPECT_NEAR(a.data()[i], b.data()[i], 1e-5 * max);
+}
+
+// Skipping the body drops Dij rows, but the direct dose still covers the whole phantom.
+TEST(DirectDoseTest, ExternalSkippedInDijButNotInDirectDose) {
+    auto cfg = smallConfig();
+    cfg.excludeExternal = true;
+    const auto restricted = WaterPhantom::compute(cfg);
+    cfg.excludeExternal = false;
+    const auto full = WaterPhantom::compute(cfg);
+
+    EXPECT_FALSE(restricted.dijHasAllRows);
+    EXPECT_LT(restricted.dijNonZeros, full.dijNonZeros);
+
+    // Direct dose does not depend on the Dij restriction.
+    const auto& d = *restricted.directDoses[0];
+    const auto& f = *full.doses[0];
+    const double max = f.getMax();
+    for (size_t i = 0; i < f.size(); ++i) EXPECT_NEAR(d.data()[i], f.data()[i], 1e-5 * max);
+
+    // Where the restricted Dij has rows, it agrees with the full one.
+    const auto& r = *restricted.doses[0];
+    size_t covered = 0;
+    for (size_t i = 0; i < r.size(); ++i)
+        if (r.data()[i] > 0.0) { ++covered; EXPECT_NEAR(r.data()[i], f.data()[i], 1e-5 * max); }
+    EXPECT_GT(covered, 0u);
+    EXPECT_LT(covered, f.size());
+}
+
+} // namespace optirad::tests

@@ -14,7 +14,22 @@
 namespace optirad {
 
 static constexpr char MAGIC[4] = {'O', 'D', 'I', 'J'};
-static constexpr uint32_t VERSION = 2; // v2: always CSR, uses direct arrays
+static constexpr uint32_t VERSION = 4; // v4: adds the computed-row mask to v3 (CSR column blocks)
+
+namespace {
+
+template <typename T>
+void writeVec(std::ofstream& ofs, const std::vector<T>& v) {
+    ofs.write(reinterpret_cast<const char*>(v.data()), static_cast<std::streamsize>(v.size() * sizeof(T)));
+}
+
+template <typename T>
+void readVec(std::ifstream& ifs, std::vector<T>& v, size_t n) {
+    v.resize(n);
+    ifs.read(reinterpret_cast<char*>(v.data()), static_cast<std::streamsize>(n * sizeof(T)));
+}
+
+} // namespace
 
 bool DijSerializer::save(const DoseInfluenceMatrix& dij, const std::string& filePath) {
     if (!dij.isFinalized()) {
@@ -33,39 +48,38 @@ bool DijSerializer::save(const DoseInfluenceMatrix& dij, const std::string& file
         return false;
     }
 
-    // Header
+    // Header: magic, version, numVoxels, numBixels, numBlocks
     ofs.write(MAGIC, 4);
     ofs.write(reinterpret_cast<const char*>(&VERSION), sizeof(uint32_t));
 
-    uint64_t numVoxels   = dij.getNumVoxels();
-    uint64_t numBixels   = dij.getNumBixels();
-    uint64_t numNonZeros = dij.getNumNonZeros();
+    const uint64_t numVoxels = dij.getNumVoxels();
+    const uint64_t numBixels = dij.getNumBixels();
+    const uint64_t numBlocks = dij.getBlocks().size();
+    ofs.write(reinterpret_cast<const char*>(&numVoxels), sizeof(uint64_t));
+    ofs.write(reinterpret_cast<const char*>(&numBixels), sizeof(uint64_t));
+    ofs.write(reinterpret_cast<const char*>(&numBlocks), sizeof(uint64_t));
 
-    ofs.write(reinterpret_cast<const char*>(&numVoxels),   sizeof(uint64_t));
-    ofs.write(reinterpret_cast<const char*>(&numBixels),   sizeof(uint64_t));
-    ofs.write(reinterpret_cast<const char*>(&numNonZeros), sizeof(uint64_t));
-
-    // Write CSR arrays directly from the matrix
-    const auto& rowPtrs    = dij.getRowPtrs();
-    const auto& colIndices = dij.getColIndices();
-    const auto& values     = dij.getValues();
-
-    // rowPtrs: (numVoxels+1) x uint64_t
-    for (size_t i = 0; i <= numVoxels; ++i) {
-        uint64_t v = rowPtrs[i];
-        ofs.write(reinterpret_cast<const char*>(&v), sizeof(uint64_t));
+    for (const auto& block : dij.getBlocks()) {
+        const uint64_t nnz = block.values.size();
+        ofs.write(reinterpret_cast<const char*>(&nnz), sizeof(uint64_t));
+        writeVec(ofs, block.rowPtrs);
+        writeVec(ofs, block.colIndices);
+        writeVec(ofs, block.values);
     }
-    // colIndices: nnz x uint64_t
-    for (size_t i = 0; i < numNonZeros; ++i) {
-        uint64_t c = colIndices[i];
-        ofs.write(reinterpret_cast<const char*>(&c), sizeof(uint64_t));
+
+    const uint64_t maskSize = dij.getRowMask().size();
+    ofs.write(reinterpret_cast<const char*>(&maskSize), sizeof(uint64_t));
+    writeVec(ofs, dij.getRowMask());
+
+    if (!ofs) {
+        Logger::error("DijSerializer: Write failed (disk full?): " + filePath);
+        return false;
     }
-    // values: nnz x double
-    ofs.write(reinterpret_cast<const char*>(values.data()), numNonZeros * sizeof(double));
 
     Logger::info("DijSerializer: Saved dij to " + filePath +
                  " (" + std::to_string(numVoxels) + "x" + std::to_string(numBixels) +
-                 ", " + std::to_string(numNonZeros) + " nnz)");
+                 ", " + std::to_string(dij.getNumNonZeros()) + " nnz, " +
+                 std::to_string(numBlocks) + " blocks)");
     return true;
 }
 
@@ -90,37 +104,37 @@ DoseInfluenceMatrix DijSerializer::load(const std::string& filePath) {
                                  std::to_string(VERSION) + ")");
     }
 
-    uint64_t numVoxels, numBixels, numNonZeros;
-    ifs.read(reinterpret_cast<char*>(&numVoxels),   sizeof(uint64_t));
-    ifs.read(reinterpret_cast<char*>(&numBixels),   sizeof(uint64_t));
-    ifs.read(reinterpret_cast<char*>(&numNonZeros), sizeof(uint64_t));
+    uint64_t numVoxels, numBixels, numBlocks;
+    ifs.read(reinterpret_cast<char*>(&numVoxels), sizeof(uint64_t));
+    ifs.read(reinterpret_cast<char*>(&numBixels), sizeof(uint64_t));
+    ifs.read(reinterpret_cast<char*>(&numBlocks), sizeof(uint64_t));
 
-    // Read CSR arrays
-    std::vector<size_t> rowPtrs(numVoxels + 1);
-    for (size_t i = 0; i <= numVoxels; ++i) {
-        uint64_t v;
-        ifs.read(reinterpret_cast<char*>(&v), sizeof(uint64_t));
-        rowPtrs[i] = static_cast<size_t>(v);
-    }
-
-    std::vector<size_t> colIndices(numNonZeros);
-    for (size_t i = 0; i < numNonZeros; ++i) {
-        uint64_t c;
-        ifs.read(reinterpret_cast<char*>(&c), sizeof(uint64_t));
-        colIndices[i] = static_cast<size_t>(c);
-    }
-
-    std::vector<double> values(numNonZeros);
-    ifs.read(reinterpret_cast<char*>(values.data()), numNonZeros * sizeof(double));
-
-    // Build matrix directly from CSR (no dense allocation)
     DoseInfluenceMatrix dij;
     dij.setDimensions(numVoxels, numBixels);
-    dij.loadCSR(std::move(rowPtrs), std::move(colIndices), std::move(values));
+
+    for (uint64_t b = 0; b < numBlocks; ++b) {
+        uint64_t nnz;
+        ifs.read(reinterpret_cast<char*>(&nnz), sizeof(uint64_t));
+        DoseInfluenceMatrix::Block block;
+        readVec(ifs, block.rowPtrs, numVoxels + 1);
+        readVec(ifs, block.colIndices, nnz);
+        readVec(ifs, block.values, nnz);
+        if (!ifs) throw std::runtime_error("DijSerializer: Truncated file: " + filePath);
+        dij.addBlock(std::move(block));
+    }
+
+    uint64_t maskSize = 0;
+    ifs.read(reinterpret_cast<char*>(&maskSize), sizeof(uint64_t));
+    if (maskSize > 0) {
+        std::vector<uint8_t> mask;
+        readVec(ifs, mask, maskSize);
+        if (!ifs) throw std::runtime_error("DijSerializer: Truncated row mask: " + filePath);
+        dij.setComputedRows(std::move(mask));
+    }
 
     Logger::info("DijSerializer: Loaded dij from " + filePath +
                  " (" + std::to_string(numVoxels) + "x" + std::to_string(numBixels) +
-                 ", " + std::to_string(numNonZeros) + " nnz)");
+                 ", " + std::to_string(dij.getNumNonZeros()) + " nnz)");
     return dij;
 }
 
@@ -133,7 +147,8 @@ std::string DijSerializer::buildCacheKey(
     int numBeams,
     double bixelWidth,
     double doseResX,
-    double relativeThreshold)
+    double relativeThreshold,
+    bool excludeExternal)
 {
     std::ostringstream oss;
     oss << patientName
@@ -141,6 +156,7 @@ std::string DijSerializer::buildCacheKey(
         << "_bw" << std::fixed << std::setprecision(1) << bixelWidth
         << "_res" << std::fixed << std::setprecision(1) << doseResX << "mm"
         << "_thr" << std::scientific << std::setprecision(0) << relativeThreshold
+        << (excludeExternal ? "_noext" : "")
         << "_e" << kEngineVersion
         << ".dij";
     return oss.str();

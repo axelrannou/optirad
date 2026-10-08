@@ -429,7 +429,8 @@ void OptimizationPanel::render() {
                             std::lock_guard<std::mutex> lock(m_iterMutex);
                             m_iterationLog.push_back(info);
                         },
-                        m_state.stf ? m_state.stf.get() : nullptr);
+                        m_state.stf ? m_state.stf.get() : nullptr,
+                        m_state.plan.get());
 
                     m_optStatusMessage = (m_pipelineResult.converged ? "Converged" : "Max iter reached") +
                         std::string(" in ") + std::to_string(m_pipelineResult.iterations) +

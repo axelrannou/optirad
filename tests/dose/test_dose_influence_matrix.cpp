@@ -80,7 +80,7 @@ TEST(DoseInfluenceMatrixTest, FinalizeEmpty) {
     dij.finalize(); // no entries
     EXPECT_TRUE(dij.isFinalized());
     EXPECT_EQ(dij.getNumNonZeros(), 0u);
-    EXPECT_EQ(dij.getRowPtrs().size(), 11u);
+    EXPECT_EQ(dij.getBlocks().at(0).rowPtrs.size(), 11u);
 }
 
 TEST(DoseInfluenceMatrixTest, FinalizeProducesValidCSR) {
@@ -98,7 +98,7 @@ TEST(DoseInfluenceMatrixTest, FinalizeProducesValidCSR) {
     EXPECT_TRUE(dij.isFinalized());
     EXPECT_EQ(dij.getNumNonZeros(), 4u);
 
-    const auto& rowPtrs = dij.getRowPtrs();
+    const auto& rowPtrs = dij.getBlocks().at(0).rowPtrs;
     EXPECT_EQ(rowPtrs.size(), 5u);
     EXPECT_EQ(rowPtrs[0], 0u); // row 0 starts at 0
     EXPECT_EQ(rowPtrs[1], 1u); // row 1 starts at 1
@@ -261,8 +261,8 @@ TEST(DoseInfluenceMatrixTest, LargeSparseDoesNotOOM) {
     dij.finalize();
 
     EXPECT_EQ(dij.getNumNonZeros(), 5000u);
-    EXPECT_DOUBLE_EQ(dij.getValue(0, 0), 0.01);
-    EXPECT_DOUBLE_EQ(dij.getValue(200, 1), 0.02);
+    EXPECT_NEAR(dij.getValue(0, 0), 0.01, 1e-9);  // float storage
+    EXPECT_NEAR(dij.getValue(200, 1), 0.02, 1e-9);
 
     // Compute dose with unit weights
     std::vector<double> weights(numBixels, 1.0);
@@ -270,7 +270,7 @@ TEST(DoseInfluenceMatrixTest, LargeSparseDoesNotOOM) {
     EXPECT_EQ(dose.size(), numVoxels);
 
     // Verify one known entry
-    EXPECT_DOUBLE_EQ(dose[0], 0.01);
+    EXPECT_NEAR(dose[0], 0.01, 1e-9);
 }
 
 // ============================================================================
@@ -297,7 +297,7 @@ TEST(DoseInfluenceMatrixTest, ConstOperatorWorks) {
     dij.finalize();
 
     const DoseInfluenceMatrix& cdij = dij;
-    EXPECT_DOUBLE_EQ(cdij(2, 3), 7.7);
+    EXPECT_FLOAT_EQ(static_cast<float>(cdij(2, 3)), 7.7f);  // values are stored as float
     EXPECT_DOUBLE_EQ(cdij(0, 0), 0.0);
 }
 

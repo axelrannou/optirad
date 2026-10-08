@@ -142,3 +142,29 @@ TEST_F(DijSerializerTest, BuildCacheKeyVariesWithParams) {
 }
 
 } // namespace optirad::tests
+
+namespace optirad::tests {
+
+TEST_F(DijSerializerTest, ComputedRowMaskRoundTrip) {
+    DoseInfluenceMatrix dij(6, 2);
+    dij.setValue(1, 0, 2.0);
+    dij.setValue(4, 1, 3.0);
+    dij.finalize();
+    dij.setComputedRows({0, 1, 0, 0, 1, 0});
+
+    const std::string path = tmpPath("mask.dij");
+    ASSERT_TRUE(DijSerializer::save(dij, path));
+    auto loaded = DijSerializer::load(path);
+
+    EXPECT_FALSE(loaded.hasAllRows());
+    EXPECT_TRUE(loaded.isRowComputed(1));
+    EXPECT_FALSE(loaded.isRowComputed(2));
+    EXPECT_TRUE(loaded.isRowComputed(4));
+}
+
+TEST(DijCacheKeyTest, ExternalFlagChangesKey) {
+    EXPECT_NE(DijSerializer::buildCacheKey("A", 1, 5.0, 2.5, 1e-4, true),
+              DijSerializer::buildCacheKey("A", 1, 5.0, 2.5, 1e-4, false));
+}
+
+} // namespace optirad::tests

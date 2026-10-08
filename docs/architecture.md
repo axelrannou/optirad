@@ -91,7 +91,8 @@ auto optimizer = OptimizerFactory::create("LBFGS");
 
 The dose influence matrix uses a two-phase construction:
 1. **Build phase (COO):** Threads call `appendBatch()` with (row, col, value) triplets — lock-free accumulation.
-2. **Finalize phase (CSR):** `finalize()` converts to compressed sparse row format for efficient matrix-vector products.
+2. **Per-beam blocks (CSR):** `endBlock()` converts each beam's triplets to a compressed sparse row block (uint32 columns, float values) and frees the COO memory.
+3. **Finalize:** `finalize()` makes the matrix read-only; matrix-vector products run over the blocks.
 
 ### Pipeline Pattern
 

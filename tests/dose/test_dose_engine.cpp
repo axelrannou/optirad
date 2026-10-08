@@ -109,9 +109,10 @@ TEST(PencilBeamEngineTest, CalculateDoseFromDij) {
     // Voxel 0: 1.0*10 + 0.3*5 = 11.5
     // Voxel 1: 0.5*10 + 0*5 = 5.0
     // Voxel 7: 0*10 + 2.0*5 = 10.0
-    EXPECT_NEAR(dm.at(0, 0, 0), 11.5, 1e-10);
-    EXPECT_NEAR(dm.at(1, 0, 0), 5.0, 1e-10);
-    EXPECT_NEAR(dm.at(1, 1, 1), 10.0, 1e-10);
+    // Dij values are stored as float, so allow ~1e-7 relative error.
+    EXPECT_NEAR(dm.at(0, 0, 0), 11.5, 1e-6);
+    EXPECT_NEAR(dm.at(1, 0, 0), 5.0, 1e-6);
+    EXPECT_NEAR(dm.at(1, 1, 1), 10.0, 1e-6);
 }
 
 } // namespace optirad::tests

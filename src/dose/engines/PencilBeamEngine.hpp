@@ -41,7 +41,19 @@ public:
         const std::vector<double>& weights,
         const Grid& grid) override;
 
+    DoseMatrix calculateDoseDirect(
+        const Plan& plan,
+        const Stf& stf,
+        const PatientData& patientData,
+        const Grid& doseGrid,
+        const std::vector<double>& weights) override;
+
 private:
+    /// Dose-grid voxels (flat indices) inside the structures; optionally without external-only voxels.
+    /// Falls back to every voxel when no structure voxels exist.
+    std::vector<size_t> collectDoseVoxels(const PatientData& patientData, const Grid& doseGrid,
+                                          bool excludeExternal) const;
+
     // ── Initialization ──
     void initDoseCalc(const Plan& plan, const Grid& doseGrid);
 

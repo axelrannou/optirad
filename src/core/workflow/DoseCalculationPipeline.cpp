@@ -36,7 +36,8 @@ DoseCalcPipelineResult DoseCalculationPipeline::run(
                 static_cast<int>(stf.getCount()),
                 plan.getStfProperties().bixelWidth,
                 options.resolution[0],
-                options.relativeThreshold);
+                options.relativeThreshold,
+                options.excludeExternal);
 
         if (DijSerializer::exists(cacheFile)) {
             Logger::info("Loading Dij from cache: " + cacheFile);
@@ -63,6 +64,7 @@ DoseCalcPipelineResult DoseCalculationPipeline::run(
     opts.absoluteThreshold = options.absoluteThreshold;
     opts.relativeThreshold = options.relativeThreshold;
     opts.numThreads = options.numThreads;
+    opts.excludeExternal = options.excludeExternal;
     engine->setOptions(opts);
 
     auto dij = engine->calculateDij(plan, stf, patientData, *result.doseGrid);
@@ -80,7 +82,8 @@ DoseCalcPipelineResult DoseCalculationPipeline::run(
                 static_cast<int>(stf.getCount()),
                 plan.getStfProperties().bixelWidth,
                 options.resolution[0],
-                options.relativeThreshold);
+                options.relativeThreshold,
+                options.excludeExternal);
         DijSerializer::save(*result.dij, cacheFile);
         Logger::info("Saved Dij to cache: " + cacheFile);
     }

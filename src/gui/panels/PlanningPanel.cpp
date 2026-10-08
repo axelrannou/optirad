@@ -340,6 +340,13 @@ void PlanningPanel::render() {
                                   "1%% is too coarse (about -15%% dose at 10 cm).\n"
                                   "Recommended: 0.01%%. Set 0 to disable.");
 
+            ImGui::Checkbox("Skip external/body voxels", &m_excludeExternal);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("No Dij rows for voxels that are only in the body outline.\n"
+                                  "Saves a lot of RAM; the final dose cube is recomputed\n"
+                                  "directly after optimization. Objectives on the body\n"
+                                  "structure will not work with this option.");
+
             ImGui::SetNextItemWidth(120);
             ImGui::InputFloat("Absolute Threshold", &m_absoluteThreshold, 0.0f, 0.0f, "%.1f");
             if (ImGui::IsItemHovered())
@@ -405,6 +412,7 @@ void PlanningPanel::render() {
                             static_cast<double>(m_doseResolution[2])};
                         opts.absoluteThreshold = static_cast<double>(m_absoluteThreshold);
                         opts.relativeThreshold = static_cast<double>(m_relativeThreshold) / 100.0;
+                        opts.excludeExternal = m_excludeExternal;
                         opts.numThreads = m_numThreads;
 
                         auto result = DoseCalculationPipeline::run(

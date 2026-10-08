@@ -27,6 +27,9 @@ public:
     /// When set, these are used instead of m_structure->getVoxelIndices().
     void setVoxelIndices(const std::vector<size_t>& indices);
 
+    /// Dose-grid indices set via setVoxelIndices() (empty if none).
+    const std::vector<size_t>& getMappedIndices() const { return m_mappedIndices; }
+
 protected:
     /// Return the voxel indices to iterate over.
     /// Uses m_mappedIndices if non-empty, otherwise falls back to m_structure.

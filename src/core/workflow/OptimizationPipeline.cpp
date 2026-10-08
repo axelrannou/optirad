@@ -82,7 +82,8 @@ static OptimizationPipelineResult runImpl(
     const PatientData& patientData,
     const Grid& doseGrid,
     IterationCallback iterCallback,
-    const Stf* stf) {
+    const Stf* stf,
+    const Plan* plan) {
 
     OptimizationPipelineResult result;
 
@@ -94,6 +95,20 @@ static OptimizationPipelineResult runImpl(
     Logger::info("OptimizationPipeline: " + std::to_string(objectives.ptrs.size()) +
                  " objectives, bixels=" + std::to_string(dij.getNumBixels()) +
                  " voxels=" + std::to_string(dij.getNumVoxels()));
+
+    // Objectives on voxels without Dij rows would silently see zero dose.
+    if (!dij.hasAllRows()) {
+        for (const auto* obj : objectives.ptrs) {
+            const auto& idx = obj->getMappedIndices();
+            size_t missing = 0;
+            for (size_t v : idx) if (v < dij.getNumVoxels() && !dij.isRowComputed(v)) ++missing;
+            if (missing > 0)
+                Logger::warn("OptimizationPipeline: objective '" + obj->getName() + "' has " +
+                             std::to_string(missing) + "/" + std::to_string(idx.size()) +
+                             " voxels without Dij rows (external/body skipped); recompute the Dij "
+                             "with the external structure included.");
+        }
+    }
 
     auto optimizer = OptimizerFactory::create("LBFGS");
     optimizer->setMaxIterations(config.maxIterations);
@@ -146,8 +161,17 @@ static OptimizationPipelineResult runImpl(
 
     // Forward dose computation
     auto engine = DoseEngineFactory::create("PencilBeam");
-    auto dose = engine->calculateDose(dij, result.weights, doseGrid);
-    result.doseResult = std::make_shared<DoseMatrix>(std::move(dose));
+    if (!dij.hasAllRows() && plan && stf) {
+        // The Dij skips external voxels; recompute the full cube directly.
+        result.doseResult = std::make_shared<DoseMatrix>(
+            engine->calculateDoseDirect(*plan, *stf, patientData, doseGrid, result.weights));
+    } else {
+        if (!dij.hasAllRows())
+            Logger::warn("OptimizationPipeline: Dij skips external voxels and no plan/STF was given; "
+                         "dose outside the structures is zero.");
+        result.doseResult = std::make_shared<DoseMatrix>(
+            engine->calculateDose(dij, result.weights, doseGrid));
+    }
 
     // Plan analysis
     result.stats = PlanAnalysis::computeStats(
@@ -162,13 +186,14 @@ OptimizationPipelineResult OptimizationPipeline::run(
     const ObjectiveProtocol& protocol,
     const PatientData& patientData,
     const Grid& doseGrid,
-    const Stf* stf) {
+    const Stf* stf,
+    const Plan* plan) {
 
     const auto& ctGrid = patientData.getGrid();
     auto objectives = ObjectiveBuilder::build(
         protocol, patientData, ctGrid, doseGrid, config.targetDose);
 
-    return runImpl(dij, config, std::move(objectives), patientData, doseGrid, nullptr, stf);
+    return runImpl(dij, config, std::move(objectives), patientData, doseGrid, nullptr, stf, plan);
 }
 
 OptimizationPipelineResult OptimizationPipeline::runWithObjectives(
@@ -178,9 +203,10 @@ OptimizationPipelineResult OptimizationPipeline::runWithObjectives(
     const PatientData& patientData,
     const Grid& doseGrid,
     IterationCallback iterCallback,
-    const Stf* stf) {
+    const Stf* stf,
+    const Plan* plan) {
 
-    return runImpl(dij, config, std::move(objectives), patientData, doseGrid, std::move(iterCallback), stf);
+    return runImpl(dij, config, std::move(objectives), patientData, doseGrid, std::move(iterCallback), stf, plan);
 }
 
 } // namespace optirad

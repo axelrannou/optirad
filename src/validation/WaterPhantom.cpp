@@ -79,6 +79,7 @@ WaterPhantomResult WaterPhantom::compute(const WaterPhantomConfig& cfg) {
     opts.useCache = false;
     opts.relativeThreshold = cfg.relativeThreshold;
     opts.absoluteThreshold = 0.0;
+    opts.excludeExternal = cfg.excludeExternal;
     const auto t0 = std::chrono::steady_clock::now();
     auto dijRes = DoseCalculationPipeline::run(*built.plan, *built.stf, *patient, opts);
     const auto t1 = std::chrono::steady_clock::now();
@@ -100,9 +101,13 @@ WaterPhantomResult WaterPhantom::compute(const WaterPhantomConfig& cfg) {
         }
         out.doses.push_back(std::make_shared<DoseMatrix>(
             engine->calculateDose(*dijRes.dij, weights, *dijRes.doseGrid)));
+        if (cfg.computeDirect)
+            out.directDoses.push_back(std::make_shared<DoseMatrix>(
+                engine->calculateDoseDirect(*built.plan, *built.stf, *patient, *dijRes.doseGrid, weights)));
     }
     out.dose = out.doses.front();
     out.dijNonZeros = dijRes.dij->getNumNonZeros();
+    out.dijHasAllRows = dijRes.dij->hasAllRows();
     out.dijSeconds = std::chrono::duration<double>(t1 - t0).count();
     out.surfaceY = origin[1];
     return out;

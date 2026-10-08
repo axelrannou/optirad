@@ -60,7 +60,8 @@ void printUsage(const char* progName) {
               << "  --bixel-width <mm>               Bixel width (default: 7)\n\n"
               << "Dose calc options:\n"
               << "  --dose-resolution <mm>           Dose grid resolution (default: 2.5)\n"
-              << "  --no-cache                       Disable Dij cache\n\n"
+              << "  --no-cache                       Disable Dij cache\n"
+              << "  --full-body                      Keep external/body voxels in the Dij (default: skipped to save memory)\n\n"
               << "Optimize options:\n"
               << "  --max-iter <n>                   Max iterations (default: 500)\n"
               << "  --tolerance <val>                Convergence tolerance (default: 1e-5)\n"
@@ -538,6 +539,7 @@ int doseCalc(const std::vector<std::string>& args, WorkflowState& state) {
     bool useCache = true;
     double absoluteThreshold = 1e-6;
     double relativeThreshold = 1e-4;
+    bool excludeExternal = true;
     int numThreads = 0;
 
     for (size_t i = 0; i < args.size(); ++i) {
@@ -545,6 +547,8 @@ int doseCalc(const std::vector<std::string>& args, WorkflowState& state) {
             doseResolution = std::stod(args[++i]);
         } else if (args[i] == "--no-cache") {
             useCache = false;
+        } else if (args[i] == "--full-body") {
+            excludeExternal = false;
         } else if (args[i] == "--abs-threshold" && i + 1 < args.size()) {
             absoluteThreshold = std::stod(args[++i]);
         } else if (args[i] == "--rel-threshold" && i + 1 < args.size()) {
@@ -562,6 +566,7 @@ int doseCalc(const std::vector<std::string>& args, WorkflowState& state) {
     opts.useCache = useCache;
     opts.absoluteThreshold = absoluteThreshold;
     opts.relativeThreshold = relativeThreshold;
+    opts.excludeExternal = excludeExternal;
     opts.numThreads = numThreads;
 
     auto progressCb = [](int current, int total) {
@@ -645,7 +650,7 @@ int optimize(const std::vector<std::string>& args, WorkflowState& state) {
     try {
         auto result = OptimizationPipeline::run(
             *state.dij, config, protocol, *state.patientData, *state.displayGrid,
-            state.stf ? state.stf.get() : nullptr);
+            state.stf ? state.stf.get() : nullptr, state.plan.get());
 
         state.optimizedWeights = std::move(result.weights);
         state.doseResult = result.doseResult;

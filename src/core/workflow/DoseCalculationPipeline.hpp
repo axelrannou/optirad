@@ -21,6 +21,7 @@ struct DoseCalcPipelineOptions {
     double absoluteThreshold = 1e-6;
     double relativeThreshold = 1e-4;   // fraction (1e-4 = 0.01%)
     int numThreads = 0;                // 0 = all
+    bool excludeExternal = true;       // no Dij rows for body-only voxels (use direct dose for the full cube)
 };
 
 /// Result of the dose calculation pipeline.

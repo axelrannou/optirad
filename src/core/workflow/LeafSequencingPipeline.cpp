@@ -1,6 +1,7 @@
 #include "LeafSequencingPipeline.hpp"
 #include "sequencing/LeafSequencer.hpp"
 #include "sequencing/DeliverableDoseCalculator.hpp"
+#include "dose/DoseEngineFactory.hpp"
 #include "utils/Logger.hpp"
 #include <chrono>
 #include <numeric>
@@ -74,6 +75,13 @@ LeafSequencingPipelineResult LeafSequencingPipeline::run(
         result.beamSequences, stf, dij, mlc, doseGrid);
     result.deliverableWeights = std::move(delResult.deliverableWeights);
     result.deliverableDose = std::move(delResult.dose);
+
+    if (!dij.hasAllRows()) {
+        // The Dij skips external voxels; recompute the full deliverable dose directly.
+        auto engine = DoseEngineFactory::create("PencilBeam");
+        result.deliverableDose = std::make_shared<DoseMatrix>(
+            engine->calculateDoseDirect(plan, stf, patientData, doseGrid, result.deliverableWeights));
+    }
 
     // Compute plan statistics for the deliverable dose
     double prescribedDose = plan.getPrescribedDose();

@@ -7,6 +7,7 @@
 #include "dose/DoseMatrix.hpp"
 #include "core/workflow/PlanAnalysis.hpp"
 #include "core/PatientData.hpp"
+#include "core/Plan.hpp"
 #include "core/Stf.hpp"
 #include "geometry/Grid.hpp"
 #include <memory>
@@ -57,7 +58,8 @@ public:
         const ObjectiveProtocol& protocol,
         const PatientData& patientData,
         const Grid& doseGrid,
-        const Stf* stf = nullptr);
+        const Stf* stf = nullptr,
+        const Plan* plan = nullptr);
 
     /// Run optimization using pre-built objectives.
     static OptimizationPipelineResult runWithObjectives(
@@ -67,7 +69,8 @@ public:
         const PatientData& patientData,
         const Grid& doseGrid,
         IterationCallback iterCallback = nullptr,
-        const Stf* stf = nullptr);
+        const Stf* stf = nullptr,
+        const Plan* plan = nullptr);
 };
 
 } // namespace optirad
