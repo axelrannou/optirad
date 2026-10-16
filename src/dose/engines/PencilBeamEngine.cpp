@@ -339,10 +339,14 @@ PencilBeamEngine::RayVoxelData PencilBeamEngine::initRay(
         double depth = m_SAD + bev[1];
         if (depth < 1.0) continue; // Behind source
 
-        // rayPosBev is defined at the isocenter plane; project the voxel there instead, so the
-        // bixel diverges with depth.
-        double isoLatX = bev[0] * m_SAD / depth - rayPosBev[0];
-        double isoLatZ = bev[2] * m_SAD / depth - rayPosBev[2];
+        // Restore the previous lateral projection math used before the regression.
+        // This projects the voxel offset to the isocenter plane before subtracting the ray position,
+        // matching the historical beamlet geometry and avoiding an incorrect field expansion.
+        double latX = bev[0] - rayPosBev[0];
+        double latZ = bev[2] - rayPosBev[2];
+
+        double isoLatX = latX * m_SAD / depth;
+        double isoLatZ = latZ * m_SAD / depth;
 
         double radialDist = std::sqrt(isoLatX * isoLatX + isoLatZ * isoLatZ);
 
