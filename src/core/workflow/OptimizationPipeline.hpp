@@ -53,7 +53,7 @@ class OptimizationPipeline {
 public:
     /// Run optimization using a protocol (auto-detects PTV targets).
     static OptimizationPipelineResult run(
-        const DoseInfluenceMatrix& dij,
+        const IDoseOperator& dij,
         const OptimizationConfig& config,
         const ObjectiveProtocol& protocol,
         const PatientData& patientData,
@@ -63,7 +63,7 @@ public:
 
     /// Run optimization using pre-built objectives.
     static OptimizationPipelineResult runWithObjectives(
-        const DoseInfluenceMatrix& dij,
+        const IDoseOperator& dij,
         const OptimizationConfig& config,
         BuiltObjectives objectives,
         const PatientData& patientData,

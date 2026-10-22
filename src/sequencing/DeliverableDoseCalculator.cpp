@@ -8,7 +8,7 @@ namespace optirad {
 DeliverableDoseResult DeliverableDoseCalculator::compute(
     const std::vector<LeafSequenceResult>& beamSequences,
     const Stf& stf,
-    const DoseInfluenceMatrix& dij,
+    const IDoseOperator& dij,
     const MachineGeometry& mlc,
     const Grid& doseGrid) {
 

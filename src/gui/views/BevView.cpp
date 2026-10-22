@@ -59,6 +59,13 @@ void BevView::render() {
 
     ImGui::Begin("BEV", &m_visible);
 
+    const auto* selected = m_state.doseStore.getSelected();
+    if (selected && m_state.arcCache.count(selected->id) && m_state.arcResult) {
+        renderArcMotion();
+        ImGui::End();
+        return;
+    }
+
     if (!m_state.stfGenerated()) {
         ImGui::TextDisabled("Generate STF first to view BEV.");
         ImGui::End();
@@ -70,6 +77,79 @@ void BevView::render() {
     renderBevContent();
 
     ImGui::End();
+}
+
+void BevView::renderArcMotion() {
+    const auto& points = m_state.arcResult->sequence.controlPoints;
+    if (points.empty()) return;
+    const int arcCount = static_cast<int>(points.back().geometry.arcIndex) + 1;
+    m_arcSelection = std::clamp(m_arcSelection, 0, arcCount - 1);
+    if (ImGui::SliderInt("Arc", &m_arcSelection, 0, arcCount - 1)) {
+        m_arcTime = 0.0f;
+        m_arcPlaying = false;
+    }
+    size_t begin = 0;
+    while (begin < points.size() && points[begin].geometry.arcIndex != static_cast<size_t>(m_arcSelection)) ++begin;
+    if (begin == points.size()) return;
+    size_t end = begin;
+    double duration = 0.0;
+    double extentX = 20.0, extentZ = 20.0;
+    while (end < points.size() && points[end].geometry.arcIndex == static_cast<size_t>(m_arcSelection)) {
+        const auto& cp = points[end++];
+        duration += cp.timeSec;
+        for (double tip : cp.aperture.bankA) extentX = std::max(extentX, std::abs(tip) + 15.0);
+        for (double tip : cp.aperture.bankB) extentX = std::max(extentX, std::abs(tip) + 15.0);
+        for (double boundary : cp.leafPairBoundariesZ) extentZ = std::max(extentZ, std::abs(boundary) + 5.0);
+    }
+    if (ImGui::ArrowButton("##playArc", m_arcPlaying ? ImGuiDir_Down : ImGuiDir_Right)) m_arcPlaying = !m_arcPlaying;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(m_arcPlaying ? "Pause" : "Play");
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##rewindArc", ImGuiDir_Left)) { m_arcTime = 0.0f; m_arcPlaying = false; }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rewind");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(130.0f);
+    ImGui::SliderFloat("Speed", &m_arcPlaybackSpeed, 0.1f, 10.0f, "%.1fx");
+    if (m_arcPlaying) m_arcTime += ImGui::GetIO().DeltaTime * m_arcPlaybackSpeed;
+    m_arcTime = std::clamp(m_arcTime, 0.0f, static_cast<float>(duration));
+    if (m_arcTime >= duration) m_arcPlaying = false;
+    ImGui::SliderFloat("Time", &m_arcTime, 0.0f, static_cast<float>(duration), "%.2f s");
+    size_t index = begin;
+    double start = 0.0;
+    while (index + 1 < end && start + points[index].timeSec < m_arcTime) start += points[index++].timeSec;
+    const auto& current = points[index];
+    const auto& previous = points[index > begin ? index - 1 : index];
+    const double fraction = current.timeSec > 0.0 ? std::clamp((m_arcTime - start) / current.timeSec, 0.0, 1.0) : 1.0;
+    auto interpolate = [fraction](double first, double last) { return first + fraction * (last - first); };
+    double angularDifference = std::remainder(current.geometry.gantryAngle - previous.geometry.gantryAngle, 360.0);
+    const double angle = std::fmod(previous.geometry.gantryAngle + fraction * angularDifference + 360.0, 360.0);
+    ImGui::Text("CP %zu | Gantry %.1f | Couch %.1f | %.2f MU/s | %.1f mm/s",
+        index, angle, current.geometry.couchAngle, current.doseRate, current.leafSpeed);
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    if (available.x <= 0.0f || available.y <= 0.0f) return;
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float scale = std::min(available.x / static_cast<float>(2.0 * extentX),
+                                 available.y / static_cast<float>(2.0 * extentZ));
+    auto screen = [&](double lateral, double longitudinal) {
+        return ImVec2(origin.x + available.x * 0.5f + static_cast<float>(lateral) * scale,
+                      origin.y + available.y * 0.5f - static_cast<float>(longitudinal) * scale);
+    };
+    auto* draw = ImGui::GetWindowDrawList();
+    draw->PushClipRect(origin, ImVec2(origin.x + available.x, origin.y + available.y), true);
+    draw->AddRectFilled(screen(-extentX, extentZ), screen(extentX, -extentZ), IM_COL32(24, 30, 34, 255));
+    for (size_t pair = 0; pair < current.aperture.bankA.size(); ++pair) {
+        const bool matched = pair < previous.aperture.bankA.size() &&
+            previous.leafPairBoundariesZ == current.leafPairBoundariesZ;
+        const double left = matched ? interpolate(previous.aperture.bankA[pair], current.aperture.bankA[pair]) : current.aperture.bankA[pair];
+        const double right = matched ? interpolate(previous.aperture.bankB[pair], current.aperture.bankB[pair]) : current.aperture.bankB[pair];
+        const double bottom = current.leafPairBoundariesZ[pair], top = current.leafPairBoundariesZ[pair + 1];
+        draw->AddRectFilled(screen(left, top), screen(right, bottom), IM_COL32(45, 178, 150, 210));
+        for (const auto& edges : {std::pair<double, double>{-extentX, left}, {right, extentX}}) {
+            draw->AddRectFilled(screen(edges.first, top), screen(edges.second, bottom), IM_COL32(100, 114, 126, 255));
+            draw->AddRect(screen(edges.first, top), screen(edges.second, bottom), IM_COL32(35, 43, 48, 255));
+        }
+    }
+    draw->PopClipRect();
+    ImGui::Dummy(available);
 }
 
 void BevView::renderControls() {

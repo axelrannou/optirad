@@ -43,6 +43,11 @@ class WaterPhantom {
 public:
     /// Throws on failure.
     static WaterPhantomResult compute(const WaterPhantomConfig& config = {});
+
+    /// Water cube centred on the isocenter (origin) with a cubic PTV at its centre, for arcs and other
+    /// multi-angle tests. Grid and CT spacing are `resolutionMm`; extents are +-halfSizeMm / +-targetHalfMm.
+    static std::shared_ptr<PatientData> buildCentredPatient(double resolutionMm, double halfSizeMm,
+                                                            double targetHalfMm);
 };
 
 /// A sampled 1D curve: position along the sampled axis [mm] and dose.

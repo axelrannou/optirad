@@ -11,7 +11,7 @@ namespace optirad {
 LeafSequencingPipelineResult LeafSequencingPipeline::run(
     const std::vector<double>& weights,
     const Stf& stf,
-    const DoseInfluenceMatrix& dij,
+    const IDoseOperator& dij,
     const Plan& plan,
     const PatientData& patientData,
     const Grid& doseGrid,
@@ -79,6 +79,7 @@ LeafSequencingPipelineResult LeafSequencingPipeline::run(
     if (!dij.hasAllRows()) {
         // The Dij skips external voxels; recompute the full deliverable dose directly.
         auto engine = DoseEngineFactory::create("PencilBeam");
+        engine->setOptions(dij.engineOptions());
         result.deliverableDose = std::make_shared<DoseMatrix>(
             engine->calculateDoseDirect(plan, stf, patientData, doseGrid, result.deliverableWeights));
     }

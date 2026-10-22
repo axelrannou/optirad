@@ -123,6 +123,18 @@ void Plan::printSummary() const {
     std::cout << "  SCD:             " << m_machine.getSCD() << " mm\n";
     std::cout << "  Energy:          " << m_machine.getData().energy << " MV\n";
     std::cout << "  Num Fractions:   " << m_numOfFractions << "\n";
+    if (m_deliveryMode == DeliveryMode::VMAT) {
+        std::cout << "  Delivery:        VMAT (" << m_vmat.arcs.size() << " arc(s), "
+                  << m_vmat.optimizationSpacingDeg << " deg optimization beams, "
+                  << m_vmat.controlPointSpacingDeg << " deg control points)\n";
+        for (size_t a = 0; a < m_vmat.arcs.size(); ++a) {
+            const auto& arc = m_vmat.arcs[a];
+            std::cout << "    Arc " << a + 1 << ": " << arc.startAngle << " -> " << arc.stopAngle
+                      << (arc.clockwise ? " CW" : " CCW") << ", couch " << arc.couchAngle << "\n";
+        }
+    } else {
+        std::cout << "  Delivery:        SMLC (step-and-shoot)\n";
+    }
 
     std::cout << "\n  STF Properties:\n";
     std::cout << "    Num Beams:     " << m_stfProperties.numOfBeams << "\n";

@@ -35,7 +35,7 @@ public:
     virtual std::string getName() const = 0;
 
     virtual OptimizationResult optimize(
-        const DoseInfluenceMatrix& dij,
+        const IDoseOperator& dij,
         const std::vector<ObjectiveFunction*>& objectives,
         const std::vector<Constraint>& constraints
     ) = 0;

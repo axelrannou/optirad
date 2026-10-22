@@ -1,5 +1,7 @@
 #pragma once
 
+#include "IDoseOperator.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -16,7 +18,7 @@ namespace optirad {
  * Storage is 8 bytes per non-zero (uint32 column + float value). Dose sums are accumulated in double.
  * Row count and column count must each fit in uint32, and each block must hold < 2^32 entries.
  */
-class DoseInfluenceMatrix {
+class DoseInfluenceMatrix : public IDoseOperator {
 public:
     /// One CSR block covering a contiguous or arbitrary set of columns (global column indices).
     struct Block {
@@ -54,17 +56,17 @@ public:
     double getValue(size_t voxel, size_t bixel) const;
     double operator()(size_t voxel, size_t bixel) const;
 
-    size_t getNumVoxels() const;
-    size_t getNumBixels() const;
+    size_t getNumVoxels() const override;
+    size_t getNumBixels() const override;
     size_t getNumNonZeros() const;
 
     // --- Linear algebra (require finalized matrix) ---
-    std::vector<double> computeDose(const std::vector<double>& weights) const;
+    std::vector<double> computeDose(const std::vector<double>& weights) const override;
     void accumulateTransposeProduct(const std::vector<double>& voxelGrad,
-                                    std::vector<double>& grad) const;
+                                    std::vector<double>& grad) const override;
 
     /// Maximum value across all entries (requires finalized matrix).
-    double getMaxValue() const;
+    double getMaxValue() const override;
 
     // --- Block access (serialization, tests) ---
     const std::vector<Block>& getBlocks() const { return m_blocks; }
@@ -81,8 +83,8 @@ public:
 
     /// Mark which dose voxels (rows) were actually computed. An empty mask means all rows.
     void setComputedRows(std::vector<uint8_t> mask);
-    bool hasAllRows() const { return m_rowMask.empty(); }
-    bool isRowComputed(size_t voxel) const { return m_rowMask.empty() || m_rowMask[voxel] != 0; }
+    bool hasAllRows() const override { return m_rowMask.empty(); }
+    bool isRowComputed(size_t voxel) const override { return m_rowMask.empty() || m_rowMask[voxel] != 0; }
     const std::vector<uint8_t>& getRowMask() const { return m_rowMask; }
 
 private:

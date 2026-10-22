@@ -2,6 +2,7 @@
 
 #include "Machine.hpp"
 #include "../steering/StfProperties.hpp"
+#include "ArcPlan.hpp"
 #include "Beam.hpp"
 #include "PatientData.hpp"
 
@@ -53,6 +54,13 @@ public:
     void setDoseGridResolution(const std::array<double, 3>& res) { m_doseGridResolution = res; }
     const std::array<double, 3>& getDoseGridResolution() const { return m_doseGridResolution; }
 
+    // Delivery technique. For VMAT the STF holds the fluence-optimization beams (one per arc sector).
+    void setDeliveryMode(DeliveryMode mode) { m_deliveryMode = mode; }
+    DeliveryMode getDeliveryMode() const { return m_deliveryMode; }
+    bool isVmat() const { return m_deliveryMode == DeliveryMode::VMAT; }
+    void setVmatSettings(const VmatSettings& s) { m_vmat = s; }
+    const VmatSettings& getVmatSettings() const { return m_vmat; }
+
     // Prescribed dose (single source of truth)
     void setPrescribedDose(double dose) { m_prescribedDose = dose; }
     double getPrescribedDose() const { return m_prescribedDose; }
@@ -70,6 +78,8 @@ private:
     std::vector<Beam> m_beams;
     std::array<double, 3> m_doseGridResolution = {2.5, 2.5, 2.5}; // mm
     double m_prescribedDose = 0.0; // Gy (0 = not set, use default)
+    DeliveryMode m_deliveryMode = DeliveryMode::SMLC;
+    VmatSettings m_vmat;
 };
 
 } // namespace optirad

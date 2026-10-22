@@ -1,6 +1,8 @@
 #include "DoseCalculationPipeline.hpp"
 #include "dose/DoseEngineFactory.hpp"
 #include "dose/DijSerializer.hpp"
+#include "dose/FluenceDoseOperator.hpp"
+#include "dose/engines/PencilBeamEngine.hpp"
 #include "utils/Logger.hpp"
 
 namespace optirad {
@@ -24,6 +26,28 @@ DoseCalcPipelineResult DoseCalculationPipeline::run(
     Logger::info("Dose grid: " + std::to_string(dims[0]) + "x" +
                  std::to_string(dims[1]) + "x" + std::to_string(dims[2]));
 
+    if (options.matrixFree) {
+        PencilBeamEngine engine;
+        if (cancelFlag) engine.setCancelFlag(cancelFlag);
+        if (progressCallback) {
+            engine.setProgressCallback(
+                [&progressCallback](int current, int total, const std::string&) { progressCallback(current, total); });
+        }
+        DoseCalcOptions opts;
+        opts.numThreads = options.numThreads;
+        opts.excludeExternal = options.excludeExternal;
+        engine.setOptions(opts);
+
+        FluenceModelOptions mo;
+        mo.pixelMm = options.fluencePixelMm;
+        mo.backend = options.computeBackend;
+        mo.gpuMemoryBudgetMiB = options.gpuMemoryBudgetMiB;
+        auto model = std::make_shared<FluenceDoseModel>(
+            engine.buildFluenceModel(plan, stf, patientData, *result.doseGrid, mo));
+        result.doseOp = std::make_shared<FluenceDoseOperator>(model, std::make_shared<Stf>(stf));
+        return result;
+    }
+
     // Check cache
     if (options.useCache) {
         std::string patientName = "unknown";
@@ -44,6 +68,7 @@ DoseCalcPipelineResult DoseCalculationPipeline::run(
             auto loaded = DijSerializer::load(cacheFile);
             result.dij = std::make_shared<DoseInfluenceMatrix>(std::move(loaded));
             result.cacheHit = true;
+            result.doseOp = result.dij;
             return result;
         }
     }
@@ -69,6 +94,7 @@ DoseCalcPipelineResult DoseCalculationPipeline::run(
 
     auto dij = engine->calculateDij(plan, stf, patientData, *result.doseGrid);
     result.dij = std::make_shared<DoseInfluenceMatrix>(std::move(dij));
+    result.doseOp = result.dij;
 
     // Save to cache
     if (options.useCache) {

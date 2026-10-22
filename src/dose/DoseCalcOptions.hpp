@@ -9,6 +9,8 @@ namespace optirad {
  * Inspired by matRad's batched dose calculation with thresholding.
  */
 struct DoseCalcOptions {
+    bool gpuRayTracing = false;
+    bool requireGpuRayTracing = false;
     /// Discard dose entries below this absolute value (Gy).
     /// Removes noise from far-field kernel tails. Default 1e-6.
     double absoluteThreshold = 1e-6;
@@ -27,6 +29,11 @@ struct DoseCalcOptions {
     /// hotspot penalty still see the dose outside the structures. 1 = keep none. Changing it alters the Dij
     /// content, so bump DijSerializer::kEngineVersion.
     int externalSampleStep = 3;
+
+    /// Bixels diverge from the source (a voxel is projected onto the isocenter plane before the ray position is
+    /// subtracted). false keeps bixels parallel to the beam axis (wrong geometry, kept for comparison).
+    /// FluenceDoseModel requires true.
+    bool divergentBixels = true;
 
     /// Number of OpenMP threads. 0 = use all available (default).
     int numThreads = 0;

@@ -57,6 +57,19 @@ public:
         throw std::runtime_error("calculateDoseDirect is not supported by engine " + getName());
     }
 
+    /// Dij whose columns are beams instead of bixels: column b holds the dose of beam b with the given
+    /// bixel weights (indexed like the STF's global bixels). Used for aperture weight optimization,
+    /// where each beam is one control point. Rows follow the same selection as calculateDij().
+    virtual DoseInfluenceMatrix calculateBeamDij(
+        const Plan& plan,
+        const Stf& stf,
+        const PatientData& patientData,
+        const Grid& doseGrid,
+        const std::vector<double>& bixelWeights) {
+        (void)plan; (void)stf; (void)patientData; (void)doseGrid; (void)bixelWeights;
+        throw std::runtime_error("calculateBeamDij is not supported by engine " + getName());
+    }
+
     /// Set progress callback for GUI/CLI progress reporting
     void setProgressCallback(DoseCalcProgressCallback cb) { m_progressCallback = std::move(cb); }
 

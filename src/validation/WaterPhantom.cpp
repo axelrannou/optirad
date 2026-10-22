@@ -113,6 +113,54 @@ WaterPhantomResult WaterPhantom::compute(const WaterPhantomConfig& cfg) {
     return out;
 }
 
+std::shared_ptr<PatientData> WaterPhantom::buildCentredPatient(double res, double halfSize, double targetHalf) {
+    const size_t n = size_t(std::round(2.0 * halfSize / res));
+    Grid grid;
+    grid.setDimensions(n, n, n);
+    grid.setSpacing(res, res, res);
+    grid.setOrigin(Vec3{-halfSize, -halfSize, -halfSize});
+
+    auto ct = std::make_unique<Volume<int16_t>>();
+    ct->setGrid(grid);
+    ct->allocate();
+    for (size_t i = 0; i < ct->size(); ++i) ct->data()[i] = 0;
+
+    // Grid index order is [y, x, z]; the cube is symmetric so only the voxel positions matter.
+    std::vector<size_t> target, body(n * n * n);
+    for (size_t k = 0; k < n; ++k)
+        for (size_t j = 0; j < n; ++j)
+            for (size_t i = 0; i < n; ++i) {
+                const double x = -halfSize + j * res, y = -halfSize + i * res, z = -halfSize + k * res;
+                const size_t idx = i + j * n + k * n * n;
+                body[idx] = idx;
+                if (std::abs(x) <= targetHalf && std::abs(y) <= targetHalf && std::abs(z) <= targetHalf)
+                    target.push_back(idx);
+            }
+    if (target.empty()) throw std::runtime_error("WaterPhantom: empty target");
+
+    auto ptv = std::make_unique<Structure>();
+    ptv->setName("PTV");
+    ptv->setType("PTV");
+    ptv->setVoxelIndices(target);
+    ptv->setPreRasterized(true);
+
+    auto outline = std::make_unique<Structure>();
+    outline->setName("BODY");
+    outline->setType("EXTERNAL");
+    outline->setVoxelIndices(body);
+    outline->setPreRasterized(true);
+
+    auto structures = std::make_unique<StructureSet>();
+    structures->addStructure(std::move(ptv));
+    structures->addStructure(std::move(outline));
+
+    auto patient = std::make_shared<PatientData>();
+    patient->setCTVolume(std::move(ct));
+    patient->setStructureSet(std::move(structures));
+    patient->convertHUtoED();
+    return patient;
+}
+
 namespace {
 
 // Trilinear sample; positions outside the grid are skipped.

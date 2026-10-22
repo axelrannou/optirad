@@ -3,11 +3,15 @@
 #include "../IDoseEngine.hpp"
 #include "../GridInterpolant2D.hpp"
 #include "../FFT2D.hpp"
+#include "../FluenceDoseModel.hpp"
 #include "core/Machine.hpp"
 #include <vector>
 #include <array>
+#include <unordered_map>
 
 namespace optirad {
+
+class CudaRayTracer;
 
 /**
  * Photon Pencil Beam SVD Dose Engine.
@@ -48,7 +52,25 @@ public:
         const Grid& doseGrid,
         const std::vector<double>& weights) override;
 
+    DoseInfluenceMatrix calculateBeamDij(
+        const Plan& plan,
+        const Stf& stf,
+        const PatientData& patientData,
+        const Grid& doseGrid,
+        const std::vector<double>& bixelWeights) override;
+
+    /// Matrix-free model over the same voxel selection as calculateDij(); always uses divergent bixels.
+    FluenceDoseModel buildFluenceModel(
+        const Plan& plan,
+        const Stf& stf,
+        const PatientData& patientData,
+        const Grid& doseGrid,
+        const FluenceModelOptions& options = {});
+
 private:
+    /// Lateral point kernels (Gaussian penumbra included, bixel field excluded) summed over pixel-sized boxes.
+    std::array<std::vector<double>, 3> buildPointKernels(size_t kernelIdx, double pixelMm, size_t& tableSize) const;
+
     /// Dose-grid voxels (flat indices) inside the structures; optionally without external-only voxels.
     /// Falls back to every voxel when no structure voxels exist.
     std::vector<size_t> collectDoseVoxels(const PatientData& patientData, const Grid& doseGrid,
@@ -65,10 +87,12 @@ private:
         std::vector<Vec3>   bevCoords;       // BEV coordinates of each voxel
         std::vector<double> ssds;            // SSD per ray
         GridInterpolant2D kernelInterps[3];  // Convolved kernel interpolators (3 components)
+        size_t kernelIdx = 0;                // Selected SSD kernel entry
     };
 
     BeamData initBeam(const Beam& beam, const PatientData& patientData,
-                      const Grid& doseGrid, const std::vector<size_t>& allVoxelIndices);
+                      const Grid& doseGrid, const std::vector<size_t>& allVoxelIndices,
+                      bool buildKernels = true);
 
     // ── Per-ray: compute lateral distances and voxel selection ──
     struct RayVoxelData {
@@ -102,6 +126,11 @@ private:
 
     // Convolution parameters
     double m_convResolution = 0.5; // mm, internal convolution grid resolution
+
+    // Convolved lateral kernels depend only on the selected SSD kernel and the bixel width, not on the
+    // beam, so they are built once per kernel entry (about 1 s each) and reused by every beam.
+    std::unordered_map<size_t, std::array<GridInterpolant2D, 3>> m_kernelCache;
+    std::shared_ptr<CudaRayTracer> m_cudaRayTracer;
 };
 
 } // namespace optirad

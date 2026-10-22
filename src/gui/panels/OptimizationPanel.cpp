@@ -417,9 +417,11 @@ void OptimizationPanel::render() {
                     if (m_state.plan) {
                         m_state.plan->setPrescribedDose(config.targetDose);
                     }
+                    m_state.optimizationSpecs = specs;
+                    m_state.optimizationConfig = config;
 
                     m_pipelineResult = OptimizationPipeline::runWithObjectives(
-                        *m_state.dij, config, std::move(objectives),
+                        *m_state.doseOp, config, std::move(objectives),
                         *m_state.patientData, doseGrid,
                         [this](const IterationInfo& info) {
                             m_currentIteration.store(info.iteration);

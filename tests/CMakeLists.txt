@@ -270,6 +270,26 @@ if(OpenMP_CXX_FOUND)
 endif()
 add_test(NAME WaterPhantomBenchmark COMMAND test_water_phantom)
 
+add_executable(test_vmat
+    validation/test_vmat.cpp
+)
+target_include_directories(test_vmat PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_vmat PRIVATE optirad_validation optirad_sequencing optirad_workflow GTest::gtest GTest::gtest_main)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(test_vmat PRIVATE OpenMP::OpenMP_CXX)
+endif()
+add_test(NAME VmatTest COMMAND test_vmat)
+
+add_executable(test_fluence_dose_model
+    validation/test_fluence_dose_model.cpp
+)
+target_include_directories(test_fluence_dose_model PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_fluence_dose_model PRIVATE optirad_validation GTest::gtest GTest::gtest_main)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(test_fluence_dose_model PRIVATE OpenMP::OpenMP_CXX)
+endif()
+add_test(NAME FluenceDoseModelTest COMMAND test_fluence_dose_model)
+
 # ============================================================================
 # UNIT TESTS (GoogleTest) - Segmentation Module
 # ============================================================================

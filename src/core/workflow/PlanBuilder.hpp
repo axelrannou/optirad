@@ -3,6 +3,7 @@
 #include "core/Plan.hpp"
 #include "core/Stf.hpp"
 #include "core/PatientData.hpp"
+#include "core/ArcPlan.hpp"
 #include "steering/StfProperties.hpp"
 #include <memory>
 #include <string>
@@ -29,6 +30,11 @@ struct PlanConfig {
     double couchStart = 0.0;
     double couchStep = 0.0;
     double couchStop = 0.0;
+
+    // Delivery technique. For VMAT the gantry/couch fields above are ignored: the fluence-optimization
+    // beams are the sector centres of the arcs in `vmat`.
+    DeliveryMode deliveryMode = DeliveryMode::SMLC;
+    VmatSettings vmat;
 };
 
 /// Builds a treatment plan and generates STF from a PlanConfig.

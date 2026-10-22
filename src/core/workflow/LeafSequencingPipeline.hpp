@@ -58,7 +58,7 @@ public:
     static LeafSequencingPipelineResult run(
         const std::vector<double>& weights,
         const Stf& stf,
-        const DoseInfluenceMatrix& dij,
+        const IDoseOperator& dij,
         const Plan& plan,
         const PatientData& patientData,
         const Grid& doseGrid,

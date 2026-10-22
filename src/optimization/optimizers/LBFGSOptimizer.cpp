@@ -2,6 +2,7 @@
 #include "utils/Logger.hpp"
 #include <cmath>
 #include <algorithm>
+#include <numeric>
 #include <limits>
 #include <iostream>
 #include <iomanip>
@@ -22,6 +23,7 @@ void LBFGSOptimizer::setVerbose(bool verbose) { m_verbose = verbose; }
 void LBFGSOptimizer::setPrescriptionDose(double dose) { m_prescriptionDose = dose; }
 void LBFGSOptimizer::setHotspotThreshold(double threshold) { m_hotspotThreshold = threshold; }
 void LBFGSOptimizer::setHotspotPenalty(double penalty) { m_hotspotPenalty = penalty; }
+void LBFGSOptimizer::setConsistentHotspotGradient(bool consistent) { m_consistentHotspotGradient = consistent; }
 void LBFGSOptimizer::setIterationCallback(IterationCallback cb) { m_iterCallback = std::move(cb); }
 
 void LBFGSOptimizer::setSpatialSmoothing(double lambda, const std::vector<std::vector<int>>& neighbors) {
@@ -30,9 +32,11 @@ void LBFGSOptimizer::setSpatialSmoothing(double lambda, const std::vector<std::v
 }
 void LBFGSOptimizer::setL2Regularization(double alpha) { m_l2RegWeight = alpha; }
 void LBFGSOptimizer::setL1Regularization(double beta) { m_l1RegWeight = beta; }
+void LBFGSOptimizer::setRelativeL1Regularization(double fraction) { m_relativeL1 = fraction; }
+void LBFGSOptimizer::setInitialWeights(std::vector<double> weights) { m_initialWeights = std::move(weights); }
 
 OptimizationResult LBFGSOptimizer::optimize(
-    const DoseInfluenceMatrix& dij,
+    const IDoseOperator& dij,
     const std::vector<ObjectiveFunction*>& objectives,
     const std::vector<Constraint>& constraints
 ) {
@@ -59,9 +63,18 @@ OptimizationResult LBFGSOptimizer::optimize(
     // Starting from 0 lets the objectives drive doses up to target levels
     // while NTO/overdose objectives prevent overshoot.
     std::vector<double> x(n, 0.0);
+    if (m_initialWeights.size() == static_cast<size_t>(n)) {
+        for (int i = 0; i < n; ++i) x[i] = std::clamp(m_initialWeights[i], lb, ub);
+    }
     
     // Compute initial objective and gradient
     std::vector<double> grad(n);
+    if (m_relativeL1 > 0.0) {
+        m_l1RegWeight = 0.0;
+        const double dataObjective = computeObjectiveAndGradient(x, dij, objectives, grad);
+        const double total = std::accumulate(x.begin(), x.end(), 0.0);
+        if (total > 0.0) m_l1RegWeight = m_relativeL1 * dataObjective / total;
+    }
     double fval = computeObjectiveAndGradient(x, dij, objectives, grad);
     
     std::vector<double> objectiveHistory;
@@ -270,23 +283,29 @@ OptimizationResult LBFGSOptimizer::optimize(
 
 double LBFGSOptimizer::computeObjectiveAndGradient(
     const std::vector<double>& weights,
-    const DoseInfluenceMatrix& dij,
+    const IDoseOperator& dij,
     const std::vector<ObjectiveFunction*>& objectives,
     std::vector<double>& grad
 ) {
     int numVoxels = static_cast<int>(dij.getNumVoxels());
     int n = static_cast<int>(weights.size());
     
-    // Compute dose = Dij * weights
-    std::vector<double> dose = dij.computeDose(weights);
-    
     // Initialize gradient to zero
     std::fill(grad.begin(), grad.end(), 0.0);
+    double objVal = 0.0;
+    std::vector<DoseObjectiveSpec> descriptions;
+    bool supported = true;
+    for (const auto* objective : objectives) {
+        DoseObjectiveSpec description;
+        if (!objective->gpuDescription(description)) { supported = false; break; }
+        descriptions.push_back(std::move(description));
+    }
+    if (!supported || !dij.evaluateObjectives(weights, descriptions, m_prescriptionDose,
+        m_hotspotThreshold, m_hotspotPenalty, objVal, grad, m_consistentHotspotGradient)) {
+    std::vector<double> dose = dij.computeDose(weights);
     
     // Compute voxel-space gradient
     std::vector<double> gVox(numVoxels, 0.0);
-    
-    double objVal = 0.0;
     
     // Sum objectives
     for (const auto* obj : objectives) {
@@ -316,8 +335,9 @@ double LBFGSOptimizer::computeObjectiveAndGradient(
                 objVal += penaltyScale * (excess * excess);
                 
                 // Gradient: 2 * penalty * normalizedExcess * (1 + 15 * normalizedExcess) * excess
-                double gradScale = 2.0 * m_hotspotPenalty * normalizedExcess *
-                                   (1.0 + 15.0 * normalizedExcess);
+                double gradScale = m_consistentHotspotGradient ?
+                    m_hotspotPenalty * normalizedExcess * normalizedExcess * (4.0 + 50.0 * normalizedExcess) :
+                    2.0 * m_hotspotPenalty * normalizedExcess * (1.0 + 15.0 * normalizedExcess);
                 gVox[i] += gradScale * excess;
             }
         }
@@ -325,6 +345,7 @@ double LBFGSOptimizer::computeObjectiveAndGradient(
     
     // Compute gradient using optimized transpose product: grad = Dij^T * gVox
     dij.accumulateTransposeProduct(gVox, grad);
+    }
     
     // ── Spatial smoothing (quadratic difference penalty in bixel space) ──
     // f_smooth = lambda * sum_i sum_{j in N(i)} (w_i - w_j)^2
@@ -431,7 +452,7 @@ double LBFGSOptimizer::lineSearch(
     const std::vector<double>& grad,
     const std::vector<double>& dir,
     double lb, double ub,
-    const DoseInfluenceMatrix& dij,
+    const IDoseOperator& dij,
     const std::vector<ObjectiveFunction*>& objectives,
     std::vector<double>& x_new,
     double& fval_new,

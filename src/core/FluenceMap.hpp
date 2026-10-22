@@ -72,6 +72,22 @@ public:
         return m_data[static_cast<size_t>(row) * m_nCols + col];
     }
 
+    void setValue(int row, int col, double value) {
+        if (row >= 0 && row < m_nRows && col >= 0 && col < m_nCols)
+            m_data[static_cast<size_t>(row) * m_nCols + col] = value;
+    }
+
+    /// Writes the map back into the beam's slice of a global weight vector (inverse of fromBeamWeights).
+    void toBeamWeights(const Beam& beam, std::vector<double>& weights, size_t globalOffset) const {
+        for (size_t i = 0; i < beam.getNumOfRays(); ++i) {
+            const auto& pos = beam.getRay(i)->getRayPosBev();
+            const int col = static_cast<int>(std::round((pos[0] - m_originX) / m_bixelWidth));
+            const int row = static_cast<int>(std::round((pos[2] - m_originZ) / m_bixelWidth));
+            if (globalOffset + i < weights.size() && row >= 0 && row < m_nRows && col >= 0 && col < m_nCols)
+                weights[globalOffset + i] = m_data[static_cast<size_t>(row) * m_nCols + col];
+        }
+    }
+
     /// Get a 1D fluence profile for a given row (one per leaf-pair row).
     std::vector<double> getProfile(int row) const {
         std::vector<double> profile(m_nCols, 0.0);

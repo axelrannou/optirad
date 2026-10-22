@@ -24,6 +24,11 @@ public:
 
 private:
     void renderControls();
+    void renderArcMotion();
+    bool m_arcPlaying = false;
+    float m_arcTime = 0.0f;
+    float m_arcPlaybackSpeed = 1.0f;
+    int m_arcSelection = 0;
     void renderBevContent();
     void updateFluenceTexture();
     void renderMlcLeaves(ImDrawList* dl, ImVec2 imgMin, ImVec2 imgMax);

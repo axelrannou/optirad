@@ -1,4 +1,6 @@
 #include "PencilBeamEngine.hpp"
+#include "../CudaRayTracer.hpp"
+#include "../CudaDirectDose.hpp"
 #include "../SiddonRayTracer.hpp"
 #include "../SSDCalculator.hpp"
 #include "../RadDepthCalculator.hpp"
@@ -51,6 +53,10 @@ void PencilBeamEngine::initDoseCalc(const Plan& plan, const Grid& doseGrid) {
     // Matches matRad: effectiveLateralCutOff = geometricLateralCutOff + fieldWidth/sqrt(2)
     m_lateralCutOff = m_geometricLateralCutOff + m_bixelWidth / std::sqrt(2.0);
 
+    // Kernel data or bixel width may have changed since the last call.
+    m_kernelCache.clear();
+    m_cudaRayTracer.reset();
+
     Logger::info("PencilBeamEngine init: betas=[" +
         std::to_string(m_betas[0]) + "," + std::to_string(m_betas[1]) + "," + std::to_string(m_betas[2]) +
         "], mu=" + std::to_string(m_mu) +
@@ -69,7 +75,8 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
     const Beam& beam,
     const PatientData& patientData,
     const Grid& doseGrid,
-    const std::vector<size_t>& allVoxelIndices)
+    const std::vector<size_t>& allVoxelIndices,
+    bool buildKernels)
 {
     BeamData bd;
 
@@ -165,6 +172,32 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
     bd.radDepths.resize(nFiltered, 0.0);
 
     if (edData) {
+        bool tracedOnGpu = false;
+#ifdef OPTIRAD_HAS_CUDA
+        if (m_options.gpuRayTracing) {
+            try {
+                if (!m_cudaRayTracer) {
+                    m_cudaRayTracer = std::make_shared<CudaRayTracer>(ctGrid, edData);
+                    Logger::info("PencilBeamEngine: CUDA radiological-depth tracing enabled");
+                }
+                std::vector<Vec3> targets;
+                targets.reserve(nFiltered);
+                for (size_t index : bd.voxelIndices) {
+                    const size_t slice = index / (nx * ny), remainder = index % (nx * ny);
+                    targets.push_back(doseGrid.voxelToPatient({static_cast<double>(remainder % nx),
+                        static_cast<double>(remainder / nx), static_cast<double>(slice)}));
+                }
+                bd.radDepths = m_cudaRayTracer->depths(sourcePoint, targets);
+                tracedOnGpu = true;
+            } catch (const std::exception& error) {
+                if (m_options.requireGpuRayTracing) throw;
+                Logger::warn("CUDA tracing unavailable, using CPU: " + std::string(error.what()));
+                m_options.gpuRayTracing = false;
+                m_cudaRayTracer.reset();
+            }
+        }
+#endif
+        if (!tracedOnGpu) {
         #pragma omp parallel for schedule(dynamic, 256)
         for (size_t i = 0; i < nFiltered; ++i) {
             size_t idx = bd.voxelIndices[i];
@@ -180,6 +213,7 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
             if (!rayDepths.empty()) {
                 bd.radDepths[i] = rayDepths.back().second; // cumulative depth at target
             }
+        }
         }
     } else {
         // No ED data: assume water (rad depth = geometric depth along beam axis)
@@ -223,6 +257,13 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
     }
 
     const auto& selectedKernel = m_kernelEntries[bestKernelIdx];
+    bd.kernelIdx = bestKernelIdx;
+    if (!buildKernels) return bd;
+
+    if (auto cached = m_kernelCache.find(bestKernelIdx); cached != m_kernelCache.end()) {
+        for (int k = 0; k < 3; ++k) bd.kernelInterps[k] = cached->second[static_cast<size_t>(k)];
+        return bd;
+    }
 
     // ─── Build 2D kernel interpolators (matching matRad exactly) ───
     // matRad grid convention: -N*res : res : (N-1)*res  → 2N elements (even size)
@@ -313,6 +354,7 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
                                      convGridMin, convGridMax, kernelConvN, kernelConv);
     }
 
+    m_kernelCache[bestKernelIdx] = {bd.kernelInterps[0], bd.kernelInterps[1], bd.kernelInterps[2]};
     return bd;
 }
 
@@ -342,11 +384,14 @@ PencilBeamEngine::RayVoxelData PencilBeamEngine::initRay(
         // Restore the previous lateral projection math used before the regression.
         // This projects the voxel offset to the isocenter plane before subtracting the ray position,
         // matching the historical beamlet geometry and avoiding an incorrect field expansion.
-        double latX = bev[0] - rayPosBev[0];
-        double latZ = bev[2] - rayPosBev[2];
-
-        double isoLatX = latX * m_SAD / depth;
-        double isoLatZ = latZ * m_SAD / depth;
+        double isoLatX, isoLatZ;
+        if (m_options.divergentBixels) {
+            isoLatX = bev[0] * m_SAD / depth - rayPosBev[0];
+            isoLatZ = bev[2] * m_SAD / depth - rayPosBev[2];
+        } else {
+            isoLatX = (bev[0] - rayPosBev[0]) * m_SAD / depth;
+            isoLatZ = (bev[2] - rayPosBev[2]) * m_SAD / depth;
+        }
 
         double radialDist = std::sqrt(isoLatX * isoLatX + isoLatZ * isoLatZ);
 
@@ -719,6 +764,7 @@ DoseMatrix PencilBeamEngine::calculateDoseDirect(
     const Grid& doseGrid,
     const std::vector<double>& weights)
 {
+    const auto directStart = std::chrono::steady_clock::now();
     m_bixelWidth = plan.getStfProperties().bixelWidth;
     initDoseCalc(plan, doseGrid);
 
@@ -734,6 +780,18 @@ DoseMatrix PencilBeamEngine::calculateDoseDirect(
 
     // Per-thread accumulators avoid atomics; allocated lazily by the owning thread.
     std::vector<std::vector<double>> acc(static_cast<size_t>(numThreads));
+#ifdef OPTIRAD_HAS_CUDA
+    std::unique_ptr<CudaDirectDose> gpuDose;
+    if (m_options.gpuRayTracing) {
+        try {
+            gpuDose = std::make_unique<CudaDirectDose>(numVoxels);
+            Logger::info("PencilBeamEngine: CUDA direct-dose deposition enabled");
+        } catch (const std::exception& error) {
+            if (m_options.requireGpuRayTracing) throw;
+            Logger::warn("CUDA direct dose unavailable, using CPU: " + std::string(error.what()));
+        }
+    }
+#endif
 
     size_t beamStart = 0;
     for (size_t bi = 0; bi < numBeams; ++bi) {
@@ -767,6 +825,20 @@ DoseMatrix PencilBeamEngine::calculateDoseDirect(
 
         BeamData beamData = initBeam(*beam, patientData, doseGrid, voxels);
 
+#ifdef OPTIRAD_HAS_CUDA
+        if (gpuDose) {
+            std::vector<double> beamWeights(numRays, 0.0);
+            for (size_t ray = 0; ray < numRays; ++ray) {
+                const size_t column = thisBeamStart + rayBixelOff[ray];
+                if (column < weights.size()) beamWeights[ray] = weights[column];
+            }
+            gpuDose->accumulate(*beam, beamData.voxelIndices, beamData.bevCoords, beamData.radDepths,
+                beamData.geoDistances, beamData.kernelInterps, beamWeights, m_betas, m_mu, m_SAD,
+                m_lateralCutOff, m_options.divergentBixels);
+            continue;
+        }
+#endif
+
         #pragma omp parallel
         {
             int tid = 0;
@@ -797,6 +869,12 @@ DoseMatrix PencilBeamEngine::calculateDoseDirect(
     dose.setGrid(doseGrid);
     dose.allocate();
     double* out = dose.data();
+#ifdef OPTIRAD_HAS_CUDA
+    if (gpuDose) {
+        const auto values = gpuDose->result();
+        std::copy(values.begin(), values.end(), out);
+    }
+#endif
     for (const auto& local : acc) {
         if (local.empty()) continue;
         #pragma omp parallel for schedule(static)
@@ -806,7 +884,320 @@ DoseMatrix PencilBeamEngine::calculateDoseDirect(
     if (m_progressCallback) {
         m_progressCallback(static_cast<int>(numBeams), static_cast<int>(numBeams), "Done");
     }
+    Logger::info("PencilBeamEngine: direct dose completed in " + std::to_string(
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - directStart).count()) + "s");
     return dose;
+}
+
+
+// ────────────────────────────────────────────────
+// calculateBeamDij: one Dij column per beam, bixels pre-weighted
+// ────────────────────────────────────────────────
+DoseInfluenceMatrix PencilBeamEngine::calculateBeamDij(
+    const Plan& plan,
+    const Stf& stf,
+    const PatientData& patientData,
+    const Grid& doseGrid,
+    const std::vector<double>& weights)
+{
+    m_bixelWidth = plan.getStfProperties().bixelWidth;
+    initDoseCalc(plan, doseGrid);
+
+    int numThreads = 1;
+#ifdef _OPENMP
+    if (m_options.numThreads > 0) omp_set_num_threads(m_options.numThreads);
+    numThreads = omp_get_max_threads();
+#endif
+
+    const std::vector<size_t> voxels = collectDoseVoxels(patientData, doseGrid, m_options.excludeExternal);
+    const size_t numVoxels = doseGrid.getNumVoxels();
+    const size_t numBeams = stf.getCount();
+
+    DoseInfluenceMatrix dij(numVoxels, numBeams);
+    if (voxels.size() < numVoxels) {
+        std::vector<uint8_t> mask(numVoxels, 0);
+        for (size_t idx : voxels) mask[idx] = 1;
+        dij.setComputedRows(std::move(mask));
+    }
+
+    std::vector<std::vector<double>> acc(static_cast<size_t>(numThreads));
+    size_t beamStart = 0;
+    for (size_t bi = 0; bi < numBeams; ++bi) {
+        const auto* beam = stf.getBeam(bi);
+        if (!beam) continue;
+        const size_t numRays = beam->getNumOfRays();
+
+        std::vector<size_t> rayBixelOff(numRays + 1, 0);
+        for (size_t ri = 0; ri < numRays; ++ri) {
+            const auto* ray = beam->getRay(ri);
+            rayBixelOff[ri + 1] = rayBixelOff[ri] + (ray ? ray->getNumOfBixels() : 0);
+        }
+        const size_t thisBeamStart = beamStart;
+        beamStart += rayBixelOff[numRays];
+
+        if (m_cancelFlag && m_cancelFlag->load()) {
+            Logger::warn("PencilBeamEngine: Cancelled by user.");
+            break;
+        }
+        if (m_progressCallback) {
+            m_progressCallback(static_cast<int>(bi), static_cast<int>(numBeams),
+                "Beam " + std::to_string(bi + 1) + "/" + std::to_string(numBeams));
+        }
+
+        bool anyWeight = false;
+        for (size_t ri = 0; ri < numRays && !anyWeight; ++ri) {
+            const size_t col = thisBeamStart + rayBixelOff[ri];
+            anyWeight = col < weights.size() && weights[col] > 0.0;
+        }
+        if (!anyWeight) continue;  // empty column
+
+        BeamData beamData = initBeam(*beam, patientData, doseGrid, voxels);
+
+        #pragma omp parallel
+        {
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+            auto& local = acc[static_cast<size_t>(tid)];
+            if (local.empty()) local.assign(numVoxels, 0.0);
+
+            #pragma omp for schedule(dynamic, 4)
+            for (size_t ri = 0; ri < numRays; ++ri) {
+                const auto* ray = beam->getRay(ri);
+                if (!ray) continue;
+                const size_t col = thisBeamStart + rayBixelOff[ri];
+                const double w = col < weights.size() ? weights[col] : 0.0;
+                if (w <= 0.0) continue;
+
+                RayVoxelData rayData = initRay(*ray, *beam, beamData);
+                if (rayData.localIndices.empty()) continue;
+                const auto bixelDose = calcBixelDose(rayData, beamData, m_SAD);
+                for (size_t vi = 0; vi < bixelDose.size(); ++vi)
+                    local[beamData.voxelIndices[rayData.localIndices[vi]]] += w * bixelDose[vi];
+            }
+        }
+
+        // Reduce the thread accumulators over the active voxels, threshold, and close one block.
+        std::vector<double> beamDose(voxels.size(), 0.0);
+        double maxDose = 0.0;
+        for (size_t k = 0; k < voxels.size(); ++k) {
+            double sum = 0.0;
+            for (auto& local : acc) {
+                if (local.empty()) continue;
+                sum += local[voxels[k]];
+                local[voxels[k]] = 0.0;
+            }
+            beamDose[k] = sum;
+            maxDose = std::max(maxDose, sum);
+        }
+        const double threshold = std::max(maxDose * m_options.relativeThreshold, m_options.absoluteThreshold);
+
+        std::vector<uint32_t> rows, cols;
+        std::vector<float> vals;
+        for (size_t k = 0; k < voxels.size(); ++k) {
+            if (beamDose[k] > 0.0 && beamDose[k] >= threshold) {
+                rows.push_back(static_cast<uint32_t>(voxels[k]));
+                cols.push_back(static_cast<uint32_t>(bi));
+                vals.push_back(static_cast<float>(beamDose[k]));
+            }
+        }
+        dij.appendBatch(rows, cols, vals);
+        dij.endBlock();
+    }
+
+    dij.finalize();
+    if (m_progressCallback) {
+        m_progressCallback(static_cast<int>(numBeams), static_cast<int>(numBeams), "Done");
+    }
+    return dij;
+}
+
+// ────────────────────────────────────────────────
+// buildPointKernels: lateral kernels for a fluence image (no bixel field), summed over pixel boxes
+// ────────────────────────────────────────────────
+std::array<std::vector<double>, 3> PencilBeamEngine::buildPointKernels(
+    size_t kernelIdx, double pixelMm, size_t& tableSize) const
+{
+    const double res = m_convResolution;
+    const int f = std::max(1, static_cast<int>(std::lround(pixelMm / res)) | 1);  // odd: symmetric pixel box
+    const double h = f * res;
+    const int mi = static_cast<int>(std::floor(m_lateralCutOff / h));
+    const size_t M = static_cast<size_t>(2 * mi + 1);
+    tableSize = M;
+
+    const int L = mi * f + f + 2;  // half extent of the radial kernel grid, in fine pixels
+    const double sigma = m_penumbraFWHM / std::sqrt(8.0 * std::log(2.0));
+    const int gaussLimit = static_cast<int>(std::ceil(5.0 * sigma / res));
+    const size_t gaussN = static_cast<size_t>(2 * gaussLimit);
+    std::vector<double> gaussFilter(gaussN * gaussN, 0.0);
+    const double gaussNorm = 1.0 / (2.0 * M_PI * sigma * sigma / (res * res));
+    for (size_t ri = 0; ri < gaussN; ++ri) {
+        for (size_t ci = 0; ci < gaussN; ++ci) {
+            const double gx = (static_cast<double>(ri) - gaussLimit) * res;
+            const double gz = (static_cast<double>(ci) - gaussLimit) * res;
+            gaussFilter[ri * gaussN + ci] = gaussNorm * std::exp(-(gx * gx + gz * gz) / (2.0 * sigma * sigma));
+        }
+    }
+
+    std::array<std::vector<double>, 3> tables;
+    const auto& entry = m_kernelEntries.at(kernelIdx);
+    const size_t kernelN = static_cast<size_t>(2 * L);
+    const size_t padSize = kernelN + gaussN;
+    const long c0 = static_cast<long>(gaussLimit) + L;   // grid index of zero offset after the convolution
+
+    for (int k = 0; k < 3; ++k) {
+        auto& table = tables[static_cast<size_t>(k)];
+        table.assign(M * M, 0.0);
+        const auto& kernel1d = (k == 0) ? entry.kernel1 : (k == 1) ? entry.kernel2 : entry.kernel3;
+        if (kernel1d.empty() || m_kernelPos.empty()) continue;
+
+        std::vector<double> kernel2d(kernelN * kernelN, 0.0);
+        for (size_t ri = 0; ri < kernelN; ++ri) {
+            for (size_t ci = 0; ci < kernelN; ++ci) {
+                const double x = (static_cast<double>(ri) - L) * res;
+                const double z = (static_cast<double>(ci) - L) * res;
+                const double r = std::sqrt(x * x + z * z);
+                if (r > m_kernelPos.back()) continue;
+                size_t lo = 0;
+                for (size_t pi = 0; pi + 1 < m_kernelPos.size(); ++pi) {
+                    if (m_kernelPos[pi + 1] >= r) { lo = pi; break; }
+                }
+                double t = 0.0;
+                if (lo + 1 < m_kernelPos.size() && m_kernelPos[lo + 1] != m_kernelPos[lo])
+                    t = (r - m_kernelPos[lo]) / (m_kernelPos[lo + 1] - m_kernelPos[lo]);
+                t = std::clamp(t, 0.0, 1.0);
+                kernel2d[ri * kernelN + ci] = (1.0 - t) * kernel1d[lo] + t * kernel1d[std::min(lo + 1, kernel1d.size() - 1)];
+            }
+        }
+
+        const auto conv = FFT2D::convolve2DPadded(gaussFilter, gaussN, gaussN, kernel2d, kernelN, kernelN, padSize);
+        const int half = (f - 1) / 2;
+        for (int i = -mi; i <= mi; ++i) {
+            for (int j = -mi; j <= mi; ++j) {
+                if (std::hypot(i * h, j * h) > m_lateralCutOff) continue;
+                double sum = 0.0;
+                for (int da = -half; da <= half; ++da)
+                    for (int db = -half; db <= half; ++db)
+                        sum += conv[static_cast<size_t>(c0 + i * f + da) * padSize + static_cast<size_t>(c0 + j * f + db)];
+                table[static_cast<size_t>(i + mi) * M + static_cast<size_t>(j + mi)] = sum;
+            }
+        }
+    }
+    return tables;
+}
+
+// ────────────────────────────────────────────────
+// buildFluenceModel: per-beam voxel geometry for matrix-free dose
+// ────────────────────────────────────────────────
+FluenceDoseModel PencilBeamEngine::buildFluenceModel(
+    const Plan& plan,
+    const Stf& stf,
+    const PatientData& patientData,
+    const Grid& doseGrid,
+    const FluenceModelOptions& options)
+{
+    const auto modelStart = std::chrono::steady_clock::now();
+    m_options.gpuRayTracing = options.backend != DoseComputeBackend::CPU;
+    m_options.requireGpuRayTracing = options.backend == DoseComputeBackend::CUDA;
+    m_bixelWidth = plan.getStfProperties().bixelWidth;
+    initDoseCalc(plan, doseGrid);
+    m_options.divergentBixels = true;
+
+    const double res = m_convResolution;
+    const double h = std::max(1, static_cast<int>(std::lround(options.pixelMm / res)) | 1) * res;
+    const double boxMm = std::floor(m_bixelWidth / res) * res;  // the Dij engine models bixels as whole 0.5 mm pixels
+    // The Dij engine's kernel grid puts a bixel's dose centre (fieldN - 1) / 2 - fieldLimit pixels off its nominal
+    // position (inherited from matRad's grid convention); reproduced so both engines agree.
+    const int fieldN = static_cast<int>(std::floor(m_bixelWidth / res));
+    const int fieldLimit = static_cast<int>(std::ceil(m_bixelWidth / (2.0 * res)));
+    const double bixelShiftMm = (0.5 * (fieldN - 1) - fieldLimit) * res;
+
+    double extent = 0.0;
+    for (size_t bi = 0; bi < stf.getCount(); ++bi) {
+        const auto* beam = stf.getBeam(bi);
+        if (!beam) continue;
+        for (size_t ri = 0; ri < beam->getNumOfRays(); ++ri) {
+            const auto pos = beam->getRay(ri)->getRayPosBev();
+            extent = std::max({extent, std::abs(pos[0]), std::abs(pos[2])});
+        }
+    }
+    extent += 0.5 * boxMm;
+    const size_t n = FFT2D::nextPow2(static_cast<size_t>(std::ceil(2.0 * (extent + m_lateralCutOff) / h)) + 4);
+
+    FluenceDoseModel model(doseGrid.getNumVoxels(), n, h, boxMm);
+    const std::vector<size_t> voxels = collectDoseVoxels(patientData, doseGrid, m_options.excludeExternal);
+    if (voxels.size() < doseGrid.getNumVoxels()) {
+        std::vector<uint8_t> mask(doseGrid.getNumVoxels(), 0);
+        for (size_t idx : voxels) mask[idx] = 1;
+        model.setComputedRows(std::move(mask));
+    }
+    const size_t numBeams = stf.getCount();
+    const double half = static_cast<double>(n / 2);
+
+    for (size_t bi = 0; bi < numBeams; ++bi) {
+        if (m_cancelFlag && m_cancelFlag->load()) break;
+        if (m_progressCallback)
+            m_progressCallback(static_cast<int>(bi), static_cast<int>(numBeams),
+                               "Beam " + std::to_string(bi + 1) + "/" + std::to_string(numBeams));
+
+        const auto* beam = stf.getBeam(bi);
+        std::vector<FluenceDoseModel::VoxelRecord> records;
+        size_t kernelIdx = 0;
+        if (beam) {
+            BeamData bd = initBeam(*beam, patientData, doseGrid, voxels, false);
+            kernelIdx = bd.kernelIdx;
+            if (!model.hasKernel(kernelIdx)) {
+                size_t tableSize = 0;
+                auto tables = buildPointKernels(kernelIdx, h, tableSize);
+                model.addKernel(kernelIdx, tables, tableSize);
+            }
+
+            records.reserve(bd.voxelIndices.size());
+            for (size_t i = 0; i < bd.voxelIndices.size(); ++i) {
+                const Vec3& bev = bd.bevCoords[i];
+                const double depth = m_SAD + bev[1];
+                const double radDepth = bd.radDepths[i];
+                const double geoDist = bd.geoDistances[i];
+                if (depth < 1.0 || radDepth <= 0.0 || geoDist < 1.0) continue;
+
+                const double fx = (bev[0] * m_SAD / depth - bixelShiftMm) / h + half;
+                const double fz = (bev[2] * m_SAD / depth - bixelShiftMm) / h + half;
+                if (fx < 0.0 || fz < 0.0 || fx >= static_cast<double>(n - 1) || fz >= static_cast<double>(n - 1)) continue;
+
+                FluenceDoseModel::VoxelRecord rec;
+                rec.voxel = static_cast<uint32_t>(bd.voxelIndices[i]);
+                rec.fx = static_cast<float>(fx);
+                rec.fz = static_cast<float>(fz);
+                const double invSq = (m_SAD * m_SAD) / (geoDist * geoDist);
+                for (int k = 0; k < 3; ++k) {
+                    const double beta = m_betas[static_cast<size_t>(k)];
+                    const double denom = beta - m_mu;
+                    const double depthDose = std::abs(denom) > 1e-12
+                        ? (beta / denom) * (std::exp(-m_mu * radDepth) - std::exp(-beta * radDepth))
+                        : m_mu * radDepth * std::exp(-m_mu * radDepth);
+                    rec.d[k] = static_cast<float>(depthDose * invSq);
+                }
+                records.push_back(rec);
+            }
+        } else if (!model.hasKernel(0)) {
+            size_t tableSize = 0;
+            auto tables = buildPointKernels(0, h, tableSize);
+            model.addKernel(0, tables, tableSize);
+        }
+        model.addBeam(kernelIdx, std::move(records));
+    }
+
+    if (m_progressCallback)
+        m_progressCallback(static_cast<int>(numBeams), static_cast<int>(numBeams), "Done");
+    Logger::info("PencilBeamEngine: fluence model " + std::to_string(numBeams) + " beams, image " +
+                 std::to_string(n) + "x" + std::to_string(n) + " @ " + std::to_string(h) + " mm, " +
+                 std::to_string(model.memoryBytes() / (1024 * 1024)) + " MB");
+    if (options.backend != DoseComputeBackend::CPU)
+        model.enableCuda(options.gpuMemoryBudgetMiB * size_t(1024 * 1024), options.backend == DoseComputeBackend::CUDA);
+    Logger::info("PencilBeamEngine: model preparation completed in " + std::to_string(
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - modelStart).count()) + "s");
+    return model;
 }
 
 } // namespace optirad

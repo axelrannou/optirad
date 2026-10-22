@@ -7,11 +7,14 @@
 #include "steering/StfProperties.hpp"
 #include "phsp/PhaseSpaceBeamSource.hpp"
 #include "dose/DoseInfluenceMatrix.hpp"
+#include "dose/IDoseOperator.hpp"
 #include "dose/DoseMatrix.hpp"
 #include "dose/DoseStore.hpp"
 #include "core/workflow/PlanAnalysis.hpp"
 #include "geometry/Grid.hpp"
 #include "core/Aperture.hpp"
+#include "core/workflow/ArcPipeline.hpp"
+#include "optimization/ObjectiveProtocol.hpp"
 #include "io/DicomContext.hpp"
 #include <memory>
 #include <vector>
@@ -29,6 +32,12 @@ struct LeafSeqCacheEntry {
     int linkedOptDoseId = -1; // the optimization dose these were derived from
 };
 
+/// Cached arc (VMAT) results, keyed by the arc dose entry ID.
+struct ArcCacheEntry {
+    std::shared_ptr<ArcPipelineResult> result;
+    int linkedOptDoseId = -1; // the fluence optimization dose it was derived from
+};
+
 /// Shared application state for the GUI pipeline.
 /// Mirrors the CLI AppState: load DICOM → create Plan → generate STF → dose calc → optimize.
 struct GuiAppState {
@@ -41,7 +50,10 @@ struct GuiAppState {
     std::vector<std::shared_ptr<PhaseSpaceBeamSource>> phaseSpaceSources;
 
     // ── Dose calculation state ──
-    std::shared_ptr<DoseInfluenceMatrix> dij;
+    std::shared_ptr<DoseInfluenceMatrix> dij;       // stored-Dij engine only
+    std::shared_ptr<IDoseOperator> doseOp;          // dij or matrix-free operator
+    DoseComputeBackend computeBackend = DoseComputeBackend::Auto;
+    size_t gpuMemoryBudgetMiB = 0;
     std::shared_ptr<Grid> displayGrid;      // Grid synced with doseResult for rendering
     std::shared_ptr<Grid> computeGrid;      // Computation grid for Dij / optimization
 
@@ -55,6 +67,11 @@ struct GuiAppState {
     std::shared_ptr<DoseMatrix> deliverableDoseResult;
     std::vector<StructureDoseStats> deliverableStats;
 
+    // ── Arc (VMAT) state ──
+    std::shared_ptr<ArcPipelineResult> arcResult;
+    std::vector<ObjectiveSpec> optimizationSpecs;   // objectives of the last fluence optimization (reused by the arc stage)
+    OptimizationConfig optimizationConfig;          // settings of the last fluence optimization
+
     // ── Multi-dose management ──
     DoseStore doseStore;
 
@@ -67,6 +84,7 @@ struct GuiAppState {
     // ── Pipeline result caches (keyed by dose entry ID) ──
     std::unordered_map<int, std::vector<double>> optWeightsCache;
     std::unordered_map<int, LeafSeqCacheEntry> seqCache;
+    std::unordered_map<int, ArcCacheEntry> arcCache;
     std::unordered_map<int, std::vector<StructureDoseStats>> statsCache;
     int activeOptDoseId = -1; // which optimization dose produced current weights
 
@@ -95,7 +113,7 @@ struct GuiAppState {
     bool phaseSpaceLoaded() const {
         return !phaseSpaceSources.empty() && phaseSpaceSources[0]->isBuilt();
     }
-    bool dijComputed() const { return dij != nullptr && dij->getNumNonZeros() > 0; }
+    bool dijComputed() const { return doseOp != nullptr && (!dij || dij->getNumNonZeros() > 0); }
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
     bool leafSequenceDone() const { return !leafSequences.empty(); }
     bool doseAvailable() const { return doseStore.count() > 0 && doseStore.getSelected() != nullptr; }
@@ -173,6 +191,28 @@ struct GuiAppState {
                 deliverableWeights.clear();
                 deliverableStats.clear();
             }
+            arcResult.reset();
+            for (const auto& [arcDoseId, arcEntry] : arcCache) {
+                if (arcEntry.linkedOptDoseId == selId) { arcResult = arcEntry.result; break; }
+            }
+            return;
+        }
+
+        // Selected dose is an arc dose: restore its result and the linked optimization weights
+        auto arcIt = arcCache.find(selId);
+        if (arcIt != arcCache.end()) {
+            arcResult = arcIt->second.result;
+            auto linkedIt = optWeightsCache.find(arcIt->second.linkedOptDoseId);
+            if (linkedIt != optWeightsCache.end()) {
+                optimizedWeights = linkedIt->second;
+                activeOptDoseId = arcIt->second.linkedOptDoseId;
+            } else {
+                optimizedWeights.clear();
+                activeOptDoseId = -1;
+            }
+            leafSequences.clear();
+            deliverableWeights.clear();
+            deliverableStats.clear();
             return;
         }
 
@@ -197,6 +237,7 @@ struct GuiAppState {
         }
 
         // No cached results for this dose — clear pipeline state
+        arcResult.reset();
         optimizedWeights.clear();
         leafSequences.clear();
         deliverableWeights.clear();
@@ -215,12 +256,14 @@ struct GuiAppState {
     void resetPhaseSpace() { phaseSpaceSources.clear(); }
     void resetDij() {
         dij.reset();
+        doseOp.reset();
         computeGrid.reset();
         optimizedWeights.clear();
         // Restore display dose from DoseStore.
         syncSelectedDose();
     }
     void resetLeafSequence() {
+        arcResult.reset();
         leafSequences.clear();
         deliverableWeights.clear();
         deliverableDoseResult.reset();

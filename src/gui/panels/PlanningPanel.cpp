@@ -2,6 +2,7 @@
 #include "Theme.hpp"
 #include "core/workflow/PlanBuilder.hpp"
 #include "core/workflow/DoseCalculationPipeline.hpp"
+#include "dose/FluenceDoseOperator.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
 #include <cmath>
@@ -63,6 +64,71 @@ void PlanningPanel::render() {
         ImGui::Unindent();
     }
 
+    // ── Delivery technique ──
+    if (ImGui::CollapsingHeader("Delivery", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Indent();
+        static const char* kDelivery[] = { "SMLC (step-and-shoot IMRT)", "VMAT (arcs)" };
+        ImGui::Combo("Technique", &m_deliveryIdx, kDelivery, IM_ARRAYSIZE(kDelivery));
+        if (m_deliveryIdx == 1) {
+            ImGui::TextDisabled("Fluence is optimized on one beam per arc sector, then sequenced\n"
+                                "into one aperture per control point.");
+            int toRemove = -1;
+            for (size_t a = 0; a < m_arcs.size(); ++a) {
+                auto& arc = m_arcs[a];
+                ImGui::PushID(static_cast<int>(a));
+                ImGui::Text("Arc %zu", a + 1);
+                ImGui::SameLine();
+                if (m_arcs.size() > 1 && ImGui::SmallButton("Remove")) toRemove = static_cast<int>(a);
+                ImGui::SetNextItemWidth(80);
+                ImGui::InputFloat("Start##arc", &arc.start, 0.0f, 0.0f, "%.1f");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                ImGui::InputFloat("Stop##arc", &arc.stop, 0.0f, 0.0f, "%.1f");
+                ImGui::SameLine();
+                int dir = arc.clockwise ? 0 : 1;
+                ImGui::SetNextItemWidth(60);
+                static const char* kDir[] = { "CW", "CCW" };
+                if (ImGui::Combo("##dir", &dir, kDir, IM_ARRAYSIZE(kDir))) arc.clockwise = (dir == 0);
+                ImGui::SetNextItemWidth(80);
+                ImGui::InputFloat("Couch##arc", &arc.couch, 0.0f, 0.0f, "%.1f");
+                ImGui::PopID();
+            }
+            if (toRemove >= 0) m_arcs.erase(m_arcs.begin() + toRemove);
+            if (ImGui::SmallButton("+ Add arc")) {
+                ArcUi next = m_arcs.back();
+                std::swap(next.start, next.stop);   // second arc returns the other way
+                next.clockwise = !next.clockwise;
+                m_arcs.push_back(next);
+            }
+
+            ImGui::SetNextItemWidth(95.0f);
+            ImGui::InputFloat("Optimization beam width (deg)", &m_optSpacing, 0.0f, 0.0f, "%.1f");
+            ImGui::SetNextItemWidth(95.0f);
+            ImGui::InputFloat("Control point spacing (deg)", &m_cpSpacing, 0.0f, 0.0f, "%.1f");
+            if (m_cpSpacing > 0.0f && m_optSpacing > 0.0f) {
+                VmatSettings preview;
+                preview.arcs.clear();
+                for (const auto& arc : m_arcs) {
+                    ArcSpec spec;
+                    spec.startAngle = arc.start; spec.stopAngle = arc.stop;
+                    spec.clockwise = arc.clockwise; spec.couchAngle = arc.couch;
+                    preview.arcs.push_back(spec);
+                }
+                preview.optimizationSpacingDeg = m_optSpacing;
+                preview.controlPointSpacingDeg = m_cpSpacing;
+                const size_t sectors = ArcGeometry::sectors(preview).size();
+                const size_t cps = ArcGeometry::controlPoints(preview).size();
+                ImGui::Text("%zu optimization beams, %zu control points (~%.0f per sector)",
+                            sectors, cps, sectors ? static_cast<double>(cps) / sectors : 0.0);
+                if (sectors && static_cast<double>(cps) / sectors < 5.0)
+                    ImGui::TextColored(getThemeColors().failText,
+                        "Few control points per sector: the fluence is quantized to that many levels.");
+            }
+        }
+        ImGui::Unindent();
+    }
+    const bool isVmat = (m_deliveryIdx == 1);
+
     // ── Fractions ──
     if (ImGui::CollapsingHeader("Fractions", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
@@ -71,6 +137,7 @@ void PlanningPanel::render() {
         ImGui::Unindent();
     }
 
+    if (!isVmat) {
     // ── Gantry Angles ──
     if (ImGui::CollapsingHeader("Gantry Angles", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
@@ -165,6 +232,8 @@ void PlanningPanel::render() {
         }
     }
 
+    } // !isVmat
+
     // ── Bixel Width (only for generic machines) ──
     if (!kIsPhaseSpace[m_machineIdx]) {
         if (ImGui::CollapsingHeader("Bixel Width", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -179,7 +248,9 @@ void PlanningPanel::render() {
 
     // ── Validation ──
     bool paramsValid = false;
-    if (m_gantryMode == 0) {
+    if (isVmat) {
+        paramsValid = !m_arcs.empty() && m_optSpacing > 0.0f && m_cpSpacing > 0.0f && m_cpSpacing <= m_optSpacing;
+    } else if (m_gantryMode == 0) {
         int numGantryV = 0;
         if (m_gantryStep > 0.0f && m_gantryStop > m_gantryStart)
             numGantryV = static_cast<int>(std::ceil((m_gantryStop - m_gantryStart) / m_gantryStep));
@@ -211,7 +282,18 @@ void PlanningPanel::render() {
         config.numFractions = m_numFractions;
         config.bixelWidth = m_bixelWidth;
 
-        if (m_gantryMode == 0) {
+        if (isVmat) {
+            config.deliveryMode = DeliveryMode::VMAT;
+            config.vmat.arcs.clear();
+            for (const auto& arc : m_arcs) {
+                ArcSpec spec;
+                spec.startAngle = arc.start; spec.stopAngle = arc.stop;
+                spec.clockwise = arc.clockwise; spec.couchAngle = arc.couch;
+                config.vmat.arcs.push_back(spec);
+            }
+            config.vmat.optimizationSpacingDeg = m_optSpacing;
+            config.vmat.controlPointSpacingDeg = m_cpSpacing;
+        } else if (m_gantryMode == 0) {
             config.gantryStart = m_gantryStart;
             config.gantryStep = m_gantryStep;
             config.gantryStop = m_gantryStop;
@@ -330,8 +412,30 @@ void PlanningPanel::render() {
 
             ImGui::Spacing();
             ImGui::Separator();
+            static const char* kEngines[] = { "Stored Dij (sparse matrix)", "Matrix-free (fluence convolution)" };
+            ImGui::Combo("Dose engine", &m_engineIdx, kEngines, IM_ARRAYSIZE(kEngines));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Stored Dij: fastest optimization, memory grows with beams x bixels.\n"
+                                  "Matrix-free: nothing proportional to the Dij is stored (about 24 B per voxel\n"
+                                  "and beam); every iteration convolves the fluence of each beam instead.\n"
+                                  "Use it for many beams (VMAT). Bixels diverge from the source in this mode.");
+            const bool matrixFree = (m_engineIdx == 1);
+            if (matrixFree) {
+                static const char* kBackends[] = { "CPU", "Auto", "CUDA" };
+                ImGui::Combo("Compute backend", &m_computeBackendIdx, kBackends, IM_ARRAYSIZE(kBackends));
+                ImGui::SetNextItemWidth(120);
+                ImGui::InputInt("GPU budget (MiB, 0=auto)", &m_gpuMemoryBudgetMiB);
+                if (m_gpuMemoryBudgetMiB < 0) m_gpuMemoryBudgetMiB = 0;
+                ImGui::SetNextItemWidth(120);
+                ImGui::InputFloat("Fluence pixel (mm)", &m_fluencePixelMm, 0.0f, 0.0f, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("1.5 mm: about 1%% mean difference to the stored Dij.\n"
+                                      "0.5 mm: about 0.1%%, but 9x the FFT cost.\nSnapped to an odd multiple of 0.5 mm.");
+                if (m_fluencePixelMm < 0.5f) m_fluencePixelMm = 0.5f;
+            }
             ImGui::Text("Memory / Speed Options:");
 
+            if (!matrixFree) {
             ImGui::SetNextItemWidth(120);
             ImGui::InputFloat("Relative Threshold (%%)", &m_relativeThreshold, 0.0f, 0.0f, "%.4f");
             if (ImGui::IsItemHovered())
@@ -354,6 +458,9 @@ void PlanningPanel::render() {
                                   "Removes noise from far-field kernel tails.\n"
                                   "Recommended: 1e-6.");
             if (m_absoluteThreshold < 0.0f) m_absoluteThreshold = 0.0f;
+            } else {
+                ImGui::Checkbox("Skip external/body voxels", &m_excludeExternal);
+            }
 
             ImGui::SetNextItemWidth(120);
             ImGui::InputInt("Threads (0=all)", &m_numThreads);
@@ -389,7 +496,7 @@ void PlanningPanel::render() {
         } else {
             if (!canCalcDose) ImGui::BeginDisabled();
 
-            if (ImGui::Button("Calculate Dij", ImVec2(-1, 30))) {
+            if (ImGui::Button(m_engineIdx == 1 ? "Build matrix-free model" : "Calculate Dij", ImVec2(-1, 30))) {
                 m_state.resetDij();
                 m_isCalculatingDij = true;
                 m_dijCalcDone = false;
@@ -414,6 +521,10 @@ void PlanningPanel::render() {
                         opts.relativeThreshold = static_cast<double>(m_relativeThreshold) / 100.0;
                         opts.excludeExternal = m_excludeExternal;
                         opts.numThreads = m_numThreads;
+                        opts.matrixFree = (m_engineIdx == 1);
+                        opts.fluencePixelMm = static_cast<double>(m_fluencePixelMm);
+                        opts.computeBackend = static_cast<DoseComputeBackend>(m_computeBackendIdx);
+                        opts.gpuMemoryBudgetMiB = static_cast<size_t>(m_gpuMemoryBudgetMiB);
 
                         auto result = DoseCalculationPipeline::run(
                             *m_state.plan, *m_state.stf, *m_state.patientData, opts,
@@ -425,7 +536,11 @@ void PlanningPanel::render() {
 
                         m_state.computeGrid = result.doseGrid;
                         m_state.dij = result.dij;
-                        m_dijStatusMessage = result.cacheHit ? "Loaded from cache" :
+                        m_state.doseOp = result.doseOp;
+                        m_state.computeBackend = opts.matrixFree ? opts.computeBackend : DoseComputeBackend::CPU;
+                        m_state.gpuMemoryBudgetMiB = opts.gpuMemoryBudgetMiB;
+                        m_dijStatusMessage = !result.dij ? "Matrix-free model ready" :
+                            result.cacheHit ? "Loaded from cache" :
                             "Computed (nnz=" + std::to_string(result.dij->getNumNonZeros()) + ")";
                     } catch (const std::exception& e) {
                         Logger::error("Dij calculation failed: " + std::string(e.what()));
@@ -440,14 +555,27 @@ void PlanningPanel::render() {
         }
 
         // Show Dij status
+        if (!m_state.dijComputed() && !m_isCalculatingDij && !m_dijStatusMessage.empty())
+            ImGui::TextColored(getThemeColors().failText, "%s", m_dijStatusMessage.c_str());
         if (m_state.dijComputed()) {
             if (!m_dijStatusMessage.empty()) {
                 ImGui::TextColored(getThemeColors().passText, "%s", m_dijStatusMessage.c_str());
             }
-            ImGui::Text("Dij: %zu voxels x %zu bixels (nnz: %zu)",
-                        m_state.dij->getNumVoxels(),
-                        m_state.dij->getNumBixels(),
-                        m_state.dij->getNumNonZeros());
+            if (m_state.dij) {
+                ImGui::Text("Dij: %zu voxels x %zu bixels (nnz: %zu)",
+                            m_state.dij->getNumVoxels(),
+                            m_state.dij->getNumBixels(),
+                            m_state.dij->getNumNonZeros());
+            } else {
+                ImGui::Text("Matrix-free: %zu voxels x %zu bixels",
+                            m_state.doseOp->getNumVoxels(), m_state.doseOp->getNumBixels());
+                if (const auto* doseOperator = dynamic_cast<const FluenceDoseOperator*>(m_state.doseOp.get())) {
+                    const auto& model = doseOperator->model();
+                    ImGui::Text("Backend: %s", model.usesCuda() ? "CUDA" : "CPU");
+                    if (model.usesCuda()) ImGui::Text("GPU: %zu MiB | geometry %s",
+                        model.cudaMemoryBytes() / (1024 * 1024), model.cudaGeometryResident() ? "resident" : "streamed");
+                }
+            }
         }
     }
 

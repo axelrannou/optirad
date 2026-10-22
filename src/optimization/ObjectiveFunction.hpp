@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Structure.hpp"
+#include "dose/IDoseOperator.hpp"
 #include <vector>
 #include <string>
 
@@ -17,6 +18,7 @@ public:
 
     // Compute gradient with respect to dose
     virtual std::vector<double> gradient(const std::vector<double>& dose) const = 0;
+    virtual bool gpuDescription(DoseObjectiveSpec&) const { return false; }
 
     void setWeight(double weight);
     double getWeight() const;

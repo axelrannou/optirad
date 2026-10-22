@@ -11,7 +11,7 @@ public:
     std::string getName() const override;
 
     OptimizationResult optimize(
-        const DoseInfluenceMatrix& dij,
+        const IDoseOperator& dij,
         const std::vector<ObjectiveFunction*>& objectives,
         const std::vector<Constraint>& constraints
     ) override;
@@ -28,11 +28,19 @@ public:
     void setPrescriptionDose(double dose);
     void setHotspotThreshold(double threshold);  // fraction of Rx (e.g. 1.0 = 100%)
     void setHotspotPenalty(double penalty);
+    /// Use the exact derivative of the hotspot penalty (the legacy gradient is not consistent with the objective).
+    void setConsistentHotspotGradient(bool consistent);
 
     // Spatial smoothing and regularization
     void setSpatialSmoothing(double lambda, const std::vector<std::vector<int>>& neighbors);
     void setL2Regularization(double alpha);
     void setL1Regularization(double beta);
+    /// L1 weight chosen so that the starting point pays `fraction` of its own data objective for its total weight
+    /// (overrides setL1Regularization). Makes the penalty independent of the objective scale.
+    void setRelativeL1Regularization(double fraction);
+
+    /// Start from these weights instead of zero (size must match the Dij columns; otherwise ignored).
+    void setInitialWeights(std::vector<double> weights);
 
     void setIterationCallback(IterationCallback cb) override;
 
@@ -56,6 +64,7 @@ private:
     double m_prescriptionDose = 0.0;   // 0 = disabled
     double m_hotspotThreshold = 1.04;  // fraction of Rx (104%)
     double m_hotspotPenalty = 2000.0;  // penalty weight
+    bool m_consistentHotspotGradient = false;
     
     // Spatial smoothing (quadratic difference penalty)
     double m_spatialSmoothingWeight = 0.0;  // lambda
@@ -64,6 +73,8 @@ private:
     // Regularization
     double m_l2RegWeight = 0.0;  // alpha (Tikhonov)
     double m_l1RegWeight = 0.0;  // beta  (Total MU)
+    double m_relativeL1 = 0.0;
+    std::vector<double> m_initialWeights;
     
     // Convergence tracking
     int m_stallCount = 0;              // consecutive stalled iterations
@@ -81,7 +92,7 @@ private:
     // Compute total objective and gradient
     double computeObjectiveAndGradient(
         const std::vector<double>& weights,
-        const DoseInfluenceMatrix& dij,
+        const IDoseOperator& dij,
         const std::vector<ObjectiveFunction*>& objectives,
         std::vector<double>& grad
     );
@@ -103,7 +114,7 @@ private:
         const std::vector<double>& grad,
         const std::vector<double>& dir,
         double lb, double ub,
-        const DoseInfluenceMatrix& dij,
+        const IDoseOperator& dij,
         const std::vector<ObjectiveFunction*>& objectives,
         std::vector<double>& x_new,
         double& fval_new,

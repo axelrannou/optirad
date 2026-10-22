@@ -7,8 +7,10 @@
 #include "steering/StfProperties.hpp"
 #include "phsp/PhaseSpaceBeamSource.hpp"
 #include "dose/DoseInfluenceMatrix.hpp"
+#include "dose/FluenceDoseModel.hpp"
 #include "dose/DoseMatrix.hpp"
 #include "dose/DoseStore.hpp"
+#include "core/workflow/OptimizationPipeline.hpp"
 #include "core/workflow/PlanAnalysis.hpp"
 #include "geometry/Grid.hpp"
 #include "core/Aperture.hpp"
@@ -18,6 +20,8 @@
 #include <string>
 
 namespace optirad {
+
+struct ArcPipelineResult;
 
 /// Shared pipeline state used by both CLI and GUI.
 /// Holds the data flowing through the treatment planning workflow:
@@ -33,11 +37,15 @@ struct WorkflowState {
 
     // ── Dose calculation state ──
     std::shared_ptr<DoseInfluenceMatrix> dij;
+    std::shared_ptr<IDoseOperator> doseOp;
+    DoseComputeBackend computeBackend = DoseComputeBackend::Auto;
+    size_t gpuMemoryBudgetMiB = 0;
     std::shared_ptr<Grid> displayGrid;  // Grid synced with doseResult for display/analysis
     std::shared_ptr<Grid> computeGrid;
 
     // ── Optimization state ──
     std::vector<double> optimizedWeights;
+    OptimizationConfig optimizationConfig;   // settings of the last fluence optimization (reused by the arc stage)
     std::shared_ptr<DoseMatrix> doseResult;
 
     // ── Leaf sequencing state ──
@@ -45,6 +53,9 @@ struct WorkflowState {
     std::vector<double> deliverableWeights;
     std::shared_ptr<DoseMatrix> deliverableDoseResult;
     std::vector<StructureDoseStats> deliverableStats;
+
+    // ── Arc (VMAT) state: result of arc sequencing + aperture weight optimization ──
+    std::shared_ptr<ArcPipelineResult> arcResult;
 
     // ── Multi-dose management ──
     DoseStore doseStore;
@@ -59,7 +70,7 @@ struct WorkflowState {
     bool phaseSpaceLoaded() const {
         return !phaseSpaceSources.empty() && phaseSpaceSources[0]->isBuilt();
     }
-    bool dijComputed() const { return dij != nullptr && dij->getNumNonZeros() > 0; }
+    bool dijComputed() const { return doseOp != nullptr && (!dij || dij->getNumNonZeros() > 0); }
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
     bool leafSequenceDone() const { return !leafSequences.empty(); }
     bool doseAvailable() const { return doseStore.count() > 0 && doseStore.getSelected() != nullptr; }
@@ -88,11 +99,13 @@ struct WorkflowState {
     void resetPhaseSpace() { phaseSpaceSources.clear(); }
     void resetDij() {
         dij.reset();
+        doseOp.reset();
         computeGrid.reset();
         optimizedWeights.clear();
         syncSelectedDose();
     }
     void resetLeafSequence() {
+        arcResult.reset();
         leafSequences.clear();
         deliverableWeights.clear();
         deliverableDoseResult.reset();

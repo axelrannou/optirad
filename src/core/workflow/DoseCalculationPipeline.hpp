@@ -4,6 +4,8 @@
 #include "core/Stf.hpp"
 #include "core/PatientData.hpp"
 #include "dose/DoseInfluenceMatrix.hpp"
+#include "dose/FluenceDoseModel.hpp"
+#include "dose/IDoseOperator.hpp"
 #include "dose/DoseCalcOptions.hpp"
 #include "geometry/Grid.hpp"
 #include <memory>
@@ -22,11 +24,18 @@ struct DoseCalcPipelineOptions {
     double relativeThreshold = 1e-4;   // fraction (1e-4 = 0.01%)
     int numThreads = 0;                // 0 = all
     bool excludeExternal = true;       // no Dij rows for body-only voxels (use direct dose for the full cube)
+
+    /// Build a FluenceDoseModel instead of a stored Dij: no cache, no thresholds, much less memory.
+    bool matrixFree = false;
+    double fluencePixelMm = 1.5;       // fluence image pixel; smaller = more accurate and slower
+    DoseComputeBackend computeBackend = DoseComputeBackend::Auto;
+    size_t gpuMemoryBudgetMiB = 0;
 };
 
 /// Result of the dose calculation pipeline.
 struct DoseCalcPipelineResult {
-    std::shared_ptr<DoseInfluenceMatrix> dij;
+    std::shared_ptr<DoseInfluenceMatrix> dij;       // null in matrix-free mode
+    std::shared_ptr<IDoseOperator> doseOp;          // the dij, or the matrix-free operator
     std::shared_ptr<Grid> doseGrid;
     bool cacheHit = false;
 };

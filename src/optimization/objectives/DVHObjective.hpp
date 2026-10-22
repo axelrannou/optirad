@@ -31,6 +31,10 @@ public:
     double getDoseThreshold() const { return m_doseThreshold; }
     void setVolumeFraction(double fraction) { m_volumeFraction = fraction; }
     double getVolumeFraction() const { return m_volumeFraction; }
+    bool gpuDescription(DoseObjectiveSpec& output) const override {
+        output = {m_type == Type::MIN_DVH ? 3 : 4, m_doseThreshold, m_weight, m_volumeFraction, getActiveIndices()};
+        return true;
+    }
     
 private:
     Type m_type = Type::MIN_DVH;

@@ -39,13 +39,13 @@ private:
     bool m_objectivesInitialized = false;
 
     // Optimizer settings
-    int m_maxIterations = 400;
-    float m_tolerance = 1e-5f;
+    int m_maxIterations = OptimizationConfig{}.maxIterations;
+    float m_tolerance = static_cast<float>(OptimizationConfig{}.tolerance);
 
     // NTO (Normal Tissue Objective) / hotspot control
-    bool m_ntoEnabled = true;
-    float m_ntoThresholdPct = 104.0f;  // % of prescription dose
-    int m_ntoPenalty = 2000.0f;
+    bool m_ntoEnabled = OptimizationConfig{}.ntoEnabled;
+    float m_ntoThresholdPct = static_cast<float>(100.0 * OptimizationConfig{}.ntoThresholdPct);  // % of prescription dose
+    int m_ntoPenalty = static_cast<int>(OptimizationConfig{}.ntoPenalty);
 
     // Spatial smoothing and regularization
     bool m_smoothingEnabled = false;

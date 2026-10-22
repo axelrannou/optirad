@@ -2,9 +2,12 @@
 
 #include "IPanel.hpp"
 #include "../AppState.hpp"
+#include "core/workflow/DoseCalculationPipeline.hpp"
+#include "core/workflow/PlanBuilder.hpp"
 #include <atomic>
 #include <thread>
 #include <string>
+#include <vector>
 
 namespace optirad {
 
@@ -32,13 +35,25 @@ private:
     int m_radiationModeIdx = 0;
     int m_machineIdx = 0;
 
+    // Delivery technique: 0=SMLC, 1=VMAT
+    int m_deliveryIdx = 0;
+    struct ArcUi {
+        float start = static_cast<float>(ArcSpec{}.startAngle);
+        float stop = static_cast<float>(ArcSpec{}.stopAngle);
+        bool clockwise = ArcSpec{}.clockwise;
+        float couch = static_cast<float>(ArcSpec{}.couchAngle);
+    };
+    std::vector<ArcUi> m_arcs{ArcUi{}};
+    float m_optSpacing = static_cast<float>(VmatSettings{}.optimizationSpacingDeg);   // degrees per fluence-optimization beam
+    float m_cpSpacing = static_cast<float>(VmatSettings{}.controlPointSpacingDeg);    // degrees per control point
+
     // Fractions
-    int m_numFractions = 30;
+    int m_numFractions = PlanConfig{}.numFractions;
 
     // Gantry angles: 0=Range, 1=List
     int m_gantryMode = 0;
     float m_gantryStart = 0.0f;
-    float m_gantryStep = 4.0f;
+    float m_gantryStep = static_cast<float>(PlanConfig{}.gantryStep);
     float m_gantryStop = 360.0f;
     std::string m_gantryListBuf = "0 90 180 270";
 
@@ -50,7 +65,7 @@ private:
     std::string m_couchListBuf = "0 0 0 0";
 
     // Bixel width
-    float m_bixelWidth = 7.0f;
+    float m_bixelWidth = static_cast<float>(PlanConfig{}.bixelWidth);
 
     // Plan state
     bool m_planCreated = false;
@@ -70,10 +85,16 @@ private:
     int m_dijTotalBeams = 0;
 
     // Dose calc options
-    float m_doseResolution[3] = {2.5f, 2.5f, 2.5f};
-    float m_relativeThreshold = 0.01f;
-    bool  m_excludeExternal = true;
-    float m_absoluteThreshold = 1e-6f;
+    float m_doseResolution[3] = {static_cast<float>(DoseCalcPipelineOptions{}.resolution[0]),
+                                 static_cast<float>(DoseCalcPipelineOptions{}.resolution[1]),
+                                 static_cast<float>(DoseCalcPipelineOptions{}.resolution[2])};
+    int   m_engineIdx = 1;              // 0 = stored Dij, 1 = matrix-free
+    float m_fluencePixelMm = static_cast<float>(DoseCalcPipelineOptions{}.fluencePixelMm);
+    int m_computeBackendIdx = 1;
+    int m_gpuMemoryBudgetMiB = 0;
+    float m_relativeThreshold = static_cast<float>(100.0 * DoseCalcPipelineOptions{}.relativeThreshold);   // %
+    bool  m_excludeExternal = DoseCalcPipelineOptions{}.excludeExternal;
+    float m_absoluteThreshold = static_cast<float>(DoseCalcPipelineOptions{}.absoluteThreshold);
     int m_numThreads = 0;
 };
 

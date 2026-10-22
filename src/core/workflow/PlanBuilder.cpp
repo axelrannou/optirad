@@ -2,6 +2,7 @@
 #include "io/MachineLoader.hpp"
 #include "steering/PhotonIMRTStfGenerator.hpp"
 #include "utils/Logger.hpp"
+#include <stdexcept>
 
 namespace optirad {
 
@@ -18,15 +19,29 @@ PlanBuilder::Result PlanBuilder::build(const PlanConfig& config,
     // Load machine
     plan->setMachine(MachineLoader::load(config.radiationMode, config.machineName));
 
+    plan->setDeliveryMode(config.deliveryMode);
+    plan->setVmatSettings(config.vmat);
+
     // Configure STF properties
     StfProperties stfProps;
-    if (!config.gantryAngles.empty()) {
+    if (config.deliveryMode == DeliveryMode::VMAT) {
+        if (config.vmat.arcs.empty()) throw std::runtime_error("VMAT plan needs at least one arc");
+        std::vector<double> gantry, couch;
+        for (const auto& s : ArcGeometry::sectors(config.vmat)) {
+            gantry.push_back(s.centerAngle);
+            couch.push_back(s.couchAngle);
+        }
+        stfProps.setGantryAngles(gantry);
+        stfProps.setCouchAngles(couch);
+    } else if (!config.gantryAngles.empty()) {
         stfProps.setGantryAngles(config.gantryAngles);
     } else {
         stfProps.setGantryAngles(config.gantryStart, config.gantryStep, config.gantryStop);
     }
 
-    if (!config.couchAngles.empty()) {
+    if (config.deliveryMode == DeliveryMode::VMAT) {
+        // Couch angles were set per arc above.
+    } else if (!config.couchAngles.empty()) {
         stfProps.setCouchAngles(config.couchAngles);
     } else if (config.couchStep > 0.0) {
         stfProps.setCouchAngles(config.couchStart, config.couchStep, config.couchStop);

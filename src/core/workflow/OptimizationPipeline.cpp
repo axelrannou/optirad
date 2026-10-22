@@ -4,6 +4,7 @@
 #include "optimization/Constraint.hpp"
 #include "dose/DoseEngineFactory.hpp"
 #include "utils/Logger.hpp"
+#include <algorithm>
 #include <chrono>
 #include <unordered_map>
 #include <cmath>
@@ -76,7 +77,7 @@ static std::vector<std::vector<int>> buildNeighborMap(const Stf& stf) {
 }
 
 static OptimizationPipelineResult runImpl(
-    const DoseInfluenceMatrix& dij,
+    const IDoseOperator& dij,
     const OptimizationConfig& config,
     BuiltObjectives objectives,
     const PatientData& patientData,
@@ -161,6 +162,7 @@ static OptimizationPipelineResult runImpl(
 
     // Forward dose computation
     auto engine = DoseEngineFactory::create("PencilBeam");
+    engine->setOptions(dij.engineOptions());
     if (!dij.hasAllRows() && plan && stf) {
         // The Dij skips external voxels; recompute the full cube directly.
         result.doseResult = std::make_shared<DoseMatrix>(
@@ -169,8 +171,11 @@ static OptimizationPipelineResult runImpl(
         if (!dij.hasAllRows())
             Logger::warn("OptimizationPipeline: Dij skips external voxels and no plan/STF was given; "
                          "dose outside the structures is zero.");
-        result.doseResult = std::make_shared<DoseMatrix>(
-            engine->calculateDose(dij, result.weights, doseGrid));
+        const auto doseVec = dij.computeDose(result.weights);
+        result.doseResult = std::make_shared<DoseMatrix>();
+        result.doseResult->setGrid(doseGrid);
+        result.doseResult->allocate();
+        std::copy(doseVec.begin(), doseVec.end(), result.doseResult->data());
     }
 
     // Plan analysis
@@ -181,7 +186,7 @@ static OptimizationPipelineResult runImpl(
 }
 
 OptimizationPipelineResult OptimizationPipeline::run(
-    const DoseInfluenceMatrix& dij,
+    const IDoseOperator& dij,
     const OptimizationConfig& config,
     const ObjectiveProtocol& protocol,
     const PatientData& patientData,
@@ -197,7 +202,7 @@ OptimizationPipelineResult OptimizationPipeline::run(
 }
 
 OptimizationPipelineResult OptimizationPipeline::runWithObjectives(
-    const DoseInfluenceMatrix& dij,
+    const IDoseOperator& dij,
     const OptimizationConfig& config,
     BuiltObjectives objectives,
     const PatientData& patientData,

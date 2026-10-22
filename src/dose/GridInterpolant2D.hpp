@@ -92,6 +92,7 @@ public:
     bool isValid() const { return !m_data.empty() && m_nx > 0 && m_ny > 0; }
 
 private:
+    friend class CudaDirectDose;
     double m_xMin = 0.0, m_xMax = 1.0;
     double m_yMin = 0.0, m_yMax = 1.0;
     size_t m_nx = 0, m_ny = 0;
