@@ -24,13 +24,11 @@ void LeafSequencingPanel::renderArc() {
 
     if (running) ImGui::BeginDisabled();
     if (ImGui::CollapsingHeader("Arc Sequencer Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-        static const char* kStrategies[] = {"Fluence sweep + refinement", "Progressive-resolution DAO (Eclipse-like)"};
-        ImGui::Combo("Strategy", &m_arcStrategy, kStrategies, IM_ARRAYSIZE(kStrategies));
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("DAO: conformal apertures at a few control points are optimized directly against the\n"
-                              "objectives (leaf positions and MU), then control points are inserted and re-optimized\n"
-                              "until the plan's control point spacing. Few MU, smooth leaf motion, no gantry slowdown.");
-        const bool dao = m_arcStrategy == static_cast<int>(ArcStrategy::ProgressiveDao);
+        ImGui::Text("Strategy: %s", m_state.arcStrategy == ArcStrategy::ProgressiveDao ?
+                    "Progressive-resolution DAO" : "Fluence sweep + refinement");
+        ImGui::SameLine();
+        ImGui::TextDisabled("(chosen in the Planning panel)");
+        const bool dao = m_state.arcStrategy == ArcStrategy::ProgressiveDao;
 
         if (dao) {
             ImGui::InputInt("Iterations per resolution", &m_arcDaoIterations);
@@ -122,15 +120,18 @@ void LeafSequencingPanel::renderArc() {
                 const int doseId = m_state.doseStore.addDose(
                     "VMAT Arc #" + std::to_string(seqNum), m_arcPending->dose, m_state.computeGrid);
                 m_state.incrementLeafSeqCount();
-                m_state.arcCache[doseId] = {m_arcPending, m_state.activeOptDoseId};
+                m_state.arcCache[doseId] = {m_arcPending, m_state.directDao() ? -1 : m_state.activeOptDoseId};
                 m_state.syncSelectedDose();
                 m_arcPending.reset();
             }
         }
     } else {
         const bool hasSpecs = !m_state.optimizationSpecs.empty() && m_state.computeGrid;
+        const bool autoStart = m_state.arcAutoStart && hasSpecs;
+        m_state.arcAutoStart = false;
         if (!hasSpecs) ImGui::BeginDisabled();
-        if (ImGui::Button("Run Arc Sequencing", ImVec2(-1, 30))) {
+        const bool dao = m_state.arcStrategy == ArcStrategy::ProgressiveDao;
+        if (ImGui::Button(dao ? "Run Arc DAO" : "Run Arc Sequencing", ImVec2(-1, 30)) || autoStart) {
             if (m_arcThread.joinable()) m_arcThread.join();
             m_state.resetLeafSequence();
             m_arcRunning = true;
@@ -140,7 +141,7 @@ void LeafSequencingPanel::renderArc() {
             m_arcStatus.clear();
 
             ArcOptimizationConfig settings;
-            settings.strategy = static_cast<ArcStrategy>(m_arcStrategy);
+            settings.strategy = m_state.arcStrategy;
             settings.daoIterations = m_arcDaoIterations;
             settings.daoCoarsestSpacingDeg = static_cast<double>(m_arcDaoCoarsest);
             settings.daoHotspotThresholdPct = 0.01 * static_cast<double>(m_arcDaoHotspotThresholdPct);
@@ -161,7 +162,8 @@ void LeafSequencingPanel::renderArc() {
             settings.muPenalty = static_cast<double>(m_arcMuPenalty);
             settings.maxWeightFactor = static_cast<double>(m_arcMaxWeightFactor);
 
-            m_arcThread = std::thread([this, settings]() {
+            const bool direct = m_state.directDao();
+            m_arcThread = std::thread([this, settings, direct]() {
                 try {
                     const Grid& doseGrid = *m_state.computeGrid;
                     ArcOptimizationConfig cfg = settings;
@@ -171,12 +173,18 @@ void LeafSequencingPanel::renderArc() {
                     cfg.computeBackend = m_state.computeBackend;
                     cfg.gpuMemoryBudgetMiB = m_state.gpuMemoryBudgetMiB;
                     if (m_state.doseOp) cfg.engineOptions = m_state.doseOp->engineOptions();
+                    if (direct) {
+                        cfg.engineOptions.numThreads = m_state.daoDose.numThreads;
+                        cfg.engineOptions.excludeExternal = m_state.daoDose.excludeExternal;
+                        cfg.fluencePixelMm = m_state.daoDose.fluencePixelMm;
+                    }
 
                     auto objectives = ObjectiveBuilder::buildFromSpecs(
                         m_state.optimizationSpecs, *m_state.patientData, m_state.patientData->getGrid(), doseGrid);
 
                     m_arcPending = std::make_shared<ArcPipelineResult>(ArcPipeline::run(
-                        m_state.optimizedWeights, *m_state.stf, *m_state.plan, *m_state.patientData, doseGrid,
+                        direct ? std::vector<double>() : m_state.optimizedWeights,
+                        *m_state.stf, *m_state.plan, *m_state.patientData, doseGrid,
                         std::move(objectives), cfg,
                         [this](const IterationInfo& info) { m_arcIter.store(info.iteration); },
                         [this](const std::string& stage) {
@@ -250,12 +258,15 @@ void LeafSequencingPanel::renderArc() {
 }
 
 void LeafSequencingPanel::render() {
+    if (m_state.arcAutoStart) m_visible = true;
     if (!m_visible) return;
 
     ImGui::Begin("Leaf Sequencing", &m_visible);
 
-    if (!m_state.optimizationDone()) {
-        ImGui::TextDisabled("Run optimization first to enable leaf sequencing.");
+    const bool directReady = m_state.directDao() && m_state.computeGrid && !m_state.optimizationSpecs.empty();
+    if (!m_state.optimizationDone() && !directReady) {
+        ImGui::TextDisabled(m_state.directDao() ? "Run DAO from the Optimization panel."
+                                                : "Run optimization first to enable leaf sequencing.");
         ImGui::End();
         return;
     }

@@ -25,8 +25,9 @@ void OptimizationPanel::render() {
 
     ImGui::Begin("Optimization", &m_visible);
 
-    if (!m_state.dijComputed()) {
-        ImGui::TextDisabled("Calculate Dij first to enable optimization.");
+    const bool dao = m_state.directDao();
+    if (dao ? !m_state.patientData : !m_state.dijComputed()) {
+        ImGui::TextDisabled(dao ? "Load a patient and create a plan first." : "Calculate Dij first to enable optimization.");
         ImGui::End();
         return;
     }
@@ -211,11 +212,12 @@ void OptimizationPanel::render() {
     ImGui::Spacing();
     if (m_isOptimizing) ImGui::BeginDisabled();
     if (ImGui::CollapsingHeader("Optimizer Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::InputInt("Max Iterations", &m_maxIterations);
-        if (m_maxIterations < 1) m_maxIterations = 1;
-        ImGui::InputFloat("Tolerance", &m_tolerance, 1e-7f, 1e-4f, "%.7f");
-
-        ImGui::Separator();
+        if (!dao) {
+            ImGui::InputInt("Max Iterations", &m_maxIterations);
+            if (m_maxIterations < 1) m_maxIterations = 1;
+            ImGui::InputFloat("Tolerance", &m_tolerance, 1e-7f, 1e-4f, "%.7f");
+            ImGui::Separator();
+        }
         ImGui::TextUnformatted("Hotspot Control (NTO)");
         ImGui::Checkbox("Enable NTO", &m_ntoEnabled);
         if (!m_ntoEnabled) ImGui::BeginDisabled();
@@ -223,6 +225,9 @@ void OptimizationPanel::render() {
         ImGui::InputInt("Penalty", &m_ntoPenalty);
         if (!m_ntoEnabled) ImGui::EndDisabled();
 
+        if (dao) {
+            ImGui::TextDisabled("DAO settings (iterations, MU penalty, ...) are in the Leaf Sequencing panel.");
+        } else {
         ImGui::Separator();
         ImGui::TextUnformatted("Fluence Smoothing & Regularization");
         ImGui::Checkbox("Spatial Smoothing", &m_smoothingEnabled);
@@ -249,6 +254,7 @@ void OptimizationPanel::render() {
             ImGui::SetTooltip("Penalizes total monitor units. Reduces scatter/leakage radiation.\n"
                               "Typical range: 0.001 - 0.1");
         if (!m_l1RegEnabled) ImGui::EndDisabled();
+        }
     }
     if (m_isOptimizing) ImGui::EndDisabled();
 
@@ -322,7 +328,7 @@ void OptimizationPanel::render() {
         }
     } else {
         // Optimization should be possible only when PTV constraints are present to avoid meaningless runs.
-        bool canOptimize = m_state.dijComputed() && !m_objectives.empty() &&
+        bool canOptimize = (dao || m_state.dijComputed()) && !m_objectives.empty() &&
                           m_state.patientData && m_state.patientData->getStructureSet() &&
                           std::any_of(m_objectives.begin(), m_objectives.end(),
                                       [this](const ObjectiveConfig& obj) {
@@ -335,7 +341,13 @@ void OptimizationPanel::render() {
             ImGui::BeginDisabled();
         }
 
-        if (ImGui::Button("Run Optimization", ImVec2(-1, 30))) {
+        if (dao) {
+            const bool busy = m_state.taskRunning;
+            if (busy) ImGui::BeginDisabled();
+            if (ImGui::Button("Run DAO", ImVec2(-1, 30))) startDirectDao();
+            if (busy) ImGui::EndDisabled();
+            ImGui::TextDisabled("Progress and results: Leaf Sequencing panel (DAO settings).");
+        } else if (ImGui::Button("Run Optimization", ImVec2(-1, 30))) {
             // Join any previous thread before starting a new one
             if (m_optThread.joinable()) m_optThread.join();
 
@@ -474,6 +486,40 @@ void OptimizationPanel::render() {
     }
 
     ImGui::End();
+}
+
+void OptimizationPanel::startDirectDao() {
+    std::vector<ObjectiveSpec> specs;
+    double prescriptionDose = 0.0;
+    const auto* ss = m_state.patientData->getStructureSet();
+    for (const auto& cfg : m_objectives) {
+        ObjectiveSpec spec;
+        spec.structurePattern = cfg.structureName;
+        spec.exactMatch = true;
+        spec.typeIdx = cfg.typeIdx;
+        spec.doseValue = static_cast<double>(cfg.doseValue);
+        spec.weight = static_cast<double>(cfg.weight);
+        spec.volumePct = static_cast<double>(cfg.volumePct);
+        specs.push_back(spec);
+        const auto* structure = ss->getStructureByName(cfg.structureName);
+        if (structure && structure->isTarget() && cfg.doseValue > prescriptionDose) prescriptionDose = cfg.doseValue;
+    }
+
+    OptimizationConfig config;
+    config.targetDose = prescriptionDose > 0 ? prescriptionDose : 66.0;
+    config.ntoEnabled = m_ntoEnabled;
+    config.ntoThresholdPct = static_cast<double>(m_ntoThresholdPct) / 100.0;
+    config.ntoPenalty = static_cast<double>(m_ntoPenalty);
+
+    const auto& settings = m_state.daoDose;
+    m_state.plan->setPrescribedDose(config.targetDose);
+    m_state.plan->setDoseGridResolution(settings.resolution);
+    m_state.computeGrid = std::make_shared<Grid>(Grid::createDoseGrid(m_state.patientData->getGrid(), settings.resolution));
+    m_state.computeBackend = settings.backend;
+    m_state.gpuMemoryBudgetMiB = settings.gpuMemoryBudgetMiB;
+    m_state.optimizationSpecs = specs;
+    m_state.optimizationConfig = config;
+    m_state.arcAutoStart = true;
 }
 
 void OptimizationPanel::renderConvergenceCurve(const std::vector<IterationInfo>& log) {

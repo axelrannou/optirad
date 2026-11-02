@@ -110,6 +110,8 @@ public:
     static std::vector<double> bixelWeights(const Stf& cpStf, const ArcSequenceResult& sequence,
                                             bool integrateLeafMotion = true);
 
+    /// `fmoWeights` may be empty with ArcStrategy::ProgressiveDao: the seed then comes from the target projection of
+    /// `fmoStf` (no fluence optimization needed).
     static ArcPipelineResult run(const std::vector<double>& fmoWeights,
                                  const Stf& fmoStf,
                                  const Plan& plan,

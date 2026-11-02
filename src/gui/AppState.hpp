@@ -14,6 +14,8 @@
 #include "geometry/Grid.hpp"
 #include "core/Aperture.hpp"
 #include "core/workflow/ArcPipeline.hpp"
+#include "core/workflow/DoseCalculationPipeline.hpp"
+#include <array>
 #include "optimization/ObjectiveProtocol.hpp"
 #include "io/DicomContext.hpp"
 #include <memory>
@@ -57,6 +59,16 @@ struct GuiAppState {
     std::shared_ptr<Grid> displayGrid;      // Grid synced with doseResult for rendering
     std::shared_ptr<Grid> computeGrid;      // Computation grid for Dij / optimization
 
+    /// Dose settings of a DAO plan, which needs no Dij or fluence model: only the dose grid and the engine settings.
+    struct DaoDoseSettings {
+        std::array<double, 3> resolution = DoseCalcPipelineOptions{}.resolution;
+        int numThreads = 0;
+        bool excludeExternal = DoseCalcPipelineOptions{}.excludeExternal;
+        double fluencePixelMm = DoseCalcPipelineOptions{}.fluencePixelMm;
+        DoseComputeBackend backend = DoseComputeBackend::Auto;
+        size_t gpuMemoryBudgetMiB = 0;
+    } daoDose;
+
     // ── Optimization state ──
     std::vector<double> optimizedWeights;
     std::shared_ptr<DoseMatrix> doseResult;
@@ -70,6 +82,8 @@ struct GuiAppState {
     // ── Arc (VMAT) state ──
     std::shared_ptr<ArcPipelineResult> arcResult;
     std::vector<ObjectiveSpec> optimizationSpecs;   // objectives of the last fluence optimization (reused by the arc stage)
+    ArcStrategy arcStrategy = ArcStrategy::SweepRefine;   // VMAT delivery strategy, chosen with the plan
+    bool arcAutoStart = false;                            // set when optimization ends: chain straight into arc optimization
     OptimizationConfig optimizationConfig;          // settings of the last fluence optimization
 
     // ── Multi-dose management ──
@@ -114,6 +128,10 @@ struct GuiAppState {
         return !phaseSpaceSources.empty() && phaseSpaceSources[0]->isBuilt();
     }
     bool dijComputed() const { return doseOp != nullptr && (!dij || dij->getNumNonZeros() > 0); }
+    /// DAO on a VMAT plan skips the Dij / fluence optimization stages.
+    bool directDao() const {
+        return plan && plan->isVmat() && arcStrategy == ArcStrategy::ProgressiveDao;
+    }
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
     bool leafSequenceDone() const { return !leafSequences.empty(); }
     bool doseAvailable() const { return doseStore.count() > 0 && doseStore.getSelected() != nullptr; }
@@ -249,7 +267,7 @@ struct GuiAppState {
     // After clearing pipeline state, re-sync display dose from DoseStore so
     // SliceViews / stats / DVH keep showing the currently selected dose.
     void resetPlan() {
-        plan.reset(); stfProps.reset(); stf.reset(); phaseSpaceSources.clear();
+        plan.reset(); stfProps.reset(); stf.reset(); phaseSpaceSources.clear(); optimizationSpecs.clear();
         resetDij();
     }
     void resetStf() { stfProps.reset(); stf.reset(); resetDij(); }

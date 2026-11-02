@@ -725,4 +725,24 @@ TEST(ArcPipelineTest, ProgressiveDaoRefinesThroughSeveralResolutionsAndRespectsT
     }
 }
 
+TEST(ArcPipelineTest, ProgressiveDaoNeedsNoFluenceAndCalibratesItsOwnMu) {
+    ArcFixture f;
+    const Grid doseGrid = Grid::createDoseGrid(f.patient->getGrid(), {5.0, 5.0, 5.0});
+    ArcOptimizationConfig cfg;
+    cfg.computeBackend = DoseComputeBackend::CPU;
+    cfg.base.targetDose = 60.0;
+    cfg.base.ntoEnabled = false;
+    cfg.strategy = ArcStrategy::ProgressiveDao;
+    cfg.daoCoarsestSpacingDeg = 40.0;
+    cfg.daoIterations = 15;
+
+    const auto r = ArcPipeline::run({}, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
+                                    ptvObjective(*f.patient, doseGrid, 60.0), cfg);
+    ASSERT_EQ(r.sequence.controlPoints.size(), 9u);
+    EXPECT_GT(r.sequence.totalMU, 0.0);
+    EXPECT_NEAR(ptvMeanDose(r), 60.0, 0.25 * 60.0);
+    for (const auto& cp : r.sequence.controlPoints)
+        for (size_t p = 0; p < cp.aperture.bankA.size(); ++p) EXPECT_LE(cp.aperture.bankA[p], cp.aperture.bankB[p]);
+}
+
 } // namespace optirad::tests

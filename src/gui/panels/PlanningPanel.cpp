@@ -70,8 +70,17 @@ void PlanningPanel::render() {
         static const char* kDelivery[] = { "SMLC (step-and-shoot IMRT)", "VMAT (arcs)" };
         ImGui::Combo("Technique", &m_deliveryIdx, kDelivery, IM_ARRAYSIZE(kDelivery));
         if (m_deliveryIdx == 1) {
-            ImGui::TextDisabled("Fluence is optimized on one beam per arc sector, then sequenced\n"
-                                "into one aperture per control point.");
+            int strategy = static_cast<int>(m_state.arcStrategy);
+            static const char* kStrategies[] = {"Fluence optimization, then sequencing",
+                                                "Direct aperture optimization (DAO)"};
+            ImGui::Combo("Optimization", &strategy, kStrategies, IM_ARRAYSIZE(kStrategies));
+            m_state.arcStrategy = static_cast<ArcStrategy>(strategy);
+            if (m_state.arcStrategy == ArcStrategy::ProgressiveDao)
+                ImGui::TextDisabled("Apertures are optimized directly against the objectives: no Dij, no fluence\n"
+                                    "optimization, no sequencing. Only the dose grid is set up.");
+            else
+                ImGui::TextDisabled("Fluence is optimized on one beam per arc sector, then sequenced\n"
+                                    "into one aperture per control point.");
             int toRemove = -1;
             for (size_t a = 0; a < m_arcs.size(); ++a) {
                 auto& arc = m_arcs[a];
@@ -389,7 +398,40 @@ void PlanningPanel::render() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    if (ImGui::CollapsingHeader("Dose Calculation", ImGuiTreeNodeFlags_DefaultOpen)) {
+    const bool daoPlan = isVmat && m_state.arcStrategy == ArcStrategy::ProgressiveDao;
+    if (daoPlan) {
+        if (ImGui::CollapsingHeader("Dose Settings (DAO)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("Dose Grid Resolution:");
+            ImGui::SetNextItemWidth(95.0f);
+            ImGui::InputFloat("##daoRes0", &m_doseResolution[0], 0.0f, 0.0f, "%.1f");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(95.0f);
+            ImGui::InputFloat("##daoRes1", &m_doseResolution[1], 0.0f, 0.0f, "%.1f");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(95.0f);
+            ImGui::InputFloat("##daoRes2", &m_doseResolution[2], 0.0f, 0.0f, "%.1f");
+            ImGui::SameLine();
+            ImGui::TextUnformatted("mm");
+            static const char* kBackends[] = { "CPU", "Auto", "CUDA" };
+            ImGui::Combo("Compute backend", &m_computeBackendIdx, kBackends, IM_ARRAYSIZE(kBackends));
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("GPU budget (MiB, 0=auto)", &m_gpuMemoryBudgetMiB);
+            if (m_gpuMemoryBudgetMiB < 0) m_gpuMemoryBudgetMiB = 0;
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputFloat("Fluence pixel (mm)", &m_fluencePixelMm, 0.0f, 0.0f, "%.1f");
+            if (m_fluencePixelMm < 0.5f) m_fluencePixelMm = 0.5f;
+            ImGui::Checkbox("Skip external/body voxels", &m_excludeExternal);
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("Threads (0=all)", &m_numThreads);
+            if (m_numThreads < 0) m_numThreads = 0;
+            ImGui::TextDisabled("Next: set the objectives in the Optimization panel and run DAO.");
+        }
+        m_state.daoDose = {{static_cast<double>(m_doseResolution[0]), static_cast<double>(m_doseResolution[1]),
+                            static_cast<double>(m_doseResolution[2])},
+                           m_numThreads, m_excludeExternal, static_cast<double>(m_fluencePixelMm),
+                           static_cast<DoseComputeBackend>(m_computeBackendIdx),
+                           static_cast<size_t>(m_gpuMemoryBudgetMiB)};
+    } else if (ImGui::CollapsingHeader("Dose Calculation", ImGuiTreeNodeFlags_DefaultOpen)) {
         bool canCalcDose = m_state.stfGenerated() && !m_state.isPhaseSpaceMachine();
 
         if (!m_state.stfGenerated()) {

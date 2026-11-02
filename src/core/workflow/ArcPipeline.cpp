@@ -523,7 +523,50 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
         std::to_string(seedMu) + " -> " + std::to_string(result.sequence.totalMU));
 }
 
+// Dose is linear in MU, so one dose calculation gives the global MU scale of the seed that minimizes the objectives.
+// Returns the fluence model of the stage so the optimizer does not rebuild it.
+std::shared_ptr<FluenceDoseModel> calibrateSeedMu(ArcPipelineResult& stage, const Plan& plan,
+                                                  const PatientData& patient, const Grid& grid,
+                                                  const BuiltObjectives& objectives,
+                                                  const ArcOptimizationConfig& config) {
+    PencilBeamEngine engine;
+    engine.setOptions(config.engineOptions);
+    FluenceModelOptions options;
+    options.pixelMm = config.fluencePixelMm;
+    options.backend = config.computeBackend;
+    options.gpuMemoryBudgetMiB = config.gpuMemoryBudgetMiB;
+    auto model = std::make_shared<FluenceDoseModel>(
+        engine.buildFluenceModel(plan, *stage.controlPointStf, patient, grid, options));
+    FluenceDoseOperator doseOperator(model, stage.controlPointStf);
+
+    for (auto& cp : stage.sequence.controlPoints) cp.mu = cp.aperture.weight = 1.0;
+    const auto unitDose = doseOperator.computeDose(
+        ArcPipeline::bixelWeights(*stage.controlPointStf, stage.sequence, config.integrateLeafMotion));
+    auto cost = [&](double scale) {
+        std::vector<double> dose(unitDose);
+        for (double& value : dose) value *= scale;
+        double total = 0.0;
+        for (const auto* objective : objectives.ptrs) total += objective->compute(dose);
+        return total;
+    };
+    // One-sided objectives (minimum dose) are flat above their optimum: ties go to the smaller scale.
+    const double golden = 0.5 * (std::sqrt(5.0) - 1.0);
+    double low = std::log(1e-2), high = std::log(1e7);
+    double a = high - golden * (high - low), b = low + golden * (high - low);
+    double fa = cost(std::exp(a)), fb = cost(std::exp(b));
+    for (int i = 0; i < 80; ++i) {
+        if (fa <= fb) { high = b; b = a; fb = fa; a = high - golden * (high - low); fa = cost(std::exp(a)); }
+        else { low = a; a = b; fa = fb; b = low + golden * (high - low); fb = cost(std::exp(b)); }
+    }
+    const double scale = std::exp(0.5 * (low + high));
+    for (auto& cp : stage.sequence.controlPoints) cp.mu = cp.aperture.weight = scale;
+    Logger::info("DAO seed: uniform MU per control point " + std::to_string(scale));
+    return model;
+}
+
 // Progressive resolution direct aperture optimization (see ArcStrategy::ProgressiveDao).
+// Without a fluence (`fmoWeights` empty) the seed opens every leaf pair over the rays of the optimization beams,
+// i.e. the target projection, and its MU is calibrated against the objectives.
 void runProgressive(ArcPipelineResult& result, const std::vector<double>& fmoWeights, const Stf& fmoStf,
                     const Plan& plan, const PatientData& patient, const Grid& grid,
                     const BuiltObjectives& objectives, const ArcOptimizationConfig& config,
@@ -533,6 +576,11 @@ void runProgressive(ArcPipelineResult& result, const std::vector<double>& fmoWei
     std::vector<double> spacings{finalSettings.controlPointSpacingDeg};
     while (spacings.back() * 2.0 <= config.daoCoarsestSpacingDeg) spacings.push_back(spacings.back() * 2.0);
     std::reverse(spacings.begin(), spacings.end());
+
+    const bool noFluence = fmoWeights.empty();
+    const std::vector<double> uniform = noFluence ? std::vector<double>(fmoStf.getTotalNumOfRays(), 1.0) :
+                                                    std::vector<double>();
+    const std::vector<double>& seedWeights = noFluence ? uniform : fmoWeights;
 
     ArcSequenceResult previous;
     double muLambda = 0.0;   // stage 1 runs without MU penalty; the penalty is derived at the first stage after it
@@ -545,7 +593,7 @@ void runProgressive(ArcPipelineResult& result, const std::vector<double>& fmoWei
         if (first) {
             ArcSequencerOptions seed = config.sequencer;
             seed.method = ArcSequencerOptions::Method::Conformal;
-            stage.sequence = ArcSequencer::sequence(fmoWeights, fmoStf, settings, plan.getMachine(), seed);
+            stage.sequence = ArcSequencer::sequence(seedWeights, fmoStf, settings, plan.getMachine(), seed);
         } else {
             std::vector<ArcControlPoint> geometry = ArcGeometry::controlPoints(settings);
             stage.sequence = ArcSequencer::resample(previous, geometry, limits);
@@ -557,6 +605,9 @@ void runProgressive(ArcPipelineResult& result, const std::vector<double>& fmoWei
         std::vector<ArcControlPoint> geometry;
         for (const auto& cp : stage.sequence.controlPoints) geometry.push_back(cp.geometry);
         stage.controlPointStf = ArcPipeline::buildControlPointStf(plan, patient, geometry);
+
+        std::shared_ptr<FluenceDoseModel> preparedModel;
+        if (first && noFluence) preparedModel = calibrateSeedMu(stage, plan, patient, grid, objectives, config);
 
         RefineOptions refine;
         refine.iterations = last ? 2 * config.daoIterations : config.daoIterations;
@@ -574,7 +625,7 @@ void runProgressive(ArcPipelineResult& result, const std::vector<double>& fmoWei
         const bool derivesLambda = level == (spacings.size() > 1 ? 1 : 0);
         double lambda = derivesLambda ? -1.0 : muLambda;
         refine.muLambda = &lambda;
-        refineLeaves(stage, plan, patient, grid, objectives, config, nullptr, refine);
+        refineLeaves(stage, plan, patient, grid, objectives, config, preparedModel, refine);
         if (derivesLambda) muLambda = lambda;
 
         if (first) result.initialLeafObjective = stage.initialLeafObjective;

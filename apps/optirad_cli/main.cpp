@@ -46,7 +46,7 @@ void printUsage(const char* progName) {
               << "  doseCalc [options]               Build dose operator (requires plan)\n"
               << "  optimize [options]               Run optimization (requires dose operator)\n"
               << "  leafSeq [options]                Run leaf sequencing (SMLC plans; requires optimization)\n"
-              << "  arcSeq [options]                 Arc sequencing + aperture weight optimization (VMAT plans; requires optimization)\n"
+              << "  arcSeq [options]                 Arc sequencing + aperture weight optimization (VMAT plans; requires optimization, except with --strategy dao)\n"
               << "  exportRTPlan [options]           Export RT Plan DICOM (requires leaf sequencing)\n"
               << "  loadPhaseSpace [options]          Load phase-space beam source (phase-space machines only)\n"
               << "  interactive                      Enter interactive mode\n"
@@ -89,7 +89,8 @@ void printUsage(const char* progName) {
               << "  --num-levels <n>                 Intensity quantization levels (default: 15)\n"
               << "  --min-segment-mu <MU>            Min MU per segment (default: 0)\n\n"
               << "Arc sequencing options:\n"
-              << "  --strategy <sweep|dao>           sweep: fluence sweep + refinement; dao: progressive-resolution direct aperture optimization (default: sweep)\n"
+              << "  --strategy <sweep|dao>           sweep: fluence sweep + refinement; dao: progressive-resolution direct aperture optimization, needs no doseCalc/optimize (default: sweep)\n"
+              << "  --dose-resolution <mm> | --threads <n> | --full-body | --backend <auto|cpu|cuda> | --gpu-memory-mb <n>  dose grid and engine for DAO without doseCalc\n"
               << "  --dao-iter <n> | --dao-coarsest <deg> | --dao-mu-penalty <f>  DAO: iterations per resolution (x2 at the last; default: "
               << arcDefaults.daoIterations << "), first control point spacing (default: " << arcDefaults.daoCoarsestSpacingDeg
               << "), MU penalty (default: " << arcDefaults.daoMuPenalty << ")\n"
@@ -601,8 +602,8 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
         std::cerr << "Error: not a VMAT plan. Create one with 'plan --delivery vmat' (or use 'leafSeq' for SMLC).\n";
         return 1;
     }
-    if (state.optimizedWeights.empty() || !state.stf || !state.displayGrid) {
-        std::cerr << "Error: no fluence optimization. Run 'doseCalc' and 'optimize' first.\n";
+    if (!state.stf) {
+        std::cerr << "Error: no STF. Create a plan first.\n";
         return 1;
     }
 
@@ -613,6 +614,9 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
     if (state.doseOp) cfg.engineOptions = state.doseOp->engineOptions();
     cfg.base.targetDose = state.plan->getPrescribedDose() > 0.0 ? state.plan->getPrescribedDose() : cfg.base.targetDose;
     double hotspotPenalty = -1.0, hotspotThreshold = -1.0;   // apply to the chosen strategy after parsing
+    double doseResolution = DoseCalcPipelineOptions{}.resolution[0];   // DAO without 'doseCalc' only
+    int numThreads = 0;
+    bool excludeExternal = DoseCalcPipelineOptions{}.excludeExternal;
     for (size_t i = 0; i < args.size(); ++i) {
         if (args[i] == "--num-levels" && i + 1 < args.size()) cfg.sequencer.numLevels = std::stoi(args[++i]);
         else if (args[i] == "--max-iter" && i + 1 < args.size()) cfg.weightIterations = std::stoi(args[++i]);
@@ -646,8 +650,35 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
             else { std::cerr << "Error: --sequencer must be auto, sweep, levels or conformal\n"; return 1; }
         }
         else if (args[i] == "--fluence-pixel" && i + 1 < args.size()) cfg.fluencePixelMm = std::stod(args[++i]);
+        else if (args[i] == "--dose-resolution" && i + 1 < args.size()) doseResolution = std::stod(args[++i]);
+        else if (args[i] == "--threads" && i + 1 < args.size()) numThreads = std::stoi(args[++i]);
+        else if (args[i] == "--full-body") excludeExternal = false;
+        else if (args[i] == "--backend" && i + 1 < args.size()) {
+            const std::string backend = args[++i];
+            if (backend == "cpu") cfg.computeBackend = DoseComputeBackend::CPU;
+            else if (backend == "cuda") cfg.computeBackend = DoseComputeBackend::CUDA;
+            else if (backend == "auto") cfg.computeBackend = DoseComputeBackend::Auto;
+            else { std::cerr << "Error: --backend must be auto, cpu or cuda\n"; return 1; }
+        }
+        else if (args[i] == "--gpu-memory-mb" && i + 1 < args.size()) cfg.gpuMemoryBudgetMiB = std::stoull(args[++i]);
     }
     const bool dao = cfg.strategy == ArcStrategy::ProgressiveDao;
+    // DAO needs no Dij and no fluence optimization: only a dose grid and the engine settings.
+    const bool direct = dao;   // same as the GUI: any fluence optimization is ignored
+    if (direct) {
+        if (!state.displayGrid) {
+            state.displayGrid = std::make_shared<Grid>(Grid::createDoseGrid(
+                state.patientData->getGrid(), {doseResolution, doseResolution, doseResolution}));
+            state.computeGrid = state.displayGrid;
+        }
+        if (!state.doseOp) {
+            cfg.engineOptions.numThreads = numThreads;
+            cfg.engineOptions.excludeExternal = excludeExternal;
+        }
+    } else if (state.optimizedWeights.empty() || !state.displayGrid) {
+        std::cerr << "Error: no fluence optimization. Run 'doseCalc' and 'optimize' first (or use --strategy dao).\n";
+        return 1;
+    }
     if (hotspotPenalty >= 0.0) (dao ? cfg.daoHotspotPenalty : cfg.hotspotPenalty) = hotspotPenalty;
     if (hotspotThreshold >= 0.0) (dao ? cfg.daoHotspotThresholdPct : cfg.hotspotThresholdPct) = hotspotThreshold;
     const double res = state.plan->getMachine().getGeometry().leafPositionResolution;
@@ -660,8 +691,8 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
                                                   *state.displayGrid, cfg.base.targetDose);
 
         auto result = std::make_shared<ArcPipelineResult>(ArcPipeline::run(
-            state.optimizedWeights, *state.stf, *state.plan, *state.patientData, *state.displayGrid,
-            std::move(objectives), cfg, nullptr,
+            direct ? std::vector<double>() : state.optimizedWeights, *state.stf, *state.plan, *state.patientData,
+            *state.displayGrid, std::move(objectives), cfg, nullptr,
             [](const std::string& stage) { std::cout << "  " << stage << "...\n"; }));
 
         const auto& seq = result->sequence;

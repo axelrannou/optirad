@@ -32,7 +32,6 @@ private:
     GuiAppState& m_state;
 
     // VMAT arc stage (initial values come from the pipeline defaults, shared with the CLI)
-    int m_arcStrategy = static_cast<int>(ArcOptimizationConfig{}.strategy);   // SweepRefine, ProgressiveDao
     int m_arcDaoIterations = ArcOptimizationConfig{}.daoIterations;
     float m_arcDaoCoarsest = static_cast<float>(ArcOptimizationConfig{}.daoCoarsestSpacingDeg);
     float m_arcDaoHotspotThresholdPct = static_cast<float>(100.0 * ArcOptimizationConfig{}.daoHotspotThresholdPct);

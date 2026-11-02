@@ -78,6 +78,8 @@ private:
     std::unordered_map<int, OptDisplayCache> m_displayCache;
     int m_doseVersion = -1;
 
+    /// DAO plans: store objectives and dose grid, then hand over to the arc stage (no Dij, no fluence optimization).
+    void startDirectDao();
     void renderConvergenceCurve(const std::vector<IterationInfo>& log);
 };
 

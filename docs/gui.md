@@ -135,6 +135,8 @@ struct GuiAppState {
 
 **Cascade resets:** When upstream data changes, downstream pipeline state is invalidated while the selected display dose can remain available through `DoseManager`.
 
+**VMAT with DAO:** choosing *Direct aperture optimization* in the Planning panel's Delivery section replaces the Dose Calculation section by a few dose settings (grid, backend, threads) and skips the Dij, the fluence optimization and the sequencing. *Run DAO* in the Optimization panel stores the objectives and the dose grid, then the Leaf Sequencing panel runs the progressive DAO. Its seed is the target projection of the optimization beams, with an MU scale calibrated against the objectives.
+
 **Multi-dose support:** The GUI can keep multiple dose maps alive at once, including imported dose, optimization results, and deliverable dose after leaf sequencing. Panels use `DoseManager` versioning and cached per-dose statistics so switching views does not force recomputation every time.
 
 ## Panels
