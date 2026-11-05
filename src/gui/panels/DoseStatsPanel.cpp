@@ -201,13 +201,15 @@ void DoseStatsPanel::renderStatsTable() {
         }
     };
 
-    constexpr int numCols = 14;
+    constexpr int numCols = 16;
 
     if (ImGui::BeginTable("DoseStatsTable", numCols,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
             ImGuiTableFlags_ScrollX | ImGuiTableFlags_SizingFixedFit)) {
 
         ImGui::TableSetupColumn("Structure",    ImGuiTableColumnFlags_None, 120.0f);
+        ImGui::TableSetupColumn("Voxels",       ImGuiTableColumnFlags_None, 80.0f);
+        ImGui::TableSetupColumn("Coverage (%)", ImGuiTableColumnFlags_None, 85.0f);
         ImGui::TableSetupColumn("Min (Gy)",     ImGuiTableColumnFlags_None, 65.0f);
         ImGui::TableSetupColumn("Max (Gy)",     ImGuiTableColumnFlags_None, 65.0f);
         ImGui::TableSetupColumn("Mean (Gy)",    ImGuiTableColumnFlags_None, 65.0f);
@@ -236,6 +238,11 @@ void DoseStatsPanel::renderStatsTable() {
             ImGui::TextColored(ImVec4(kColors[colorIdx][0], kColors[colorIdx][1],
                                       kColors[colorIdx][2], 1.0f),
                               "%s", s.name.c_str());
+
+            ImGui::TableSetColumnIndex(col++);
+            ImGui::Text("%zu / %zu", s.numVoxels, s.totalStructureVoxels);
+            ImGui::TableSetColumnIndex(col++);
+            ImGui::Text("%.2f", s.coveragePercent());
 
             // Helper: render value, and if comparison exists, show diff on next line
             auto cell = [&](double val, double cmpVal, const char* valFmt, const char* diffFmt) {

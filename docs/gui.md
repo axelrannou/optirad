@@ -221,6 +221,26 @@ class IPanel {
   - D2, D5, D50, D95, D98
   - V20, V40, V50, V60
   - CI, HI (for targets)
+  - Included CT voxel count, total structure voxel count, and coverage percentage
+
+The Dose Statistics panel, DVH panel, and both CSV exports use the **same CT
+structure voxel centres inside every loaded dose grid**. Dose values are
+trilinearly interpolated at these centres; native dose-grid resolutions may
+differ. The existing half-voxel boundary support is retained. Outside-grid dose
+is unknown, not zero-filled. Genuine zero-dose samples inside the common region
+remain included.
+
+Coverage below 100% means all reported metrics describe only the common part of
+the organ, not the whole organ. Structures with no common samples are omitted
+with a log warning. Adding or removing a dose map invalidates the statistics
+cache and changes the common region for every loaded map, even if it is not
+selected for the comparison overlay.
+
+CSV `NumVoxels` is the included CT sample count. `TotalStructureVoxels` and
+`Coverage(%)` are appended to report the full mask size and included percentage.
+Existing CSVs must be regenerated from the dose maps; their aggregate statistics
+cannot be corrected by editing voxel counts. Standalone pipeline/CLI analysis
+retains its single-dose coverage unless comparison grids are supplied explicitly.
 
 ### DVHPanel
 

@@ -48,6 +48,11 @@ target_include_directories(test_patient PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_patient PRIVATE optirad_core GTest::gtest GTest::gtest_main)
 add_test(NAME PatientTest COMMAND test_patient)
 
+add_executable(test_plan_analysis core/test_plan_analysis.cpp)
+target_include_directories(test_plan_analysis PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_plan_analysis PRIVATE optirad_workflow GTest::gtest_main)
+add_test(NAME PlanAnalysisTest COMMAND test_plan_analysis)
+
 add_executable(test_plan
     core/test_plan.cpp
 )

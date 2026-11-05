@@ -32,7 +32,8 @@ inline std::string sanitizeFilename(const std::string& name) {
 
 inline void writeDoseStatsCsvHeader(std::ofstream& f) {
     f << "Dose,Structure,Type,NumVoxels,Min(Gy),Max(Gy),Mean(Gy),Std(Gy),"
-         "D2(Gy),D5(Gy),D50(Gy),D95(Gy),D98(Gy),V20(%),V40(%),V50(%),V60(%),CI,HI\n";
+         "D2(Gy),D5(Gy),D50(Gy),D95(Gy),D98(Gy),V20(%),V40(%),V50(%),V60(%),CI,HI,"
+         "TotalStructureVoxels,Coverage(%)\n";
 }
 
 inline void writeDoseStatsCsvRows(std::ofstream& f, const std::string& doseName,
@@ -43,7 +44,8 @@ inline void writeDoseStatsCsvRows(std::ofstream& f, const std::string& doseName,
           << s.minDose << ',' << s.maxDose << ',' << s.meanDose << ',' << s.stdDose << ','
           << s.d2 << ',' << s.d5 << ',' << s.d50 << ',' << s.d95 << ',' << s.d98 << ','
           << s.v20 << ',' << s.v40 << ',' << s.v50 << ',' << s.v60 << ','
-          << s.conformityIndex << ',' << s.homogeneityIndex << '\n';
+          << s.conformityIndex << ',' << s.homogeneityIndex << ','
+          << s.totalStructureVoxels << ',' << s.coveragePercent() << '\n';
     }
 }
 

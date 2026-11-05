@@ -38,7 +38,8 @@ std::vector<StructureDoseStats> PlanAnalysis::computeStats(
     const DoseMatrix& dose,
     const PatientData& patient,
     const Grid& doseGrid,
-    double prescribedDose)
+    double prescribedDose,
+    const std::vector<Grid>& comparisonGrids)
 {
     std::vector<StructureDoseStats> results;
 
@@ -58,6 +59,11 @@ std::vector<StructureDoseStats> PlanAnalysis::computeStats(
     // CT grid dimensions for index decomposition
     auto ctDims = ctGrid.getDimensions();
     size_t ctNx = ctDims[0], ctNy = ctDims[1];
+
+    // Grid caches its transforms lazily; initialise them before parallel sampling.
+    ctGrid.getSliceDirection();
+    doseGrid.getSliceDirection();
+    for (const auto& grid : comparisonGrids) grid.getSliceDirection();
 
     // For CI: count total voxels receiving >= prescribed dose
     size_t totalVoxelsAboveRx = 0;
@@ -110,6 +116,19 @@ std::vector<StructureDoseStats> PlanAnalysis::computeStats(
                 continue;
             }
 
+            const bool coveredByAll = std::all_of(
+                comparisonGrids.begin(), comparisonGrids.end(), [&](const Grid& grid) {
+                    const auto voxel = grid.patientToVoxel(lps);
+                    const auto dims = grid.getDimensions();
+                    for (size_t axis = 0; axis < 3; ++axis) {
+                        if (dims[axis] == 0 || voxel[axis] < -0.5 ||
+                            voxel[axis] > static_cast<double>(dims[axis]) - 0.5)
+                            return false;
+                    }
+                    return true;
+                });
+            if (!coveredByAll) continue;
+
             doseValues.push_back(dose.interpolateAt(fijk[0], fijk[1], fijk[2]));
         }
         if (doseValues.empty()) continue;
@@ -121,6 +140,7 @@ std::vector<StructureDoseStats> PlanAnalysis::computeStats(
         stats.name = structure->getName();
         stats.type = structure->getType();
         stats.numVoxels = doseValues.size();
+        stats.totalStructureVoxels = ctVoxels.size();
         stats.sortedDoses = doseValues;
 
         // Basic stats
@@ -171,6 +191,16 @@ std::vector<StructureDoseStats> PlanAnalysis::computeStats(
 
         results[idx] = std::move(stats);
     }
+
+    for (size_t idx = 0; idx < results.size(); ++idx) {
+        if (results[idx].numVoxels == 0) {
+            Logger::warn("Plan analysis: no common dose-grid coverage for structure " +
+                         ss->getStructure(structIndices[idx])->getName() +
+                         "; statistics omitted (outside-grid dose is unknown)");
+        }
+    }
+    results.erase(std::remove_if(results.begin(), results.end(),
+        [](const StructureDoseStats& stats) { return stats.numVoxels == 0; }), results.end());
 
     return results;
 }

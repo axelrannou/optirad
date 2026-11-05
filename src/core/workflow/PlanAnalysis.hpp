@@ -15,7 +15,13 @@ namespace optirad {
 struct StructureDoseStats {
     std::string name;
     std::string type;        // e.g., "TARGET", "OAR", "EXTERNAL"
-    size_t numVoxels = 0;    // number of dose-grid voxels
+    size_t numVoxels = 0;    // CT structure voxels included in the analysis
+    size_t totalStructureVoxels = 0;
+
+    double coveragePercent() const {
+        return totalStructureVoxels > 0
+            ? 100.0 * static_cast<double>(numVoxels) / totalStructureVoxels : 0.0;
+    }
 
     double minDose = 0.0;
     double maxDose = 0.0;
@@ -62,11 +68,14 @@ public:
     /// @param patient  Patient data with structure set
     /// @param doseGrid  The dose calculation grid
     /// @param prescribedDose  Prescribed dose for target (used for CI calculation)
+    /// @param comparisonGrids  Restrict samples to CT voxel centres covered by every grid.
+    /// Structures with no covered samples are omitted with a warning.
     static std::vector<StructureDoseStats> computeStats(
         const DoseMatrix& dose,
         const PatientData& patient,
         const Grid& doseGrid,
-        double prescribedDose = 60.0);
+        double prescribedDose = 60.0,
+        const std::vector<Grid>& comparisonGrids = {});
 
     /// Compute DVH curve data for each structure.
     /// @param stats  Pre-computed statistics (must have sortedDoses populated)

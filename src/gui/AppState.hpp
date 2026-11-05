@@ -100,6 +100,9 @@ struct GuiAppState {
     std::unordered_map<int, LeafSeqCacheEntry> seqCache;
     std::unordered_map<int, ArcCacheEntry> arcCache;
     std::unordered_map<int, std::vector<StructureDoseStats>> statsCache;
+    std::vector<int> statsDoseIds;
+    const PatientData* statsPatient = nullptr;
+    double statsPrescribedDose = 0.0;
     int activeOptDoseId = -1; // which optimization dose produced current weights
 
     // ── Workflow naming counters ──
@@ -157,15 +160,30 @@ struct GuiAppState {
         seqCache[doseId] = std::move(entry);
     }
 
-    /// Return cached per-structure stats for a dose entry, computing if needed.
+    /// Analyse every loaded dose on the same CT samples in their common grid coverage.
     const std::vector<StructureDoseStats>& getOrComputeStats(
             int entryIdx, const PatientData& patient, double prescribedDose = 60.0) {
         static const std::vector<StructureDoseStats> empty;
         auto* entry = doseStore.getEntry(entryIdx);
         if (!entry || !entry->dose || !entry->grid) return empty;
+        std::vector<int> doseIds;
+        std::vector<Grid> comparisonGrids;
+        for (const auto& candidate : doseStore.getEntries()) {
+            if (!candidate.dose || !candidate.grid) continue;
+            doseIds.push_back(candidate.id);
+            comparisonGrids.push_back(*candidate.grid);
+        }
+        if (doseIds != statsDoseIds || statsPatient != &patient ||
+            statsPrescribedDose != prescribedDose) {
+            statsCache.clear();
+            statsDoseIds = std::move(doseIds);
+            statsPatient = &patient;
+            statsPrescribedDose = prescribedDose;
+        }
         auto it = statsCache.find(entry->id);
         if (it != statsCache.end()) return it->second;
-        auto stats = PlanAnalysis::computeStats(*entry->dose, patient, *entry->grid, prescribedDose);
+        auto stats = PlanAnalysis::computeStats(
+            *entry->dose, patient, *entry->grid, prescribedDose, comparisonGrids);
         auto [ins, _] = statsCache.emplace(entry->id, std::move(stats));
         return ins->second;
     }

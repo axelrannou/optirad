@@ -64,6 +64,9 @@ void DVHPanel::render() {
         m_doseVersion = currentVersion;
     }
 
+    ImGui::TextWrapped("DVHs use the same CT voxels inside every loaded dose grid, "
+                       "not necessarily the whole organ. See Dose Statistics for coverage. "
+                       "Structures without common coverage are omitted (see log).");
     renderDVH();
 
     ImGui::End();
