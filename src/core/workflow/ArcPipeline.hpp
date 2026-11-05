@@ -73,6 +73,8 @@ struct ArcOptimizationConfig {
     int leafIterations = 300;
     double leafStepMm = 1.0;   // first step and base of the per-iteration move limit (4x) of the leaf refinement
     double fluencePixelMm = 1.5;
+    /// Backend for optimization and final delivered dose: Auto tries CUDA with logged CPU fallback;
+    /// CUDA requires GPU execution; CPU disables GPU tracing and deposition.
     DoseComputeBackend computeBackend = DoseComputeBackend::Auto;
     size_t gpuMemoryBudgetMiB = 0;
 

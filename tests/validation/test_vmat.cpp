@@ -6,6 +6,7 @@
 #include "core/Ray.hpp"
 #include "core/workflow/ArcPipeline.hpp"
 #include "core/workflow/PlanBuilder.hpp"
+#include "dose/engines/PencilBeamEngine.hpp"
 #include "sequencing/ApertureFluence.hpp"
 #include "sequencing/ArcSequencer.hpp"
 #include "sequencing/SlidingWindow.hpp"
@@ -743,6 +744,65 @@ TEST(ArcPipelineTest, ProgressiveDaoNeedsNoFluenceAndCalibratesItsOwnMu) {
     EXPECT_NEAR(ptvMeanDose(r), 60.0, 0.25 * 60.0);
     for (const auto& cp : r.sequence.controlPoints)
         for (size_t p = 0; p < cp.aperture.bankA.size(); ++p) EXPECT_LE(cp.aperture.bankA[p], cp.aperture.bankB[p]);
+}
+
+TEST(ArcPipelineTest, DeliveredDoseHonorsTheBackendForBothStrategies) {
+    ArcFixture f;
+    const Grid grid = Grid::createDoseGrid(f.patient->getGrid(), {5.0, 5.0, 5.0});
+    for (const auto strategy : {ArcStrategy::SweepRefine, ArcStrategy::ProgressiveDao}) {
+        for (const auto backend : {DoseComputeBackend::CPU, DoseComputeBackend::Auto, DoseComputeBackend::CUDA}) {
+            SCOPED_TRACE(static_cast<int>(strategy));
+            SCOPED_TRACE(static_cast<int>(backend));
+            ArcOptimizationConfig config;
+            config.strategy = strategy;
+            config.computeBackend = backend;
+            config.optimizeWeights = false;
+            config.optimizeLeaves = strategy == ArcStrategy::ProgressiveDao;
+            config.daoCoarsestSpacingDeg = 10.0;
+            config.daoIterations = 1;
+            config.base.ntoEnabled = false;
+            config.base.targetDose = 60.0;
+            // The selected backend must override stale engine flags in both directions.
+            config.engineOptions.gpuRayTracing = backend == DoseComputeBackend::CPU;
+            config.engineOptions.requireGpuRayTracing = backend == DoseComputeBackend::CPU;
+            const std::vector<double> weights(f.built.stf->getTotalNumOfBixels(), 1.0);
+            auto objectives = ptvObjective(*f.patient, grid, 60.0);
+#ifndef OPTIRAD_HAS_CUDA
+            if (backend == DoseComputeBackend::CUDA) {
+                EXPECT_THROW(ArcPipeline::run(weights, *f.built.stf, *f.built.plan,
+                    *f.patient, grid, std::move(objectives), config), std::runtime_error);
+                continue;
+            }
+#endif
+            ArcPipelineResult result;
+            testing::internal::CaptureStdout();
+            EXPECT_NO_THROW(result = ArcPipeline::run(weights, *f.built.stf, *f.built.plan,
+                *f.patient, grid, std::move(objectives), config));
+            const std::string log = testing::internal::GetCapturedStdout();
+            ASSERT_NE(result.dose, nullptr) << log;
+            const auto deliveredStart = log.find("ArcPipeline: computing delivered dose");
+            ASSERT_NE(deliveredStart, std::string::npos) << log;
+            const std::string deliveredLog = log.substr(deliveredStart);
+            bool expectCuda = false;
+#ifdef OPTIRAD_HAS_CUDA
+            expectCuda = backend != DoseComputeBackend::CPU;
+#endif
+            EXPECT_EQ(deliveredLog.find("CUDA direct-dose deposition enabled") != std::string::npos,
+                expectCuda) << deliveredLog;
+            EXPECT_EQ(deliveredLog.find("CUDA radiological-depth tracing enabled") != std::string::npos,
+                expectCuda) << deliveredLog;
+
+            PencilBeamEngine cpuEngine;
+            const auto finalWeights = ArcPipeline::bixelWeights(*result.controlPointStf, result.sequence,
+                config.integrateLeafMotion);
+            const auto reference = cpuEngine.calculateDoseDirect(*f.built.plan, *result.controlPointStf,
+                *f.patient, grid, finalWeights);
+            const double peak = reference.getMax();
+            ASSERT_GT(peak, 0.0);
+            for (size_t voxel = 0; voxel < grid.getNumVoxels(); ++voxel)
+                EXPECT_NEAR(result.dose->data()[voxel], reference.data()[voxel], 2e-6 * peak);
+        }
+    }
 }
 
 } // namespace optirad::tests

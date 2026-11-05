@@ -119,6 +119,8 @@ This is the approach of Eclipse's VMAT optimizer (progressive resolution samplin
 3. Control points are **inserted by interpolation** (`ArcSequencer::resample`: tips linear in the arc angle, MU per degree linear) and the optimization continues. Spacings halve until the plan's control point spacing: 16, 8, 4, 2 deg. Coarse levels are cheap and allow large coordinated leaf moves; the finest level (twice the iterations) polishes.
 4. The hot-spot term tightens from the fluence stage's setting to `daoHotspotThresholdPct` / `daoHotspotPenalty` (default 1.03 x Rx, 5000) over the resolutions. MU is not penalized by default (`daoMuPenalty`): open conformal apertures need little MU.
 
+For both DAO and sweep refinement, the selected compute backend also applies to the final delivered-dose calculation (radiological-depth tracing and direct-dose deposition). `Auto` tries CUDA and logs a warning if it falls back to CPU; `CUDA` requires GPU execution and reports an error if unavailable; `CPU` disables GPU execution. Geometry preparation and kernel construction still use the CPU.
+
 Leaf-speed and ordering limits are quadratic penalties during the iterations (box limits on tips and MU are clamped), and an exact projection repairs the result at the end of every resolution. A first version enforced the speed limit by projecting after each step; that turned descent directions into ascent directions and made most line searches fail (the objective then stalled at ~100x its final value), so it was replaced.
 
 Lung case (HD120, 2 deg control points, 10 deg optimization beams, 500 iterations per resolution):

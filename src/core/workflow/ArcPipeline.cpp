@@ -707,13 +707,20 @@ ArcPipelineResult ArcPipeline::run(const std::vector<double>& fmoWeights,
         throw std::invalid_argument("ArcPipeline: invalid MU growth factor or prescription");
 
     ArcPipelineResult result;
+    auto engineOptions = config.engineOptions;
+    engineOptions.gpuRayTracing = config.computeBackend != DoseComputeBackend::CPU;
+    engineOptions.requireGpuRayTracing = config.computeBackend == DoseComputeBackend::CUDA;
+#ifndef OPTIRAD_HAS_CUDA
+    if (engineOptions.requireGpuRayTracing)
+        throw std::runtime_error("CUDA arc dose requested but CUDA support was not built");
+#endif
 
     if (config.strategy == ArcStrategy::ProgressiveDao) {
         if (objectives.ptrs.empty() || !config.optimizeLeaves)
             throw std::invalid_argument("ArcPipeline: progressive optimization needs objectives and leaf optimization");
         runProgressive(result, fmoWeights, fmoStf, plan, patientData, doseGrid, objectives, config, say);
         auto engine = DoseEngineFactory::create("PencilBeam");
-        engine->setOptions(config.engineOptions);
+        engine->setOptions(engineOptions);
         say("computing delivered dose");
         const std::vector<double> weights = bixelWeights(*result.controlPointStf, result.sequence,
                                                          config.integrateLeafMotion);
@@ -733,7 +740,7 @@ ArcPipelineResult ArcPipeline::run(const std::vector<double>& fmoWeights,
     result.controlPointStf = buildControlPointStf(plan, patientData, geometry);
 
     auto engine = DoseEngineFactory::create("PencilBeam");
-    engine->setOptions(config.engineOptions);
+    engine->setOptions(engineOptions);
     std::shared_ptr<FluenceDoseModel> apertureModel;
 
     if (config.optimizeWeights && !objectives.ptrs.empty()) {
@@ -754,9 +761,6 @@ ArcPipelineResult ArcPipeline::run(const std::vector<double>& fmoWeights,
             if (apertureModel->usesCuda()) {
                 auto bixelOperator = std::make_shared<FluenceDoseOperator>(apertureModel, result.controlPointStf);
                 apertureDose = std::make_shared<ApertureDoseOperator>(bixelOperator, *result.controlPointStf, baseWeights);
-                auto doseOptions = config.engineOptions;
-                doseOptions.gpuRayTracing = true;
-                engine->setOptions(doseOptions);
             } else apertureModel.reset();
         }
 #else
