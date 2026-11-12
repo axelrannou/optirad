@@ -12,6 +12,7 @@ public:
     virtual ~ObjectiveFunction() = default;
 
     virtual std::string getName() const = 0;
+    std::string describe() const;
 
     // Compute objective value given dose distribution
     virtual double compute(const std::vector<double>& dose) const = 0;

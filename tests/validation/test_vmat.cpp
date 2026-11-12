@@ -6,6 +6,7 @@
 #include "core/Ray.hpp"
 #include "core/workflow/ArcPipeline.hpp"
 #include "core/workflow/PlanBuilder.hpp"
+#include "optimization/OptimizationLogging.hpp"
 #include "dose/engines/PencilBeamEngine.hpp"
 #include "sequencing/ApertureFluence.hpp"
 #include "sequencing/ArcSequencer.hpp"
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <iostream>
 #include <numeric>
+#include <sstream>
 
 namespace optirad::tests {
 
@@ -552,6 +554,15 @@ TEST(ArcSequencerTest, ClosedLeavesMovePhysicallyAndArcsDoNotShareTransitions) {
 
 namespace {
 
+size_t countOccurrences(const std::string& text, const std::string& needle) {
+    size_t count = 0, position = 0;
+    while ((position = text.find(needle, position)) != std::string::npos) {
+        ++count;
+        position += needle.size();
+    }
+    return count;
+}
+
 BuiltObjectives ptvObjective(const PatientData& patient, const Grid& doseGrid, double dose) {
     ObjectiveSpec spec;
     spec.structurePattern = "PTV";
@@ -621,8 +632,13 @@ TEST(ArcPipelineTest, LeafRefinementDecreasesDoseObjectiveAndRespectsRates) {
     spec.doseValue = 60.0;
     spec.weight = 100.0;
     auto objectives = ObjectiveBuilder::buildFromSpecs({spec}, *fixture.patient, fixture.patient->getGrid(), grid);
+    testing::internal::CaptureStdout();
     const auto result = ArcPipeline::run(weights, *fixture.built.stf, *fixture.built.plan,
         *fixture.patient, grid, std::move(objectives), config);
+    const auto log = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(countOccurrences(log, "weighted cost breakdown total="), 2u);
+    EXPECT_NE(log.find("DAO initial: weighted cost breakdown"), std::string::npos);
+    EXPECT_NE(log.find("DAO final (after feasibility repair): weighted cost breakdown"), std::string::npos);
     EXPECT_GT(result.leafIterations, 0);
     EXPECT_LT(result.finalLeafObjective, result.initialLeafObjective);
     const auto& limits = fixture.built.plan->getMachine().getConstraints();
@@ -737,8 +753,64 @@ TEST(ArcPipelineTest, ProgressiveDaoNeedsNoFluenceAndCalibratesItsOwnMu) {
     cfg.daoCoarsestSpacingDeg = 40.0;
     cfg.daoIterations = 15;
 
+    auto objectives = ptvObjective(*f.patient, doseGrid, 60.0);
+    testing::internal::CaptureStdout();
     const auto r = ArcPipeline::run({}, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
-                                    ptvObjective(*f.patient, doseGrid, 60.0), cfg);
+                                    std::move(objectives), cfg);
+    const auto log = testing::internal::GetCapturedStdout();
+    for (const auto* expected : {
+            "starting progressive DAO", "weighted dose objectives (soft penalties)",
+            "DAO stage 1/3: creating conformal seed", "DAO stage 2/3: interpolating",
+            "DAO stage 3/3: interpolating", "DAO seed: calibrating uniform MU",
+            "DAO leaf refinement: dose/objective backend=CPU", "DAO settings: iterations=15",
+            "Bounds: tips=", "MU total=", "DAO initial: weighted cost breakdown",
+            "=== DAO Optimizer (Memory: 10, Max Iter: 15) ===", "Objective", "GradInf", "Time(s)",
+            "MU smoothing: cost=",
+            "Total MU: cost=", "Leaf order: cost=", "Leaf speed: cost=",
+            "DAO final (after feasibility repair)", "DAO stopped:", "Restarts ", "(dir/LS)",
+            "DoseCost ", "computing delivered dose",
+            "ArcPipeline: complete:"})
+        EXPECT_NE(log.find(expected), std::string::npos) << expected;
+    EXPECT_EQ(countOccurrences(log, "weighted cost breakdown total="), 2u);
+    EXPECT_EQ(countOccurrences(log, "DAO stopped:"), 3u);
+    EXPECT_EQ(log.find("DAO accepted step"), std::string::npos);
+    EXPECT_EQ(log.find("pre-step gradient inf-norm="), std::string::npos);
+    EXPECT_EQ(log.find("DAO iteration "), std::string::npos);
+    std::istringstream lines(log);
+    int progressLines = 0;
+    bool compactBlock = false;
+    const std::string prefix = "[INFO] ";
+    for (std::string line; std::getline(lines, line);) {
+        if (line.find(prefix + "DAO settings:") == 0 || line.find(prefix + "DAO stopped:") == 0)
+            compactBlock = true;
+        else if (line.find("  ") != 0)
+            compactBlock = false;
+        if (compactBlock) EXPECT_LE(line.size(), 100u) << line;
+        if (line.find(prefix) != 0) continue;
+        std::istringstream row(line.substr(prefix.size()));
+        DaoProgressInfo info;
+        if (!(row >> info.iteration >> info.acceptedSteps >> info.objective >> info.preStepGradInf
+                  >> info.stepSize >> info.lsIters >> info.totalMu >> info.elapsedSec)) continue;
+        EXPECT_EQ(info.acceptedSteps, 1);
+        EXPECT_GE(info.iteration, info.acceptedSteps);
+        EXPECT_GE(info.objective, 0.0);
+        EXPECT_GE(info.preStepGradInf, 0.0);
+        EXPECT_GT(info.stepSize, 0.0);
+        EXPECT_GE(info.lsIters, 1);
+        EXPECT_LE(info.lsIters, 20);
+        EXPECT_GT(info.totalMu, 0.0);
+        EXPECT_GE(info.elapsedSec, 0.0);
+        EXPECT_LE(line.size(), 100u);
+        ++progressLines;
+    }
+    EXPECT_GE(progressLines, 1);
+    EXPECT_LE(progressLines, 3);
+    EXPECT_EQ(countOccurrences(log, "=== DAO Optimizer"), static_cast<size_t>(progressLines));
+    const std::string finalField = "DAO final (after feasibility repair): weighted cost breakdown total=";
+    const auto finalPosition = log.rfind(finalField);
+    ASSERT_NE(finalPosition, std::string::npos);
+    EXPECT_NEAR(std::stod(log.substr(finalPosition + finalField.size())), r.finalLeafObjective,
+                2e-6 * std::max(1.0, std::abs(r.finalLeafObjective)));
     ASSERT_EQ(r.sequence.controlPoints.size(), 9u);
     EXPECT_GT(r.sequence.totalMU, 0.0);
     EXPECT_NEAR(ptvMeanDose(r), 60.0, 0.25 * 60.0);

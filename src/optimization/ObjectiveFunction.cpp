@@ -1,6 +1,19 @@
 #include "ObjectiveFunction.hpp"
+#include <sstream>
 
 namespace optirad {
+
+std::string ObjectiveFunction::describe() const {
+    std::ostringstream out;
+    out << (m_structure ? m_structure->getName() : "<unbound>") << " / " << getName();
+    DoseObjectiveSpec spec;
+    if (gpuDescription(spec)) {
+        out << " dose=" << spec.threshold << " Gy";
+        if (spec.type == 3 || spec.type == 4) out << " volume=" << 100.0 * spec.volumeFraction << "%";
+    }
+    out << " weight=" << m_weight << " voxels=" << getActiveIndices().size();
+    return out.str();
+}
 
 void ObjectiveFunction::setWeight(double weight) { m_weight = weight; }
 double ObjectiveFunction::getWeight() const { return m_weight; }

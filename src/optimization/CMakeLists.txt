@@ -3,6 +3,7 @@ add_library(optirad_optimization
     Constraint.cpp
     OptimizerFactory.cpp
     ObjectiveBuilder.cpp
+    OptimizationLogging.cpp
     objectives/SquaredDeviation.cpp
     objectives/SquaredOverdose.cpp
     objectives/SquaredUnderdose.cpp

@@ -162,7 +162,10 @@ class DVHObjective : public ObjectiveFunction {
 
 ### Constraint
 
-Hard dose constraints for plan evaluation (not directly used in the optimization gradient, but checked for convergence/reporting).
+Dose constraint value objects for plan evaluation. The current L-BFGS-B optimizer does **not**
+enforce these objects or use them to determine convergence; it logs a warning if any are supplied.
+Configure weighted dose objectives to penalize violations during optimization. Weight bounds and
+DAO machine-deliverability limits are separate from these dose constraint objects.
 
 ```cpp
 enum class ConstraintType { MinDose, MaxDose, MeanDose };
@@ -204,6 +207,68 @@ class LBFGSOptimizer : public IOptimizer {
     void setHotspotPenalty(double penalty);      // Penalty weight (default: 10000.0)
 };
 ```
+
+#### Terminal diagnostics
+
+Both CLI and GUI optimization runs write diagnostics to standard output through `Logger`.
+Launch the GUI from a terminal to see them. No additional flag is needed.
+
+- **At startup:** each applied objective is listed by structure and readable type, with dose
+  threshold in Gy, DVH volume percentage where applicable, weight, and active dose-grid voxel count.
+  Objectives are explicitly identified as soft penalties, not hard clinical guarantees.
+- **L-BFGS-B:** reports weight bounds, tolerance, hotspot threshold/coefficient, smoothing and
+  L1/L2 coefficients (including the derived relative L1 coefficient). Cost snapshots are emitted
+  initially and finally; the compact iteration table continues at iteration 1 and every 10
+  iterations. `setVerbose(false)` suppresses these snapshots and the iteration table, but retains
+  configuration and warning logs.
+- **DAO:** reports progressive-resolution stage transitions, seed creation or aperture/MU
+  interpolation, seed MU calibration, actual dose-model backend, per-stage iteration budget,
+  hotspot continuation settings, derived MU and mechanical penalty coefficients, and machine
+  bounds. The initial cost breakdown is printed at the first stage and the final breakdown after
+  feasibility repair at the last stage. Each stage prints a compact, aligned progress table on
+  the first accepted step and every 50 accepted steps, with a header once per stage. Stages
+  with no accepted steps do not print an empty table. Settings and summaries use short lines
+  instead of a single long key/value list.
+- **Stopping and delivery:** DAO reports the stop reason (budget, zero gradient, stationary
+  bounds, line-search failure, or insufficient recent improvement), counts of history restarts
+  and line-search retries, repair/snapping fallbacks, and final delivery MU, time, leaf speed and
+  slowed control points.
+  Final dose computation and pipeline completion are also logged.
+
+DAO progress columns:
+
+| Column | Meaning |
+|--------|---------|
+| `Iter` | Attempted iteration within this stage |
+| `Acc` | Accepted steps within this stage |
+| `Objective` | Current solver cost, including total-MU and mechanical penalties |
+| `GradInf` | Pre-step infinity norm of the scaled-variable gradient (not a projected gradient) |
+| `Step` | Accepted line-search step size; scientific notation keeps small steps visible |
+| `LS` | Number of line-search trials for the accepted step |
+| `MU` | Total MU of the accepted sequence |
+| `Time(s)` | Wall time since the start of the stage's leaf refinement |
+
+Each cost snapshot lists every objective's **already-weighted** cost and percentage of the total,
+plus the global hotspot cost and applicable regularization terms. DAO additionally separates
+MU smoothing, total MU, leaf-order and leaf-speed penalties. Zero-cost terms remain visible.
+Snapshot headers include the maximum dose on the computed grid and the number of voxels
+penalized by the enabled hotspot term.
+
+**Interpretation:** cost shares describe optimization pressure, not clinical goal attainment,
+gradient magnitude, or the percentage of voxels violating a goal. Squared dose objectives
+are voxel-averaged, while DVH objectives use weighted sums, so equal configured weights need
+not produce equal costs. Use dose statistics/DVH for clinical evaluation.
+
+DAO's `Objective` column includes total-MU and soft mechanical penalties. The summary's
+`DoseCost` (`initialLeafObjective`/`finalLeafObjective`) includes dose objectives, hotspot and
+MU smoothing only; it excludes total-MU and mechanical penalties. `Restarts` lists direction
+restarts and line-search retries as `dir/LS`. Final snapshots describe
+the repaired sequence, which may differ from the best unprojected iterate.
+
+The two snapshots per optimization/refinement run each perform an additional forward-dose
+evaluation and CPU evaluation of the objective costs, including on CUDA runs; progress lines
+do not. No extra gradients or line-search trial logs are generated. CUDA solver totals and
+snapshot totals may differ slightly due to floating-point reductions.
 
 #### Algorithm
 
@@ -250,9 +315,11 @@ for iter = 1 to maxIterations:
 
 When `prescriptionDose > 0`, the optimizer adds an additional penalty term for voxels exceeding the hotspot threshold:
 
-$$f_\text{hotspot} = \lambda \sum_{v : d_v > \theta \cdot d_\text{Rx}} (d_v - \theta \cdot d_\text{Rx})^2$$
+$$f_\text{hotspot} = \lambda \sum_v n_v^2 (1 + 10 n_v) e_v^2,
+\qquad e_v = \max(0, d_v - \theta d_\text{Rx}), \quad n_v = e_v / d_\text{Rx}$$
 
 Where $\theta$ is `hotspotThreshold` (fraction of prescribed dose) and $\lambda$ is `hotspotPenalty`.
+The term is enabled only when the prescription and penalty coefficient are positive.
 
 ## Auto-Classification (CLI)
 

@@ -88,6 +88,9 @@ private:
     std::deque<std::vector<double>> m_yHistory;
     std::deque<double> m_rhoHistory;
     int m_currentMemorySize = 0;
+
+    void logBreakdown(const std::string& context, const std::vector<double>& weights,
+                      const IDoseOperator& dij, const std::vector<ObjectiveFunction*>& objectives) const;
     
     // Compute total objective and gradient
     double computeObjectiveAndGradient(

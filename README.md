@@ -12,6 +12,7 @@ A modern, modular C++17 treatment planning system (TPS) for radiotherapy optimiz
 - **Dose Calculation**: Bortfeld SVD pencil beam engine with Siddon ray tracing, FFT lateral convolution, and electron density conversion
 - **Dose Influence Matrix**: Sparse Dij (COO → CSR) with binary caching and deterministic filenames
 - **Optimization**: L-BFGS-B optimizer with squared deviation/overdose/underdose and DVH-based objectives, NTO/hotspot control
+- **Optimization Diagnostics**: Terminal objective/penalty cost breakdowns and DAO stage, iteration, machine-limit and stopping logs ([details](docs/optimization.md#terminal-diagnostics))
 - **Leaf Sequencing**: Step-and-shoot MLC aperture decomposition with deliverable dose recomputation
 - **Plan Analysis**: DVH computation, Dx%, VxGy, Conformity Index (CI), Homogeneity Index (HI), per-structure statistics
 - **Phase-Space Beams**: IAEA phase-space file support (IAEA(NDS)-0484 format) for Monte Carlo beam sources

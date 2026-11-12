@@ -1,4 +1,5 @@
 #include "LBFGSOptimizer.hpp"
+#include "optimization/OptimizationLogging.hpp"
 #include "utils/Logger.hpp"
 #include <cmath>
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <limits>
 #include <iostream>
 #include <iomanip>
+#include <sstream>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -45,6 +47,10 @@ OptimizationResult LBFGSOptimizer::optimize(
     Logger::info("Starting L-BFGS-B optimization...");
     Logger::info("Max iterations: " + std::to_string(m_maxIterations));
     Logger::info("Memory size: " + std::to_string(m_memorySize));
+    logObjectiveConfiguration("L-BFGS-B", objectives);
+    if (!constraints.empty())
+        Logger::warn("L-BFGS-B: " + std::to_string(constraints.size()) +
+                     " Constraint objects supplied but not enforced; use dose objectives for optimization");
     
     OptimizationResult result;
     result.converged = false;
@@ -76,6 +82,16 @@ OptimizationResult LBFGSOptimizer::optimize(
         if (total > 0.0) m_l1RegWeight = m_relativeL1 * dataObjective / total;
     }
     double fval = computeObjectiveAndGradient(x, dij, objectives, grad);
+    {
+        std::ostringstream out;
+        out << "L-BFGS-B settings: weights in [0, " << ub << "], tolerance=" << m_tolerance
+            << ", hotspot=" << (m_prescriptionDose > 0.0 && m_hotspotPenalty > 0.0 ? "enabled" : "disabled")
+            << " (limit=" << m_prescriptionDose * m_hotspotThreshold << " Gy, coefficient=" << m_hotspotPenalty
+            << "), smoothing=" << m_spatialSmoothingWeight << ", L2=" << m_l2RegWeight
+            << ", L1=" << m_l1RegWeight << " (relative fraction=" << m_relativeL1 << ")";
+        Logger::info(out.str());
+    }
+    if (m_verbose) logBreakdown("L-BFGS-B initial", x, dij, objectives);
     
     std::vector<double> objectiveHistory;
     objectiveHistory.reserve(m_maxIterations + 1);
@@ -199,7 +215,7 @@ OptimizationResult LBFGSOptimizer::optimize(
         }
         
         // Display progress
-        if (iter % m_progressEvery == 0 || iter == 1) {
+        if (shouldLogOptimizationProgress(iter, m_progressEvery)) {
             double initialObj = objectiveHistory[0];
             double improvement = 0;
             if (initialObj > 0) {
@@ -269,6 +285,7 @@ OptimizationResult LBFGSOptimizer::optimize(
     
     result.weights = std::move(x);
     result.finalObjective = fval;
+    if (m_verbose) logBreakdown("L-BFGS-B final", result.weights, dij, objectives);
     
     if (m_verbose) {
         std::cout << "\nOptimization completed in " << std::fixed << std::setprecision(2) 
@@ -279,6 +296,25 @@ OptimizationResult LBFGSOptimizer::optimize(
     
     Logger::info("Optimization complete.");
     return result;
+}
+
+void LBFGSOptimizer::logBreakdown(const std::string& context, const std::vector<double>& weights,
+                                 const IDoseOperator& dij,
+                                 const std::vector<ObjectiveFunction*>& objectives) const {
+    double smoothing = 0.0, l2 = 0.0, l1 = 0.0;
+    for (size_t i = 0; i < weights.size(); ++i) {
+        if (m_spatialSmoothingWeight > 0.0 && !m_neighbors.empty()) {
+            for (int j : m_neighbors[i]) {
+                const double difference = weights[i] - weights[j];
+                smoothing += 0.5 * m_spatialSmoothingWeight * difference * difference;
+            }
+        }
+        if (m_l2RegWeight > 0.0) l2 += m_l2RegWeight * weights[i] * weights[i];
+        if (m_l1RegWeight > 0.0) l1 += m_l1RegWeight * weights[i];
+    }
+    logOptimizationBreakdown(context, objectives, dij.computeDose(weights),
+        m_prescriptionDose, m_hotspotThreshold, m_hotspotPenalty,
+        {{"Spatial smoothing", smoothing}, {"L2 regularization", l2}, {"L1 / total weight", l1}});
 }
 
 double LBFGSOptimizer::computeObjectiveAndGradient(

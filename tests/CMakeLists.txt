@@ -152,6 +152,9 @@ add_test(NAME MathUtilsTest COMMAND test_mathutils)
 # ============================================================================
 
 add_test(NAME LBFGSOptimizerTest COMMAND test_lbfgs_optimizer)
+add_executable(test_optimization_logging optimization/test_optimization_logging.cpp)
+target_link_libraries(test_optimization_logging PRIVATE optirad_optimization GTest::gtest_main)
+add_test(NAME OptimizationLoggingTest COMMAND test_optimization_logging)
 add_test(NAME DicomImporterTest COMMAND test_dicom_importer ${CMAKE_SOURCE_DIR}/data/dicom)
 
 # ============================================================================
