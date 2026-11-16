@@ -155,28 +155,16 @@ __global__ void rankDoses(const size_t* indices, size_t count, const double* dos
 }
 
 __global__ void doseObjective(const size_t* indices, const DoseRank* ranked, size_t count, size_t begin,
-                             size_t end, int type, double threshold, double scale, const double* dose,
-                             double* gradient, double* value) {
+                             size_t end, int type, double threshold, const double* thresholds, double scale,
+                             const double* dose, double* gradient, double* value) {
     const size_t index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= count || index < begin || index >= end) return;
     const size_t voxel = type >= 3 ? ranked[index].voxel : indices[index];
-    const double difference = dose[voxel] - threshold;
+    const double difference = dose[voxel] - (thresholds && type < 3 ? thresholds[index] : threshold);
     if ((type == 1 || type == 4) && difference <= 0.0) return;
     if ((type == 2 || type == 3) && difference >= 0.0) return;
     atomicAdd(value, scale * difference * difference);
     atomicAdd(gradient + voxel, 2.0 * scale * difference);
-}
-
-__global__ void hotspotObjective(const double* dose, size_t count, double prescription, double threshold,
-                                double penalty, double* gradient, double* value, bool consistent) {
-    const size_t voxel = blockIdx.x * blockDim.x + threadIdx.x;
-    if (voxel >= count) return;
-    const double excess = dose[voxel] - prescription * threshold;
-    if (excess <= 0.0) return;
-    const double normalized = excess / prescription;
-    atomicAdd(value, penalty * normalized * normalized * (1.0 + 10.0 * normalized) * excess * excess);
-    gradient[voxel] += consistent ? penalty * excess * normalized * normalized * (4.0 + 50.0 * normalized) :
-        2.0 * penalty * normalized * (1.0 + 15.0 * normalized) * excess;
 }
 
 } // namespace
@@ -256,8 +244,11 @@ struct CudaFluenceBackend::BixelLayout {
     size_t remainingBudget = 0;
     struct Objectives {
         std::vector<std::vector<size_t>> indices;
+        std::vector<std::vector<double>> thresholds;
         std::vector<size_t> offsets;
+        std::vector<bool> hasThresholds;
         DeviceBuffer<size_t> deviceIndices;
+        DeviceBuffer<double> deviceThresholds;
         DeviceBuffer<DoseRank> ranked;
         DeviceBuffer<double> gradient, value;
     };
@@ -452,8 +443,8 @@ void CudaFluenceBackend::accumulateBixelGradient(BixelLayout& layout, const std:
 }
 
 bool CudaFluenceBackend::evaluateObjectives(BixelLayout& layout, const std::vector<double>& weights,
-    const std::vector<DoseObjectiveSpec>& objectives, double prescription, double threshold, double penalty,
-    double& value, std::vector<double>& gradient, bool consistentHotspotGradient, bool needGradient) {
+    const std::vector<DoseObjectiveSpec>& objectives, double& value, std::vector<double>& gradient,
+    bool needGradient) {
     auto& state = *m_impl;
     std::lock_guard<std::mutex> guard(state.mutex);
     checkCuda(cudaSetDevice(state.device));
@@ -463,22 +454,31 @@ bool CudaFluenceBackend::evaluateObjectives(BixelLayout& layout, const std::vect
         const auto& objective = objectives[index];
         if (objective.type < 0 || objective.type > 4 || objective.volumeFraction < 0.0 || objective.volumeFraction > 1.0)
             return false;
-        if (cached && layout.objectives->indices[index] != objective.indices) cached = false;
+        if (!objective.thresholds.empty() && objective.thresholds.size() != objective.indices.size()) return false;
+        if (cached && (layout.objectives->indices[index] != objective.indices ||
+                       layout.objectives->thresholds[index] != objective.thresholds)) cached = false;
         totalIndices += objective.indices.size();
         maxIndices = std::max(maxIndices, objective.indices.size());
     }
     if (!cached) {
-        const size_t bytes = totalIndices * sizeof(size_t) + maxIndices * sizeof(DoseRank) * 3 +
+        const size_t bytes = totalIndices * (sizeof(size_t) + sizeof(double)) + maxIndices * sizeof(DoseRank) * 3 +
             (state.voxels + 1) * sizeof(double);
         if (bytes > layout.remainingBudget) return false;
         layout.objectives.reset();
         auto workspace = std::make_unique<BixelLayout::Objectives>();
         std::vector<size_t> indices;
+        std::vector<double> thresholds;
         workspace->offsets.push_back(0);
         for (const auto& objective : objectives) {
             workspace->indices.push_back(objective.indices);
+            workspace->thresholds.push_back(objective.thresholds);
+            workspace->hasThresholds.push_back(!objective.thresholds.empty());
             std::vector<size_t> valid;
-            for (size_t voxel : objective.indices) if (voxel < state.voxels) valid.push_back(voxel);
+            for (size_t i = 0; i < objective.indices.size(); ++i) {
+                if (objective.indices[i] >= state.voxels) continue;
+                valid.push_back(objective.indices[i]);
+                thresholds.push_back(objective.thresholds.empty() ? objective.threshold : objective.thresholds[i]);
+            }
             auto unique = valid;
             std::sort(unique.begin(), unique.end());
             if (std::adjacent_find(unique.begin(), unique.end()) != unique.end()) return false;
@@ -486,6 +486,9 @@ bool CudaFluenceBackend::evaluateObjectives(BixelLayout& layout, const std::vect
             workspace->offsets.push_back(indices.size());
         }
         workspace->deviceIndices.allocate(indices.size());
+        workspace->deviceThresholds.allocate(thresholds.size());
+        if (!thresholds.empty()) checkCuda(cudaMemcpy(workspace->deviceThresholds.data, thresholds.data(),
+            thresholds.size() * sizeof(double), cudaMemcpyHostToDevice));
         workspace->ranked.allocate(maxIndices);
         workspace->gradient.allocate(state.voxels);
         workspace->value.allocate(1);
@@ -511,12 +514,10 @@ bool CudaFluenceBackend::evaluateObjectives(BixelLayout& layout, const std::vect
             if (objective.type == 3) begin = static_cast<size_t>(std::floor((1.0 - objective.volumeFraction) * count));
             else end = count - std::min(count, static_cast<size_t>(std::ceil(objective.volumeFraction * count)));
         } else scale /= objective.indices.size();
-        doseObjective<<<blocks(count), 256>>>(indices, workspace.ranked.data, count, begin, end,
-            objective.type, objective.threshold, scale, state.dose.data, workspace.gradient.data, workspace.value.data);
+        const double* thresholds = workspace.hasThresholds[index] ? workspace.deviceThresholds.data + offset : nullptr;
+        doseObjective<<<blocks(count), 256>>>(indices, workspace.ranked.data, count, begin, end, objective.type,
+            objective.threshold, thresholds, scale, state.dose.data, workspace.gradient.data, workspace.value.data);
     }
-    if (prescription > 0.0 && penalty > 0.0)
-        hotspotObjective<<<blocks(state.voxels), 256>>>(state.dose.data, state.voxels, prescription, threshold,
-            penalty, workspace.gradient.data, workspace.value.data, consistentHotspotGradient);
     checkCuda(cudaGetLastError());
     checkCuda(cudaMemcpy(&value, workspace.value.data, sizeof(double), cudaMemcpyDeviceToHost));
     if (!needGradient) { gradient.clear(); return true; }

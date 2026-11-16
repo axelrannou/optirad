@@ -82,8 +82,6 @@ struct GuiAppState {
     // ── Arc (VMAT) state ──
     std::shared_ptr<ArcPipelineResult> arcResult;
     std::vector<ObjectiveSpec> optimizationSpecs;   // objectives of the last fluence optimization (reused by the arc stage)
-    ArcStrategy arcStrategy = ArcStrategy::SweepRefine;   // VMAT delivery strategy, chosen with the plan
-    bool arcAutoStart = false;                            // set when optimization ends: chain straight into arc optimization
     OptimizationConfig optimizationConfig;          // settings of the last fluence optimization
 
     // ── Multi-dose management ──
@@ -133,7 +131,7 @@ struct GuiAppState {
     bool dijComputed() const { return doseOp != nullptr && (!dij || dij->getNumNonZeros() > 0); }
     /// DAO on a VMAT plan skips the Dij / fluence optimization stages.
     bool directDao() const {
-        return plan && plan->isVmat() && arcStrategy == ArcStrategy::ProgressiveDao;
+        return plan && plan->isVmat();
     }
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
     bool leafSequenceDone() const { return !leafSequences.empty(); }

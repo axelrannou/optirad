@@ -70,17 +70,8 @@ void PlanningPanel::render() {
         static const char* kDelivery[] = { "SMLC (step-and-shoot IMRT)", "VMAT (arcs)" };
         ImGui::Combo("Technique", &m_deliveryIdx, kDelivery, IM_ARRAYSIZE(kDelivery));
         if (m_deliveryIdx == 1) {
-            int strategy = static_cast<int>(m_state.arcStrategy);
-            static const char* kStrategies[] = {"Fluence optimization, then sequencing",
-                                                "Direct aperture optimization (DAO)"};
-            ImGui::Combo("Optimization", &strategy, kStrategies, IM_ARRAYSIZE(kStrategies));
-            m_state.arcStrategy = static_cast<ArcStrategy>(strategy);
-            if (m_state.arcStrategy == ArcStrategy::ProgressiveDao)
-                ImGui::TextDisabled("Apertures are optimized directly against the objectives: no Dij, no fluence\n"
-                                    "optimization, no sequencing. Only the dose grid is set up.");
-            else
-                ImGui::TextDisabled("Fluence is optimized on one beam per arc sector, then sequenced\n"
-                                    "into one aperture per control point.");
+            ImGui::TextDisabled("VMAT is optimized with direct aperture optimization (DAO): apertures and MU\n"
+                                "are optimized against the objectives at increasing control point resolution.");
             int toRemove = -1;
             for (size_t a = 0; a < m_arcs.size(); ++a) {
                 auto& arc = m_arcs[a];
@@ -111,7 +102,9 @@ void PlanningPanel::render() {
             }
 
             ImGui::SetNextItemWidth(95.0f);
-            ImGui::InputFloat("Optimization beam width (deg)", &m_optSpacing, 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("Arc sector width (deg)", &m_optSpacing, 0.0f, 0.0f, "%.1f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("One beam (ray-traced field) per sector, used for the conformal DAO start.");
             ImGui::SetNextItemWidth(95.0f);
             ImGui::InputFloat("Control point spacing (deg)", &m_cpSpacing, 0.0f, 0.0f, "%.1f");
             if (m_cpSpacing > 0.0f && m_optSpacing > 0.0f) {
@@ -127,11 +120,8 @@ void PlanningPanel::render() {
                 preview.controlPointSpacingDeg = m_cpSpacing;
                 const size_t sectors = ArcGeometry::sectors(preview).size();
                 const size_t cps = ArcGeometry::controlPoints(preview).size();
-                ImGui::Text("%zu optimization beams, %zu control points (~%.0f per sector)",
+                ImGui::Text("%zu sectors, %zu control points (~%.0f per sector)",
                             sectors, cps, sectors ? static_cast<double>(cps) / sectors : 0.0);
-                if (sectors && static_cast<double>(cps) / sectors < 5.0)
-                    ImGui::TextColored(getThemeColors().failText,
-                        "Few control points per sector: the fluence is quantized to that many levels.");
             }
         }
         ImGui::Unindent();
@@ -398,7 +388,7 @@ void PlanningPanel::render() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    const bool daoPlan = isVmat && m_state.arcStrategy == ArcStrategy::ProgressiveDao;
+    const bool daoPlan = isVmat;
     if (daoPlan) {
         if (ImGui::CollapsingHeader("Dose Settings (DAO)", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Text("Dose Grid Resolution:");

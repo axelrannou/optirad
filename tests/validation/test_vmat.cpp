@@ -10,7 +10,6 @@
 #include "dose/engines/PencilBeamEngine.hpp"
 #include "sequencing/ApertureFluence.hpp"
 #include "sequencing/ArcSequencer.hpp"
-#include "sequencing/SlidingWindow.hpp"
 #include "validation/WaterPhantom.hpp"
 
 #include <cmath>
@@ -195,48 +194,6 @@ TEST(ApertureFluenceTest, IntegratedTipGradientMatchesFiniteDifferences) {
     }
 }
 
-TEST(SlidingWindowTest, FineSlotsReproduceAnArbitraryProfile) {
-    const std::vector<double> profile = {0.0, 2.0, 5.0, 1.0, 0.0, 0.0, 4.0, 4.5, 0.5, 3.0, 0.0};
-    const double pixel = 3.0;
-    const int cols = static_cast<int>(profile.size());
-    const Beam beam = makeBeam(cols, 1, pixel);
-    const double firstCenter = -0.5 * (cols - 1) * pixel;
-    std::vector<double> z = {-1.5, 1.5};
-
-    SlidingWindowRow row;
-    row.profile = profile;
-    row.firstCenter = firstCenter;
-    row.pixel = pixel;
-    row.start = firstCenter - 0.5 * pixel;      // one pixel before the first exposed pixel (index 1)
-    row.end = firstCenter + (cols - 1.5) * pixel;   // right edge of the last exposed pixel (index cols-2)
-
-    for (int slots : {400, 40}) {
-        const double speed = 30.0 / slots * 4.0;   // sweeps the field within a quarter of the slots
-        const double mu = SlidingWindow::requiredMuPerSlot(row, speed, slots);
-        ASSERT_GT(mu, 0.0);
-        std::vector<double> trailing, leading;
-        SlidingWindow::sampleTips(row, speed, mu, slots, trailing, leading);
-
-        std::vector<double> delivered(profile.size(), 0.0);
-        for (int k = 0; k < slots; ++k) {
-            Aperture previous, current, next;
-            auto make = [&](int index) {
-                const int clamped = std::clamp(index, 0, slots - 1);
-                Aperture ap; ap.bankA = {trailing[static_cast<size_t>(clamped)]};
-                ap.bankB = {leading[static_cast<size_t>(clamped)]}; return ap; };
-            previous = make(k - 1); current = make(k); next = make(k + 1);
-            const auto open = ApertureFluence::integratedOpenFractions(beam, &previous, current, &next, z);
-            for (size_t i = 0; i < delivered.size(); ++i) delivered[i] += open[i] * mu;
-        }
-        double error = 0.0, norm = 0.0;
-        for (size_t i = 0; i < profile.size(); ++i) {
-            error += (delivered[i] - profile[i]) * (delivered[i] - profile[i]);
-            norm += profile[i] * profile[i];
-        }
-        EXPECT_LT(std::sqrt(error / norm), slots == 400 ? 0.01 : 0.05) << slots << " slots";
-    }
-}
-
 // ============================================================================
 // Arc sequencing and timing
 // ============================================================================
@@ -271,103 +228,6 @@ TEST(VmatPlanTest, PlanBuilderCreatesOneBeamPerSectorAtTheSectorCentre) {
     EXPECT_NEAR(f.built.stf->getBeam(2)->getGantryAngle(), 75.0, 1e-9);
 }
 
-TEST(ArcSequencerTest, LevelSetUniformFluenceGivesOneSharedApertureAndMuIsConserved) {
-    ArcFixture f;
-    const Stf& stf = *f.built.stf;
-    std::vector<double> weights(stf.getTotalNumOfBixels(), 1.0);
-
-    ArcSequencerOptions levels;
-    levels.method = ArcSequencerOptions::Method::LevelSet;
-    const auto seq = ArcSequencer::sequence(weights, stf, f.built.plan->getVmatSettings(),
-                                            f.built.plan->getMachine(), levels);
-    ASSERT_EQ(seq.controlPoints.size(), 9u);
-
-    // One segment per sector (uniform fluence), MU 1 per sector split over its 3 control points.
-    EXPECT_NEAR(seq.totalMU, 3.0, 1e-9);
-    for (size_t s = 0; s < 3; ++s) {
-        const auto& a = seq.controlPoints[3 * s].aperture;
-        for (size_t k = 1; k < 3; ++k) {
-            const auto& b = seq.controlPoints[3 * s + k].aperture;
-            EXPECT_EQ(a.bankA, b.bankA);
-            EXPECT_EQ(a.bankB, b.bankB);
-        }
-        for (size_t k = 0; k < 3; ++k) EXPECT_NEAR(seq.controlPoints[3 * s + k].mu, 1.0 / 3.0, 1e-9);
-    }
-
-    // No leaf movement inside a sector, MU is tiny: the gantry runs at full speed.
-    EXPECT_EQ(seq.slowedControlPoints, 0);
-    EXPECT_NEAR(seq.minGantrySpeed, f.built.plan->getMachine().getConstraints().gantryRotationSpeed[1], 1e-9);
-    EXPECT_NEAR(seq.totalTimeSec, 90.0 / 6.0, 1e-6);
-}
-
-TEST(ArcSequencerTest, SweepDeliversTheSectorFluenceWithMovingLeaves) {
-    ArcFixture f;
-    const Stf& stf = *f.built.stf;
-    std::vector<double> weights(stf.getTotalNumOfBixels());
-    size_t at = 0;
-    for (size_t s = 0; s < stf.getCount(); ++s) {
-        const Beam& beam = *stf.getBeam(s);
-        for (size_t r = 0; r < beam.getNumOfRays(); ++r) {
-            const auto& pos = beam.getRay(r)->getRayPosBev();
-            weights[at++] = 1.0 + 0.5 * std::sin(0.15 * pos[0]) + 0.3 * std::cos(0.2 * pos[2]);
-        }
-    }
-
-    const auto& plan = *f.built.plan;
-    const auto seq = ArcSequencer::sequence(weights, stf, plan.getVmatSettings(), plan.getMachine());
-    ASSERT_EQ(seq.controlPoints.size(), 9u);
-    for (const auto& cp : seq.controlPoints) {
-        EXPECT_GT(cp.mu, 0.0);
-        ASSERT_EQ(cp.aperture.bankA.size(), cp.leafPairBoundariesZ.size() - 1);
-        for (size_t p = 0; p < cp.aperture.bankA.size(); ++p) EXPECT_LE(cp.aperture.bankA[p], cp.aperture.bankB[p]);
-    }
-
-    // Delivered fluence (leaves integrated over each slice) against the optimized fluence of each sector.
-    size_t offset = 0;
-    for (size_t s = 0; s < stf.getCount(); ++s) {
-        const Beam& beam = *stf.getBeam(s);
-        std::vector<double> delivered(beam.getNumOfRays(), 0.0);
-        for (size_t j = 3 * s; j < 3 * s + 3; ++j) {
-            const auto& cp = seq.controlPoints[j];
-            const Aperture* before = j > 0 ? &seq.controlPoints[j - 1].aperture : nullptr;
-            const Aperture* after = j + 1 < seq.controlPoints.size() ? &seq.controlPoints[j + 1].aperture : nullptr;
-            const auto open = ApertureFluence::integratedOpenFractions(beam, before, cp.aperture, after,
-                                                                       cp.leafPairBoundariesZ);
-            for (size_t r = 0; r < open.size(); ++r) delivered[r] += open[r] * cp.mu;
-        }
-        double error = 0.0, norm = 0.0, got = 0.0, want = 0.0;
-        for (size_t r = 0; r < delivered.size(); ++r) {
-            const double t = weights[offset + r];
-            error += (delivered[r] - t) * (delivered[r] - t);
-            norm += t * t;
-            got += delivered[r];
-            want += t;
-        }
-        offset += beam.getNumOfRays();
-        EXPECT_NEAR(got / want, 1.0, 0.1) << "sector " << s;
-        EXPECT_LT(std::sqrt(error / norm), 0.35) << "sector " << s;
-    }
-}
-
-TEST(ArcSequencerTest, SweepNeedsAnInterdigitatingMlcAndSeveralControlPointsPerSector) {
-    ArcFixture f;
-    std::vector<double> weights(f.built.stf->getTotalNumOfBixels(), 1.0);
-    ArcSequencerOptions sweep;
-    sweep.method = ArcSequencerOptions::Method::Sweep;
-    auto settings = f.built.plan->getVmatSettings();
-    settings.controlPointSpacingDeg = 30.0;   // one control point per sector
-    EXPECT_THROW(ArcSequencer::sequence(weights, *f.built.stf, settings, f.built.plan->getMachine(), sweep),
-                 std::invalid_argument);
-    // Auto falls back to the level decomposition.
-    EXPECT_NO_THROW(ArcSequencer::sequence(weights, *f.built.stf, settings, f.built.plan->getMachine()));
-}
-
-TEST(SlidingWindowTest, TotalRiseCountsOnlyTheUpwardSteps) {
-    EXPECT_DOUBLE_EQ(SlidingWindow::totalRise({0.0, 2.0, 1.0, 4.0, 0.0}), 2.0 + 3.0);
-    EXPECT_DOUBLE_EQ(SlidingWindow::totalRise({3.0, 3.0}), 3.0);
-    EXPECT_DOUBLE_EQ(SlidingWindow::totalRise({0.0, 0.0}), 0.0);
-}
-
 TEST(FluenceMapTest, ToBeamWeightsInvertsFromBeamWeights) {
     const Beam beam = makeBeam(4, 3, 5.0);
     std::vector<double> weights(beam.getNumOfRays());
@@ -380,73 +240,22 @@ TEST(FluenceMapTest, ToBeamWeightsInvertsFromBeamWeights) {
         EXPECT_DOUBLE_EQ(back[i], i == 1 * 4 + 2 ? 100.0 : weights[i]);
 }
 
-TEST(ArcSequencerTest, RiseLimitReducesTheMuOfAModulatedSectorAndKeepsItsMass) {
+TEST(ArcSequencerTest, ConformalSeedOpensEveryControlPointWithUnitMu) {
     ArcFixture f;
-    const Stf& stf = *f.built.stf;
-    std::vector<double> weights(stf.getTotalNumOfBixels());
-    size_t at = 0;
-    for (size_t s = 0; s < stf.getCount(); ++s) {
-        const Beam& beam = *stf.getBeam(s);
-        for (size_t r = 0; r < beam.getNumOfRays(); ++r) {
-            const auto& pos = beam.getRay(r)->getRayPosBev();
-            const int column = static_cast<int>(std::lround(pos[0] / 10.0));
-            weights[at++] = (column % 2 == 0) ? 4.0 : 0.5;   // comb: large upward steps in every row
-        }
-    }
     const auto& plan = *f.built.plan;
-    ArcSequencerOptions raw;
-    raw.maxRiseRatio = 0.0;
-    raw.fitIterations = 0;
-    ArcSequencerOptions limited = raw;
-    limited.maxRiseRatio = 1.0;
-    const auto a = ArcSequencer::sequence(weights, stf, plan.getVmatSettings(), plan.getMachine(), raw);
-    const auto b = ArcSequencer::sequence(weights, stf, plan.getVmatSettings(), plan.getMachine(), limited);
-    EXPECT_GT(a.totalMU, 0.0);
-    EXPECT_LT(b.totalMU, 0.8 * a.totalMU);
-}
-
-TEST(ArcSequencerTest, SweepSlicesAreFastEnoughForTheLeavesAndDoNotExceedTheDoseRate) {
-    ArcFixture f;
-    std::vector<double> weights(f.built.stf->getTotalNumOfBixels(), 1.0);
-    for (size_t i = 0; i < weights.size(); ++i) weights[i] = 1.0 + 0.8 * static_cast<double>((i * 5) % 7) / 7.0;
-    const auto& plan = *f.built.plan;
-    const auto seq = ArcSequencer::sequence(weights, *f.built.stf, plan.getVmatSettings(), plan.getMachine());
-    const auto limits = plan.getMachine().getConstraints();
-    for (const auto& cp : seq.controlPoints) {
-        EXPECT_LE(cp.leafSpeed, limits.leafSpeed[1] + 1e-6);
-        EXPECT_LE(cp.doseRate, limits.monitorUnitRate[1] + 1e-6);
-        EXPECT_LE(cp.gantrySpeed, limits.gantryRotationSpeed[1] + 1e-6);
-    }
-}
-
-TEST(ArcSequencerTest, ConformalAperturesStayOpenAndMoveLittle) {
-    ArcFixture f;
-    const Stf& stf = *f.built.stf;
-    std::vector<double> weights(stf.getTotalNumOfBixels());
-    size_t at = 0;
-    for (size_t s = 0; s < stf.getCount(); ++s) {
-        const Beam& beam = *stf.getBeam(s);
-        for (size_t r = 0; r < beam.getNumOfRays(); ++r) {
-            const auto& pos = beam.getRay(r)->getRayPosBev();
-            weights[at++] = 1.0 + 0.5 * std::sin(0.15 * pos[0]);
-        }
-    }
-    ArcSequencerOptions conformal;
-    conformal.method = ArcSequencerOptions::Method::Conformal;
-    ArcSequencerOptions sweep;
-    sweep.method = ArcSequencerOptions::Method::Sweep;
-    const auto& plan = *f.built.plan;
-    const auto c = ArcSequencer::sequence(weights, stf, plan.getVmatSettings(), plan.getMachine(), conformal);
-    const auto w = ArcSequencer::sequence(weights, stf, plan.getVmatSettings(), plan.getMachine(), sweep);
-    ASSERT_EQ(c.controlPoints.size(), 9u);
-    for (const auto& cp : c.controlPoints) {
+    const auto seed = ArcSequencer::conformalSeed(*f.built.stf, plan.getVmatSettings(), plan.getMachine());
+    ASSERT_EQ(seed.controlPoints.size(), 9u);
+    for (const auto& cp : seed.controlPoints) {
         EXPECT_GT(cp.mu, 0.0);
         bool open = false;
-        for (size_t p = 0; p < cp.aperture.bankA.size(); ++p) open = open || cp.aperture.bankB[p] > cp.aperture.bankA[p];
+        for (size_t p = 0; p < cp.aperture.bankA.size(); ++p) {
+            EXPECT_LE(cp.aperture.bankA[p], cp.aperture.bankB[p]);
+            open = open || cp.aperture.bankB[p] > cp.aperture.bankA[p];
+        }
         EXPECT_TRUE(open);
     }
-    EXPECT_LT(c.totalMU, w.totalMU);
-    EXPECT_LE(c.totalTimeSec, w.totalTimeSec + 1e-9);
+    EXPECT_TRUE(std::isfinite(seed.totalTimeSec));
+    EXPECT_GE(seed.totalTimeSec, 90.0 / 6.0 - 1e-9);
 }
 
 TEST(ArcSequencerTest, ResampleInterpolatesTipsAndMuPerDegreeAlongTheArc) {
@@ -481,18 +290,15 @@ TEST(ArcSequencerTest, RejectsAnStfThatDoesNotMatchTheArcs) {
     ArcFixture f;
     VmatSettings other = f.built.plan->getVmatSettings();
     other.optimizationSpacingDeg = 10.0;   // 9 sectors instead of 3
-    std::vector<double> weights(f.built.stf->getTotalNumOfBixels(), 1.0);
-    EXPECT_THROW(ArcSequencer::sequence(weights, *f.built.stf, other, f.built.plan->getMachine()),
+    EXPECT_THROW(ArcSequencer::conformalSeed(*f.built.stf, other, f.built.plan->getMachine()),
                  std::invalid_argument);
 }
 
 TEST(ArcSequencerTest, FastLeafMotionSlowsTheGantryAndHighMuSlowsItToo) {
     ArcFixture f;
-    std::vector<double> weights(f.built.stf->getTotalNumOfBixels(), 1.0);
-    ArcSequencerOptions levels;
-    levels.method = ArcSequencerOptions::Method::LevelSet;   // static apertures: no sweep travel inside a sector
-    auto seq = ArcSequencer::sequence(weights, *f.built.stf, f.built.plan->getVmatSettings(),
-                                      f.built.plan->getMachine(), levels);
+    auto seq = ArcSequencer::conformalSeed(*f.built.stf, f.built.plan->getVmatSettings(),
+                                           f.built.plan->getMachine());
+    for (auto& cp : seq.controlPoints) cp.aperture = seq.controlPoints[4].aperture;   // static leaves
     const MachineConstraints limits = f.built.plan->getMachine().getConstraints();
 
     // Throw the leaves 200 mm in one slice: needs 200/60 s instead of 10/6 s.
@@ -509,22 +315,6 @@ TEST(ArcSequencerTest, FastLeafMotionSlowsTheGantryAndHighMuSlowsItToo) {
     ArcSequencer::computeTiming(seq, limits);
     EXPECT_NEAR(seq.controlPoints[0].timeSec, 100.0 / limits.monitorUnitRate[1], 1e-9);
     EXPECT_NEAR(seq.controlPoints[0].doseRate, limits.monitorUnitRate[1], 1e-9);
-}
-
-TEST(ArcSequencerTest, LeafSpeedLimitKeepsTheGantryAtFullSpeed) {
-    ArcFixture f;
-    std::vector<double> weights(f.built.stf->getTotalNumOfBixels());
-    for (size_t i = 0; i < weights.size(); ++i) weights[i] = 0.01 * (1.0 + static_cast<double>((i * 7) % 11));
-
-    ArcSequencerOptions opt;
-    opt.enforceLeafSpeed = true;
-    const auto seq = ArcSequencer::sequence(weights, *f.built.stf, f.built.plan->getVmatSettings(),
-                                            f.built.plan->getMachine(), opt);
-    const MachineConstraints limits = f.built.plan->getMachine().getConstraints();
-
-    EXPECT_LE(seq.maxLeafSpeed, limits.leafSpeed[1]);
-    EXPECT_EQ(seq.slowedControlPoints, 0);
-    EXPECT_NEAR(seq.minGantrySpeed, limits.gantryRotationSpeed[1], 1e-9);
 }
 
 TEST(ArcSequencerTest, ClosedLeavesMovePhysicallyAndArcsDoNotShareTransitions) {
@@ -581,51 +371,15 @@ double ptvMeanDose(const ArcPipelineResult& r) {
 
 } // namespace
 
-TEST(ArcPipelineTest, WeightOptimizationBringsTheTargetToThePrescription) {
-    ArcFixture f;
-    const Grid doseGrid = Grid::createDoseGrid(f.patient->getGrid(), {5.0, 5.0, 5.0});
-
-    ArcOptimizationConfig cfg;
-    cfg.optimizeLeaves = false;
-    cfg.computeBackend = DoseComputeBackend::CPU;
-    cfg.base.targetDose = 60.0;
-    cfg.weightIterations = 100;
-    cfg.base.ntoEnabled = false;
-    cfg.muSmoothingWeight = 0.0;
-
-    // Calibrate: dose per unit fluence weight with the sequenced MU delivered as is.
-    std::vector<double> unit(f.built.stf->getTotalNumOfBixels(), 1.0);
-    cfg.optimizeWeights = false;
-    const auto calib = ArcPipeline::run(unit, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
-                                        BuiltObjectives{}, cfg);
-    const double perUnit = ptvMeanDose(calib);
-    ASSERT_GT(perUnit, 0.0);
-
-    // Start at 60 % of the prescription; the optimizer must raise the MU.
-    std::vector<double> weights(unit.size(), 0.6 * 60.0 / perUnit);
-    cfg.optimizeWeights = true;
-    const auto r = ArcPipeline::run(weights, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
-                                    ptvObjective(*f.patient, doseGrid, 60.0), cfg);
-    EXPECT_GT(r.iterations, 0);
-    EXPECT_GT(r.sequence.totalMU, calib.sequence.totalMU * 0.6 * 60.0 / perUnit);  // MU went up
-    EXPECT_NEAR(ptvMeanDose(r), 60.0, 0.1 * 60.0);
-
-    ASSERT_NE(r.dose, nullptr);
-    EXPECT_GT(r.dose->getMax(), 0.0);
-    EXPECT_EQ(r.controlPointStf->getCount(), 9u);
-    EXPECT_TRUE(std::isfinite(r.sequence.totalTimeSec));
-    EXPECT_GE(r.sequence.totalTimeSec, 90.0 / 6.0 - 1e-9);
-}
-
-TEST(ArcPipelineTest, LeafRefinementDecreasesDoseObjectiveAndRespectsRates) {
+TEST(ArcPipelineTest, DaoDecreasesTheObjectiveAndRespectsTheMachineLimits) {
     ArcFixture fixture;
     const Grid grid = Grid::createDoseGrid(fixture.patient->getGrid(), {5.0, 5.0, 5.0});
     ArcOptimizationConfig config;
-    config.optimizeWeights = false;
-    config.base.ntoEnabled = false;
+    config.computeBackend = DoseComputeBackend::CPU;
+    config.base.nto.enabled = false;
     config.base.targetDose = 60.0;
-    config.leafIterations = 5;
-    std::vector<double> weights(fixture.built.stf->getTotalNumOfBixels(), 30.0);
+    config.coarsestSpacingDeg = 10.0;
+    config.iterationsPerResolution = 5;
     ObjectiveSpec spec;
     spec.structurePattern = "PTV";
     spec.typeIdx = 0;
@@ -633,7 +387,7 @@ TEST(ArcPipelineTest, LeafRefinementDecreasesDoseObjectiveAndRespectsRates) {
     spec.weight = 100.0;
     auto objectives = ObjectiveBuilder::buildFromSpecs({spec}, *fixture.patient, fixture.patient->getGrid(), grid);
     testing::internal::CaptureStdout();
-    const auto result = ArcPipeline::run(weights, *fixture.built.stf, *fixture.built.plan,
+    const auto result = ArcPipeline::run(*fixture.built.stf, *fixture.built.plan,
         *fixture.patient, grid, std::move(objectives), config);
     const auto log = testing::internal::GetCapturedStdout();
     EXPECT_EQ(countOccurrences(log, "weighted cost breakdown total="), 2u);
@@ -641,7 +395,13 @@ TEST(ArcPipelineTest, LeafRefinementDecreasesDoseObjectiveAndRespectsRates) {
     EXPECT_NE(log.find("DAO final (after feasibility repair): weighted cost breakdown"), std::string::npos);
     EXPECT_GT(result.leafIterations, 0);
     EXPECT_LT(result.finalLeafObjective, result.initialLeafObjective);
-    const auto& limits = fixture.built.plan->getMachine().getConstraints();
+    // `mu` are course bixel weights; the dose-rate limits are converted to them (1 = 100 MU x (SAD/1 m)^2 / fx).
+    const auto& plan = *fixture.built.plan;
+    EXPECT_NEAR(ArcPipeline::machineMuPerWeight(plan), 100.0 * std::pow(plan.getMachine().getSAD() / 1000.0, 2) /
+                plan.getNumOfFractions(), 1e-12);
+    const auto limits = ArcPipeline::deliveryConstraints(plan);
+    EXPECT_NEAR(limits.monitorUnitRate[1] * ArcPipeline::machineMuPerWeight(plan),
+                plan.getMachine().getConstraints().monitorUnitRate[1], 1e-9);
     for (const auto& cp : result.sequence.controlPoints) {
         EXPECT_LE(cp.leafSpeed, limits.leafSpeed[1] + 1e-8);
         EXPECT_LE(cp.gantrySpeed, limits.gantryRotationSpeed[1] + 1e-8);
@@ -679,25 +439,16 @@ TEST(ArcPipelineTest, MuPenaltyLowersTheTotalMuWhileTheTargetStaysCovered) {
     ArcOptimizationConfig cfg;
     cfg.computeBackend = DoseComputeBackend::CPU;
     cfg.base.targetDose = 60.0;
-    cfg.base.ntoEnabled = false;
+    cfg.base.nto.enabled = false;
     cfg.muSmoothingWeight = 0.0;
-    cfg.leafIterations = 30;
-    cfg.maxWeightFactor = 3.0;
-
-    std::vector<double> unit(f.built.stf->getTotalNumOfBixels(), 1.0);
-    ArcOptimizationConfig calibration = cfg;
-    calibration.optimizeWeights = false;
-    calibration.optimizeLeaves = false;
-    const double perUnit = ptvMeanDose(ArcPipeline::run(unit, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
-                                                         BuiltObjectives{}, calibration));
-    ASSERT_GT(perUnit, 0.0);
-    std::vector<double> weights(unit.size(), 60.0 / perUnit);
+    cfg.coarsestSpacingDeg = 20.0;
+    cfg.iterationsPerResolution = 30;
 
     cfg.muPenalty = 0.0;
-    const auto free = ArcPipeline::run(weights, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
+    const auto free = ArcPipeline::run(*f.built.stf, *f.built.plan, *f.patient, doseGrid,
                                        ptvObjective(*f.patient, doseGrid, 60.0), cfg);
     cfg.muPenalty = 1.0;
-    const auto penalized = ArcPipeline::run(weights, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
+    const auto penalized = ArcPipeline::run(*f.built.stf, *f.built.plan, *f.patient, doseGrid,
                                             ptvObjective(*f.patient, doseGrid, 60.0), cfg);
     EXPECT_LT(penalized.sequence.totalMU, free.sequence.totalMU);
     EXPECT_GT(ptvMeanDose(penalized), 0.8 * 60.0);
@@ -710,22 +461,11 @@ TEST(ArcPipelineTest, ProgressiveDaoRefinesThroughSeveralResolutionsAndRespectsT
     ArcOptimizationConfig cfg;
     cfg.computeBackend = DoseComputeBackend::CPU;
     cfg.base.targetDose = 60.0;
-    cfg.base.ntoEnabled = false;
-    cfg.strategy = ArcStrategy::ProgressiveDao;
-    cfg.daoCoarsestSpacingDeg = 40.0;   // 40, 20, 10 deg control points: 2, 5, 9
-    cfg.daoIterations = 15;
+    cfg.base.nto.enabled = false;
+    cfg.coarsestSpacingDeg = 40.0;   // 40, 20, 10 deg control points: 2, 5, 9
+    cfg.iterationsPerResolution = 15;
 
-    std::vector<double> unit(f.built.stf->getTotalNumOfBixels(), 1.0);
-    ArcOptimizationConfig calibration = cfg;
-    calibration.strategy = ArcStrategy::SweepRefine;
-    calibration.optimizeWeights = false;
-    calibration.optimizeLeaves = false;
-    const double perUnit = ptvMeanDose(ArcPipeline::run(unit, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
-                                                         BuiltObjectives{}, calibration));
-    ASSERT_GT(perUnit, 0.0);
-    std::vector<double> weights(unit.size(), 60.0 / perUnit);
-
-    const auto r = ArcPipeline::run(weights, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
+    const auto r = ArcPipeline::run(*f.built.stf, *f.built.plan, *f.patient, doseGrid,
                                     ptvObjective(*f.patient, doseGrid, 60.0), cfg);
     ASSERT_EQ(r.sequence.controlPoints.size(), 9u);
     EXPECT_EQ(r.controlPointStf->getCount(), 9u);
@@ -733,7 +473,7 @@ TEST(ArcPipelineTest, ProgressiveDaoRefinesThroughSeveralResolutionsAndRespectsT
     EXPECT_LT(r.finalLeafObjective, r.initialLeafObjective);
     EXPECT_NEAR(ptvMeanDose(r), 60.0, 0.25 * 60.0);
 
-    const auto limits = f.built.plan->getMachine().getConstraints();
+    const auto limits = ArcPipeline::deliveryConstraints(*f.built.plan);
     for (const auto& cp : r.sequence.controlPoints) {
         EXPECT_LE(cp.leafSpeed, limits.leafSpeed[1] + 1e-6);
         EXPECT_LE(cp.doseRate, limits.monitorUnitRate[1] + 1e-6);
@@ -742,22 +482,61 @@ TEST(ArcPipelineTest, ProgressiveDaoRefinesThroughSeveralResolutionsAndRespectsT
     }
 }
 
-TEST(ArcPipelineTest, ProgressiveDaoNeedsNoFluenceAndCalibratesItsOwnMu) {
+TEST(ArcPipelineTest, ProgressiveDaoReportsProgressAndCalibratesItsOwnMu) {
     ArcFixture f;
     const Grid doseGrid = Grid::createDoseGrid(f.patient->getGrid(), {5.0, 5.0, 5.0});
     ArcOptimizationConfig cfg;
     cfg.computeBackend = DoseComputeBackend::CPU;
     cfg.base.targetDose = 60.0;
-    cfg.base.ntoEnabled = false;
-    cfg.strategy = ArcStrategy::ProgressiveDao;
-    cfg.daoCoarsestSpacingDeg = 40.0;
-    cfg.daoIterations = 15;
+    cfg.base.nto.enabled = false;
+    cfg.coarsestSpacingDeg = 40.0;
+    cfg.iterationsPerResolution = 15;
 
     auto objectives = ptvObjective(*f.patient, doseGrid, 60.0);
+    std::vector<ArcProgressSnapshot> snapshots;
     testing::internal::CaptureStdout();
-    const auto r = ArcPipeline::run({}, *f.built.stf, *f.built.plan, *f.patient, doseGrid,
-                                    std::move(objectives), cfg);
+    const auto r = ArcPipeline::run(*f.built.stf, *f.built.plan, *f.patient, doseGrid,
+                                    std::move(objectives), cfg, nullptr,
+                                    [&](const ArcProgressSnapshot& sample) { snapshots.push_back(sample); });
     const auto log = testing::internal::GetCapturedStdout();
+    ASSERT_EQ(snapshots.size(), r.progressHistory.size());
+    ASSERT_GE(snapshots.size(), 6u);
+    int completedStages = 0;
+    int lastStage = 0, lastIteration = 0;
+    for (size_t sampleIndex = 0; sampleIndex < snapshots.size(); ++sampleIndex) {
+        const auto& sample = snapshots[sampleIndex];
+        EXPECT_EQ(sample.stages, 3);
+        EXPECT_EQ(sample.stage, r.progressHistory[sampleIndex].stage);
+        if (sample.stage != lastStage) {
+            EXPECT_EQ(sample.stage, lastStage + 1);
+            EXPECT_EQ(sample.progress.iteration, 0);
+            lastStage = sample.stage;
+            lastIteration = 0;
+        }
+        EXPECT_GE(sample.progress.iteration, lastIteration);
+        lastIteration = sample.progress.iteration;
+        double sum = 0.0;
+        for (const auto& term : sample.breakdown.contributions) sum += term.second;
+        EXPECT_DOUBLE_EQ(sum, sample.breakdown.total);
+        EXPECT_DOUBLE_EQ(sample.progress.objective, sum);
+        EXPECT_GT(sample.progress.totalMu, 0.0);
+        if (sample.stageFinished) ++completedStages;
+        else if (sample.progress.acceptedSteps > 0)
+            EXPECT_TRUE(shouldLogOptimizationProgress(sample.progress.acceptedSteps, 10));
+    }
+    EXPECT_EQ(completedStages, 3);
+    EXPECT_TRUE(snapshots.back().stageFinished);
+    EXPECT_NEAR(snapshots.back().breakdown.total, r.finalLeafObjective,
+                1e-8 * std::max(1.0, std::abs(r.finalLeafObjective)));
+    testing::internal::CaptureStdout();
+    const auto baseline = ArcPipeline::run(*f.built.stf, *f.built.plan, *f.patient, doseGrid,
+                                           ptvObjective(*f.patient, doseGrid, 60.0), cfg);
+    testing::internal::GetCapturedStdout();
+    EXPECT_TRUE(baseline.progressHistory.empty());
+    EXPECT_EQ(baseline.leafIterations, r.leafIterations);
+    EXPECT_NEAR(baseline.finalLeafObjective, r.finalLeafObjective,
+                1e-8 * std::max(1.0, std::abs(r.finalLeafObjective)));
+    EXPECT_NEAR(baseline.sequence.totalMU, r.sequence.totalMU, 1e-8);
     for (const auto* expected : {
             "starting progressive DAO", "weighted dose objectives (soft penalties)",
             "DAO stage 1/3: creating conformal seed", "DAO stage 2/3: interpolating",
@@ -818,37 +597,56 @@ TEST(ArcPipelineTest, ProgressiveDaoNeedsNoFluenceAndCalibratesItsOwnMu) {
         for (size_t p = 0; p < cp.aperture.bankA.size(); ++p) EXPECT_LE(cp.aperture.bankA[p], cp.aperture.bankB[p]);
 }
 
-TEST(ArcPipelineTest, DeliveredDoseHonorsTheBackendForBothStrategies) {
+TEST(ArcPipelineTest, DaoAddsTheNormalTissueObjectiveToTheCostBreakdown) {
+    ArcFixture f;
+    const Grid doseGrid = Grid::createDoseGrid(f.patient->getGrid(), {5.0, 5.0, 5.0});
+    ArcOptimizationConfig cfg;
+    cfg.computeBackend = DoseComputeBackend::CPU;
+    cfg.base.targetDose = 60.0;
+    cfg.coarsestSpacingDeg = 10.0;
+    cfg.iterationsPerResolution = 5;
+    std::vector<ArcProgressSnapshot> snapshots;
+    testing::internal::CaptureStdout();
+    const auto r = ArcPipeline::run(*f.built.stf, *f.built.plan, *f.patient, doseGrid,
+                                    ptvObjective(*f.patient, doseGrid, 60.0), cfg, nullptr,
+                                    [&](const ArcProgressSnapshot& sample) { snapshots.push_back(sample); });
+    const auto log = testing::internal::GetCapturedStdout();
+    EXPECT_NE(log.find("ObjectiveBuilder: added NTO ("), std::string::npos) << log;
+    ASSERT_FALSE(snapshots.empty());
+    bool hasNto = false;
+    for (const auto& term : snapshots.back().breakdown.contributions)
+        hasNto = hasNto || term.first.find("NTO (") != std::string::npos;
+    EXPECT_TRUE(hasNto);
+    EXPECT_EQ(log.find("hotspot"), std::string::npos);
+    EXPECT_GT(r.sequence.totalMU, 0.0);
+}
+
+TEST(ArcPipelineTest, DeliveredDoseHonorsTheBackend) {
     ArcFixture f;
     const Grid grid = Grid::createDoseGrid(f.patient->getGrid(), {5.0, 5.0, 5.0});
-    for (const auto strategy : {ArcStrategy::SweepRefine, ArcStrategy::ProgressiveDao}) {
+    {
         for (const auto backend : {DoseComputeBackend::CPU, DoseComputeBackend::Auto, DoseComputeBackend::CUDA}) {
-            SCOPED_TRACE(static_cast<int>(strategy));
             SCOPED_TRACE(static_cast<int>(backend));
             ArcOptimizationConfig config;
-            config.strategy = strategy;
             config.computeBackend = backend;
-            config.optimizeWeights = false;
-            config.optimizeLeaves = strategy == ArcStrategy::ProgressiveDao;
-            config.daoCoarsestSpacingDeg = 10.0;
-            config.daoIterations = 1;
-            config.base.ntoEnabled = false;
+            config.coarsestSpacingDeg = 10.0;
+            config.iterationsPerResolution = 1;
+            config.base.nto.enabled = false;
             config.base.targetDose = 60.0;
             // The selected backend must override stale engine flags in both directions.
             config.engineOptions.gpuRayTracing = backend == DoseComputeBackend::CPU;
             config.engineOptions.requireGpuRayTracing = backend == DoseComputeBackend::CPU;
-            const std::vector<double> weights(f.built.stf->getTotalNumOfBixels(), 1.0);
             auto objectives = ptvObjective(*f.patient, grid, 60.0);
 #ifndef OPTIRAD_HAS_CUDA
             if (backend == DoseComputeBackend::CUDA) {
-                EXPECT_THROW(ArcPipeline::run(weights, *f.built.stf, *f.built.plan,
+                EXPECT_THROW(ArcPipeline::run(*f.built.stf, *f.built.plan,
                     *f.patient, grid, std::move(objectives), config), std::runtime_error);
                 continue;
             }
 #endif
             ArcPipelineResult result;
             testing::internal::CaptureStdout();
-            EXPECT_NO_THROW(result = ArcPipeline::run(weights, *f.built.stf, *f.built.plan,
+            EXPECT_NO_THROW(result = ArcPipeline::run(*f.built.stf, *f.built.plan,
                 *f.patient, grid, std::move(objectives), config));
             const std::string log = testing::internal::GetCapturedStdout();
             ASSERT_NE(result.dose, nullptr) << log;

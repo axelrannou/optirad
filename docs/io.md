@@ -120,6 +120,12 @@ class DicomExporter {
 };
 ```
 
+RT Plan export (IMRT step-and-shoot) writes `BeamMeterset` in machine MU per fraction:
+segment weights deliver the whole course and are multiplied by `Plan::machineMuPerWeight()`
+= 100 × (SAD / 1000 mm)² / fractions (matRad photon calibration). Control point
+`CumulativeMetersetWeight` values stay relative to `FinalCumulativeMetersetWeight`.
+VMAT RT Plan export is not implemented yet.
+
 ### RTStructParser
 
 Specialized parser for DICOM RT-STRUCT files. Extracts ROI definitions, contour data, and structure properties.

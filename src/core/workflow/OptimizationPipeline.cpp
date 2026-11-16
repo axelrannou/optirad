@@ -88,6 +88,7 @@ static OptimizationPipelineResult runImpl(
 
     OptimizationPipelineResult result;
 
+    ObjectiveBuilder::addNormalTissueObjective(objectives, config.nto, config.targetDose, patientData, doseGrid, &dij);
     if (objectives.ptrs.empty()) {
         Logger::error("OptimizationPipeline: no objectives to optimize");
         return result;
@@ -121,12 +122,6 @@ static OptimizationPipelineResult runImpl(
             ? config.targetDose / maxBixelDose * 2.0
             : 1000.0;
         lbfgs->setMaxFluence(estimatedMaxFluence);
-        lbfgs->setPrescriptionDose(config.targetDose);
-
-        if (config.ntoEnabled) {
-            lbfgs->setHotspotThreshold(config.ntoThresholdPct);
-            lbfgs->setHotspotPenalty(config.ntoPenalty);
-        }
 
         // Spatial smoothing
         if (config.spatialSmoothingWeight > 0.0 && stf) {

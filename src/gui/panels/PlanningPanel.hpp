@@ -44,7 +44,7 @@ private:
         float couch = static_cast<float>(ArcSpec{}.couchAngle);
     };
     std::vector<ArcUi> m_arcs{ArcUi{}};
-    float m_optSpacing = static_cast<float>(VmatSettings{}.optimizationSpacingDeg);   // degrees per fluence-optimization beam
+    float m_optSpacing = static_cast<float>(VmatSettings{}.optimizationSpacingDeg);   // degrees per arc sector
     float m_cpSpacing = static_cast<float>(VmatSettings{}.controlPointSpacingDeg);    // degrees per control point
 
     // Fractions

@@ -406,9 +406,7 @@ struct OptimizationConfig {
     int maxIterations = 400;
     double tolerance = 1e-5;
     double targetDose = 66.0;
-    bool ntoEnabled = true;
-    double ntoThresholdPct = 1.04;
-    double ntoPenalty = 2000.0;
+    NtoSettings nto;   // Eclipse-style normal tissue objective
     double spatialSmoothingWeight = 0.0;
     double l2RegWeight = 0.0;
     double l1RegWeight = 0.0;

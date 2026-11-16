@@ -5,6 +5,7 @@
 #include "dose/engines/PencilBeamEngine.hpp"
 #include "validation/WaterPhantom.hpp"
 #include "optimization/optimizers/LBFGSOptimizer.hpp"
+#include "optimization/objectives/NormalTissueObjective.hpp"
 #include "optimization/ObjectiveBuilder.hpp"
 #include "dose/CudaRayTracer.hpp"
 #include "dose/SiddonRayTracer.hpp"
@@ -247,8 +248,7 @@ TEST(CudaFluenceTest, WaterCubeDoseAndBixelGradientMatchCpu) {
         ASSERT_TRUE(built.ptrs.front()->gpuDescription(description));
         double actualValue = 0.0;
         std::vector<double> actualGradient;
-        ASSERT_TRUE(accelerated.evaluateObjectives(fixture.weights, {description}, 0.0, 1.04, 0.0,
-            actualValue, actualGradient));
+        ASSERT_TRUE(accelerated.evaluateObjectives(fixture.weights, {description}, actualValue, actualGradient));
         const double expectedValue = built.ptrs.front()->compute(cpuDose);
         EXPECT_NEAR(actualValue, expectedValue, 1e-5 * std::max(1.0, std::abs(expectedValue))) << "type " << type;
         const auto voxelDerivative = built.ptrs.front()->gradient(cpuDose);
@@ -259,26 +259,28 @@ TEST(CudaFluenceTest, WaterCubeDoseAndBixelGradientMatchCpu) {
                 1e-4 * std::max(1.0, std::abs(expectedGradient[bixel]))) << "type " << type;
     }
 
-    for (bool consistent : {false, true}) {
-        const double prescription = peak * 0.25, penalty = 2.0, threshold = 1.04;
-        double expectedValue = 0.0, actualValue = 0.0;
-        std::vector<double> derivative(cpuDose.size(), 0.0), expected(fixture.weights.size(), 0.0), actual;
-        for (size_t voxel = 0; voxel < cpuDose.size(); ++voxel) {
-            const double excess = cpuDose[voxel] - prescription * threshold;
-            if (excess <= 0.0) continue;
-            const double normalized = excess / prescription;
-            expectedValue += penalty * normalized * normalized * (1.0 + 10.0 * normalized) * excess * excess;
-            derivative[voxel] = consistent ? penalty * excess * normalized * normalized * (4.0 + 50.0 * normalized) :
-                2.0 * penalty * normalized * (1.0 + 15.0 * normalized) * excess;
+    {
+        // NTO: per-voxel dose limits (thresholds) must give the same cost and gradient on the GPU.
+        std::vector<size_t> voxels;
+        std::vector<double> limits;
+        for (size_t voxel = 0; voxel < cpuDose.size(); voxel += 3) {
+            voxels.push_back(voxel);
+            limits.push_back(peak * (0.2 + 0.3 * std::abs(std::sin(0.07 * voxel))));
         }
-        reference.accumulateTransposeProduct(derivative, expected);
-        ASSERT_TRUE(accelerated.evaluateObjectives(fixture.weights, {}, prescription, threshold, penalty,
-            actualValue, actual, consistent));
+        NormalTissueObjective nto(voxels, limits, "test");
+        nto.setWeight(2.0);
+        DoseObjectiveSpec description;
+        ASSERT_TRUE(nto.gpuDescription(description));
+        double actualValue = 0.0;
+        std::vector<double> actual, expected(fixture.weights.size(), 0.0);
+        reference.accumulateTransposeProduct(nto.gradient(cpuDose), expected);
+        const double expectedValue = nto.compute(cpuDose);
+        ASSERT_GT(expectedValue, 0.0);
+        ASSERT_TRUE(accelerated.evaluateObjectives(fixture.weights, {description}, actualValue, actual));
         EXPECT_NEAR(actualValue, expectedValue, 1e-5 * std::max(1.0, expectedValue));
         for (size_t bixel = 0; bixel < expected.size(); ++bixel)
             EXPECT_NEAR(actual[bixel], expected[bixel], 1e-4 * std::max(1.0, std::abs(expected[bixel])));
-        ASSERT_TRUE(accelerated.evaluateObjectives(fixture.weights, {}, prescription, threshold, penalty,
-            actualValue, actual, consistent, false));
+        ASSERT_TRUE(accelerated.evaluateObjectives(fixture.weights, {description}, actualValue, actual, false));
         EXPECT_TRUE(actual.empty());
         EXPECT_NEAR(actualValue, expectedValue, 1e-5 * std::max(1.0, expectedValue));
     }
@@ -293,7 +295,6 @@ TEST(CudaFluenceTest, WaterCubeDoseAndBixelGradientMatchCpu) {
     for (auto* optimizer : {&cpuOptimizer, &gpuOptimizer}) {
         optimizer->setMaxIterations(20);
         optimizer->setMaxFluence(1000.0);
-        optimizer->setHotspotPenalty(0.0);
     }
     const auto cpuResult = cpuOptimizer.optimize(reference, objectives.ptrs, {});
     const auto gpuResult = gpuOptimizer.optimize(accelerated, objectives.ptrs, {});
@@ -412,12 +413,12 @@ TEST(ApertureDoseOperatorTest, MatchesExpandedDoseTransposeAndCudaObjectives) {
         derivative[voxel] = 2.0 * objective.weight * difference / objective.indices.size();
     }
     apertures.accumulateTransposeProduct(derivative, expectedGradient);
-    ASSERT_TRUE(gpu.evaluateObjectives(weights, {objective}, 0.0, 1.04, 0.0, gpuValue, gpuGradient));
+    ASSERT_TRUE(gpu.evaluateObjectives(weights, {objective}, gpuValue, gpuGradient));
     EXPECT_NEAR(gpuValue, expectedValue, 1e-5 * std::max(1.0, std::abs(expectedValue)));
     ASSERT_EQ(gpuGradient.size(), weights.size());
     for (size_t aperture = 0; aperture < weights.size(); ++aperture)
         EXPECT_NEAR(gpuGradient[aperture], expectedGradient[aperture], 1e-5 * std::max(1.0, std::abs(expectedGradient[aperture])));
-    ASSERT_TRUE(gpu.evaluateObjectives(weights, {objective}, 0.0, 1.04, 0.0, gpuValue, gpuGradient, false, false));
+    ASSERT_TRUE(gpu.evaluateObjectives(weights, {objective}, gpuValue, gpuGradient, false));
     EXPECT_TRUE(gpuGradient.empty());
 #endif
 }

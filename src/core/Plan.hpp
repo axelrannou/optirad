@@ -33,6 +33,11 @@ public:
     void setNumOfFractions(int n) { m_numOfFractions = n; }
     int getNumOfFractions() const { return m_numOfFractions; }
 
+    /// Machine MU per fraction of one unit of optimized weight (bixel/segment/control point "MU",
+    /// which deliver the dose of the whole course). matRad photon calibration:
+    /// weight 1 per fraction = 100 MU x (SAD / 1000 mm)^2.
+    double machineMuPerWeight() const;
+
     // STF properties
     void setStfProperties(const StfProperties& stf) { m_stfProperties = stf; }
     const StfProperties& getStfProperties() const { return m_stfProperties; }

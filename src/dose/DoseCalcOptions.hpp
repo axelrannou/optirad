@@ -26,7 +26,7 @@ struct DoseCalcOptions {
     bool excludeExternal = true;
 
     /// With excludeExternal, keep every n-th voxel (per axis) of the body so dose-wide terms such as the
-    /// hotspot penalty still see the dose outside the structures. 1 = keep none. Changing it alters the Dij
+    /// normal tissue objective still see the dose outside the structures. 1 = keep none. Changing it alters the Dij
     /// content, so bump DijSerializer::kEngineVersion.
     int externalSampleStep = 3;
 

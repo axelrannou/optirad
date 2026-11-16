@@ -11,8 +11,9 @@ A modern, modular C++17 treatment planning system (TPS) for radiotherapy optimiz
 - **Automatic BODY Contouring**: Generate an EXTERNAL/BODY structure from CT when no external contour is available
 - **Dose Calculation**: Bortfeld SVD pencil beam engine with Siddon ray tracing, FFT lateral convolution, and electron density conversion
 - **Dose Influence Matrix**: Sparse Dij (COO → CSR) with binary caching and deterministic filenames
-- **Optimization**: L-BFGS-B optimizer with squared deviation/overdose/underdose and DVH-based objectives, NTO/hotspot control
+- **Optimization**: L-BFGS-B optimizer with squared deviation/overdose/underdose and DVH-based objectives, Eclipse-style normal tissue objective (NTO); VMAT by progressive-resolution direct aperture optimization
 - **Optimization Diagnostics**: Terminal objective/penalty cost breakdowns and DAO stage, iteration, machine-limit and stopping logs ([details](docs/optimization.md#terminal-diagnostics))
+- **Live DAO Progress**: Per-resolution objective/MU charts and weighted penalty bars in the Leaf Sequencing panel, with histories retained per arc dose
 - **Leaf Sequencing**: Step-and-shoot MLC aperture decomposition with deliverable dose recomputation
 - **Plan Analysis**: DVH computation, Dx%, VxGy, Conformity Index (CI), Homogeneity Index (HI), per-structure statistics
 - **Phase-Space Beams**: IAEA phase-space file support (IAEA(NDS)-0484 format) for Monte Carlo beam sources
@@ -162,7 +163,7 @@ cd build
 | **Planning Panel** | Plan configuration (radiation mode, machine, gantry angles, bixel width, fractions), create plan / generate STF / calculate Dij |
 | **STF Panel** | STF generation details, per-beam visibility toggles, progress tracking |
 | **Phase-Space Panel** | Phase-space beam loading, per-beam visibility, particle statistics, energy histograms |
-| **Optimization Panel** | Per-structure objective configuration (5 types), optimizer settings, NTO/hotspot control, async optimization |
+| **Optimization Panel** | Per-structure objective configuration (5 types), optimizer settings, NTO, VMAT DAO settings and live progress, async optimization |
 | **Dose Stats Panel** | Plan analysis: stats table (min/max/mean, Dx%, VxGy, CI, HI) for the selected dose map |
 | **DVH Panel** | Dose-volume histogram display for the selected dose map with optional comparison overlay |
 | **Leaf Sequencing Panel** | Step-and-shoot sequencing controls, per-beam aperture results, and deliverable dose statistics |

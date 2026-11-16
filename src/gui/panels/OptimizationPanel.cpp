@@ -1,4 +1,6 @@
 #include "OptimizationPanel.hpp"
+#include "optimization/objectives/NormalTissueObjective.hpp"
+#include <cstdio>
 #include "Theme.hpp"
 #include "optimization/ObjectiveBuilder.hpp"
 #include "geometry/Structure.hpp"
@@ -14,7 +16,7 @@ static const char* kObjectiveTypes[] = {
     "Squared Deviation", "Squared Overdose", "Squared Underdose", "MinDVH", "MaxDVH"
 };
 
-OptimizationPanel::OptimizationPanel(GuiAppState& state) : m_state(state) {}
+OptimizationPanel::OptimizationPanel(GuiAppState& state) : m_state(state), m_dao(state) {}
 
 OptimizationPanel::~OptimizationPanel() {
     if (m_optThread.joinable()) m_optThread.join();
@@ -97,6 +99,11 @@ void OptimizationPanel::render() {
                 obj.weight = 100.0f;
                 obj.volumePct = 98.0f;
                 m_objectives.push_back(obj);
+                // Eclipse "Upper 0%": caps the target maximum (MinDVH alone pushes the dose up freely)
+                obj.typeIdx = 4;
+                obj.doseValue = 69.3f;
+                obj.volumePct = 0.0f;
+                m_objectives.push_back(obj);
             }
 
             for (const auto& def : defaults) {
@@ -119,7 +126,8 @@ void OptimizationPanel::render() {
     }
 
     // ── Objectives table ── (disabled while optimizing to avoid data races)
-    if (m_isOptimizing) ImGui::BeginDisabled();
+    const bool busy = m_isOptimizing || m_dao.running();
+    if (busy) ImGui::BeginDisabled();
     if (ImGui::CollapsingHeader("Objectives", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::BeginTable("ObjTable", 6,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
@@ -171,6 +179,20 @@ void OptimizationPanel::render() {
                 if (isDVH) {
                     ImGui::SetNextItemWidth(-1);
                     ImGui::InputFloat("##vol", &obj.volumePct, 0.0f, 0.0f, "%.1f");
+                    obj.volumePct = std::clamp(obj.volumePct, 0.0f, 100.0f);
+                    const bool noEffect = (obj.typeIdx == 4 && obj.volumePct >= 100.0f) ||
+                                          (obj.typeIdx == 3 && obj.volumePct <= 0.0f);
+                    if (noEffect) {
+                        ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                                            IM_COL32(230, 60, 60, 255));
+                        ImGui::SetItemTooltip(obj.typeIdx == 4
+                            ? "No effect: 'at most 100%% above the dose' is always true.\nUse 0%% for a maximum dose (Eclipse Upper 0%%)."
+                            : "No effect: 'at least 0%% above the dose' is always true.\nUse 100%% for a minimum dose (Eclipse Lower 100%%).");
+                    } else {
+                        ImGui::SetItemTooltip(obj.typeIdx == 4
+                            ? "MaxDVH (Eclipse Upper): at most this %% of the volume above the dose.\n0%% = maximum dose."
+                            : "MinDVH (Eclipse Lower): at least this %% of the volume at or above the dose.\n100%% = minimum dose.");
+                    }
                 } else {
                     ImGui::TextUnformatted("-");
                 }
@@ -206,29 +228,23 @@ void OptimizationPanel::render() {
             }
         }
     }
-    if (m_isOptimizing) ImGui::EndDisabled();
+    if (busy) ImGui::EndDisabled();
 
     // ── Optimizer settings ──
     ImGui::Spacing();
-    if (m_isOptimizing) ImGui::BeginDisabled();
+    if (busy) ImGui::BeginDisabled();
     if (ImGui::CollapsingHeader("Optimizer Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (!dao) {
             ImGui::InputInt("Max Iterations", &m_maxIterations);
             if (m_maxIterations < 1) m_maxIterations = 1;
             ImGui::InputFloat("Tolerance", &m_tolerance, 1e-7f, 1e-4f, "%.7f");
-            ImGui::Separator();
         }
-        ImGui::TextUnformatted("Hotspot Control (NTO)");
-        ImGui::Checkbox("Enable NTO", &m_ntoEnabled);
-        if (!m_ntoEnabled) ImGui::BeginDisabled();
-        ImGui::InputFloat("Threshold (%Rx)", &m_ntoThresholdPct, 0.0f, 0.0f, "%.1f");
-        ImGui::InputInt("Penalty", &m_ntoPenalty);
-        if (!m_ntoEnabled) ImGui::EndDisabled();
-
-        if (dao) {
-            ImGui::TextDisabled("DAO settings (iterations, MU penalty, ...) are in the Leaf Sequencing panel.");
-        } else {
+        renderNto();
         ImGui::Separator();
+        if (dao) {
+            ImGui::TextUnformatted("Direct Aperture Optimization (VMAT)");
+            m_dao.renderSettings();
+        } else {
         ImGui::TextUnformatted("Fluence Smoothing & Regularization");
         ImGui::Checkbox("Spatial Smoothing", &m_smoothingEnabled);
         if (!m_smoothingEnabled) ImGui::BeginDisabled();
@@ -256,13 +272,15 @@ void OptimizationPanel::render() {
         if (!m_l1RegEnabled) ImGui::EndDisabled();
         }
     }
-    if (m_isOptimizing) ImGui::EndDisabled();
+    if (busy) ImGui::EndDisabled();
 
     ImGui::Separator();
     ImGui::Spacing();
 
     // ── Run Optimization button ──
-    if (m_isOptimizing) {
+    if (dao && m_dao.running()) {
+        m_dao.renderStatus();
+    } else if (m_isOptimizing) {
         ImGui::TextColored(getThemeColors().progressText, "Optimizing...");
         if (m_maxIterations > 0) {
             int curIter = m_currentIteration.load();
@@ -328,7 +346,7 @@ void OptimizationPanel::render() {
         }
     } else {
         // Optimization should be possible only when PTV constraints are present to avoid meaningless runs.
-        bool canOptimize = (dao || m_state.dijComputed()) && !m_objectives.empty() &&
+        bool canOptimize = (dao ? m_state.stf != nullptr : m_state.dijComputed()) && !m_objectives.empty() &&
                           m_state.patientData && m_state.patientData->getStructureSet() &&
                           std::any_of(m_objectives.begin(), m_objectives.end(),
                                       [this](const ObjectiveConfig& obj) {
@@ -342,11 +360,17 @@ void OptimizationPanel::render() {
         }
 
         if (dao) {
-            const bool busy = m_state.taskRunning;
-            if (busy) ImGui::BeginDisabled();
-            if (ImGui::Button("Run DAO", ImVec2(-1, 30))) startDirectDao();
-            if (busy) ImGui::EndDisabled();
-            ImGui::TextDisabled("Progress and results: Leaf Sequencing panel (DAO settings).");
+            const bool taskBusy = m_state.taskRunning;
+            if (taskBusy) ImGui::BeginDisabled();
+            if (ImGui::Button("Run DAO", ImVec2(-1, 30))) {
+                double prescriptionDose = 0.0;
+                auto specs = buildSpecs(prescriptionDose);
+                OptimizationConfig config;
+                config.targetDose = prescriptionDose > 0 ? prescriptionDose : 66.0;
+                config.nto = m_nto;
+                m_dao.start(std::move(specs), config);
+            }
+            if (taskBusy) ImGui::EndDisabled();
         } else if (ImGui::Button("Run Optimization", ImVec2(-1, 30))) {
             // Join any previous thread before starting a new one
             if (m_optThread.joinable()) m_optThread.join();
@@ -368,9 +392,7 @@ void OptimizationPanel::render() {
             auto objectivesCopy = m_objectives;
             int maxIter = m_maxIterations;
             float tolerance = m_tolerance;
-            bool ntoEnabled = m_ntoEnabled;
-            float ntoThresholdPct = m_ntoThresholdPct;
-            int ntoPenalty = m_ntoPenalty;
+            NtoSettings nto = m_nto;
             bool smoothingEnabled = m_smoothingEnabled;
             float spatialSmoothingWeight = m_spatialSmoothingWeight;
             bool l2RegEnabled = m_l2RegEnabled;
@@ -378,8 +400,9 @@ void OptimizationPanel::render() {
             bool l1RegEnabled = m_l1RegEnabled;
             float l1RegWeight = m_l1RegWeight;
 
+            const double rx = prescription();
             m_optThread = std::thread([this, objectivesCopy, maxIter, tolerance,
-                                       ntoEnabled, ntoThresholdPct, ntoPenalty,
+                                       nto, rx,
                                        smoothingEnabled, spatialSmoothingWeight,
                                        l2RegEnabled, l2RegWeight,
                                        l1RegEnabled, l1RegWeight]() {
@@ -403,24 +426,12 @@ void OptimizationPanel::render() {
                     auto objectives = ObjectiveBuilder::buildFromSpecs(
                         specs, *m_state.patientData, ctGrid, doseGrid);
 
-                    // Detect prescription dose from target objectives
-                    double prescriptionDose = 0.0;
-                    const auto* ss = m_state.patientData->getStructureSet();
-                    for (const auto& cfg : objectivesCopy) {
-                        const auto* structure = ss->getStructureByName(cfg.structureName);
-                        if (structure && structure->isTarget() &&
-                            cfg.doseValue > prescriptionDose) {
-                            prescriptionDose = cfg.doseValue;
-                        }
-                    }
-
+                    const double prescriptionDose = rx;
                     OptimizationConfig config;
                     config.maxIterations = maxIter;
                     config.tolerance = static_cast<double>(tolerance);
                     config.targetDose = prescriptionDose > 0 ? prescriptionDose : 66.0;
-                    config.ntoEnabled = ntoEnabled;
-                    config.ntoThresholdPct = static_cast<double>(ntoThresholdPct) / 100.0;
-                    config.ntoPenalty = static_cast<double>(ntoPenalty);
+                    config.nto = nto;
                     config.spatialSmoothingWeight = smoothingEnabled ? static_cast<double>(spatialSmoothingWeight) : 0.0;
                     config.l2RegWeight = l2RegEnabled ? static_cast<double>(l2RegWeight) : 0.0;
                     config.l1RegWeight = l1RegEnabled ? static_cast<double>(l1RegWeight) : 0.0;
@@ -462,7 +473,10 @@ void OptimizationPanel::render() {
     }
 
     // ── Status ──
-    if (m_state.optimizationDone()) {
+    if (dao) {
+        if (!m_dao.running()) m_dao.renderStatus();
+        m_dao.renderProgress();
+    } else if (m_state.optimizationDone()) {
         ImGui::Spacing();
         ImGui::TextColored(getThemeColors().passText, "%s", m_optStatusMessage.c_str());
         if (m_state.doseResult) {
@@ -488,9 +502,9 @@ void OptimizationPanel::render() {
     ImGui::End();
 }
 
-void OptimizationPanel::startDirectDao() {
+std::vector<ObjectiveSpec> OptimizationPanel::buildSpecs(double& prescriptionDose) const {
     std::vector<ObjectiveSpec> specs;
-    double prescriptionDose = 0.0;
+    prescriptionDose = 0.0;
     const auto* ss = m_state.patientData->getStructureSet();
     for (const auto& cfg : m_objectives) {
         ObjectiveSpec spec;
@@ -501,25 +515,57 @@ void OptimizationPanel::startDirectDao() {
         spec.weight = static_cast<double>(cfg.weight);
         spec.volumePct = static_cast<double>(cfg.volumePct);
         specs.push_back(spec);
-        const auto* structure = ss->getStructureByName(cfg.structureName);
-        if (structure && structure->isTarget() && cfg.doseValue > prescriptionDose) prescriptionDose = cfg.doseValue;
     }
+    prescriptionDose = prescription();
+    return specs;
+}
 
-    OptimizationConfig config;
-    config.targetDose = prescriptionDose > 0 ? prescriptionDose : 66.0;
-    config.ntoEnabled = m_ntoEnabled;
-    config.ntoThresholdPct = static_cast<double>(m_ntoThresholdPct) / 100.0;
-    config.ntoPenalty = static_cast<double>(m_ntoPenalty);
+double OptimizationPanel::prescription() const {
+    if (m_prescriptionGy > 0.0f) return m_prescriptionGy;
+    if (!m_state.patientData || !m_state.patientData->getStructureSet()) return 0.0;
+    const auto* ss = m_state.patientData->getStructureSet();
+    double lower = 0.0, any = 0.0;
+    for (const auto& cfg : m_objectives) {
+        const auto* structure = ss->getStructureByName(cfg.structureName);
+        if (!structure || !structure->isTarget()) continue;
+        any = std::max(any, static_cast<double>(cfg.doseValue));
+        if (cfg.typeIdx == 0 || cfg.typeIdx == 2 || cfg.typeIdx == 3) lower = std::max(lower, static_cast<double>(cfg.doseValue));
+    }
+    return lower > 0.0 ? lower : any;
+}
 
-    const auto& settings = m_state.daoDose;
-    m_state.plan->setPrescribedDose(config.targetDose);
-    m_state.plan->setDoseGridResolution(settings.resolution);
-    m_state.computeGrid = std::make_shared<Grid>(Grid::createDoseGrid(m_state.patientData->getGrid(), settings.resolution));
-    m_state.computeBackend = settings.backend;
-    m_state.gpuMemoryBudgetMiB = settings.gpuMemoryBudgetMiB;
-    m_state.optimizationSpecs = specs;
-    m_state.optimizationConfig = config;
-    m_state.arcAutoStart = true;
+void OptimizationPanel::renderNto() {
+    ImGui::TextUnformatted("Normal Tissue Objective (NTO)");
+    ImGui::Checkbox("Use NTO", &m_nto.enabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Upper dose limit on the body outside the targets that falls off with the distance\n"
+                          "from the target border (Eclipse NTO). Hot spots inside targets need Upper objectives.");
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputFloat("Prescription (Gy)", &m_prescriptionGy, 0.0f, 0.0f, "%.1f");
+    m_prescriptionGy = std::max(m_prescriptionGy, 0.0f);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Dose the NTO percentages refer to. 0 = highest lower objective on a target\n"
+                          "(MinDVH / Squared Deviation / Underdose); target upper objectives are ignored.");
+    const double rx = prescription();
+    ImGui::SameLine();
+    if (rx > 0.0) ImGui::TextDisabled("using %.1f Gy", rx);
+    else ImGui::TextDisabled("no target objective");
+    if (!m_nto.enabled) ImGui::BeginDisabled();
+    auto inputDouble = [](const char* label, double& value, const char* format, double minValue, const char* tip) {
+        float v = static_cast<float>(value);
+        ImGui::SetNextItemWidth(120);
+        ImGui::InputFloat(label, &v, 0.0f, 0.0f, format);
+        value = std::max(static_cast<double>(v), minValue);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+    };
+    inputDouble("Priority", m_nto.priority, "%.0f", 0.0, "Weight of the NTO against the other objectives.");
+    inputDouble("Distance from target border (mm)", m_nto.distanceFromTargetMm, "%.1f", 0.0,
+                "The limit stays at the start dose up to this distance.");
+    inputDouble("Start dose (%)", m_nto.startDosePct, "%.1f", 0.0, "Limit at the target border, % of prescription.");
+    inputDouble("End dose (%)", m_nto.endDosePct, "%.1f", 0.0, "Limit far from the target, % of prescription.");
+    inputDouble("Fall-off (/mm)", m_nto.fallOffPerMm, "%.3f", 0.0,
+                "Exponential fall-off rate from the start dose towards the end dose.");
+    if (!m_nto.enabled) ImGui::EndDisabled();
 }
 
 void OptimizationPanel::renderConvergenceCurve(const std::vector<IterationInfo>& log) {

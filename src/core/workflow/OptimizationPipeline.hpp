@@ -24,10 +24,8 @@ struct OptimizationConfig {
     double tolerance = 1e-5;
     double targetDose = 66.0;
 
-    // NTO / hotspot control
-    bool ntoEnabled = true;
-    double ntoThresholdPct = 1.04;  // fraction of Rx (104%)
-    double ntoPenalty = 2000.0;
+    // Eclipse-style normal tissue objective (dose fall-off outside the targets)
+    NtoSettings nto;
 
     // Spatial smoothing (quadratic difference penalty)
     double spatialSmoothingWeight = 0.0;  // lambda

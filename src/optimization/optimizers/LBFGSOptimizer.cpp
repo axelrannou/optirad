@@ -22,10 +22,6 @@ void LBFGSOptimizer::setTolerance(double tol) { m_tolerance = tol; }
 void LBFGSOptimizer::setMemorySize(int m) { m_memorySize = m; }
 void LBFGSOptimizer::setMaxFluence(double maxFluence) { m_maxFluence = maxFluence; }
 void LBFGSOptimizer::setVerbose(bool verbose) { m_verbose = verbose; }
-void LBFGSOptimizer::setPrescriptionDose(double dose) { m_prescriptionDose = dose; }
-void LBFGSOptimizer::setHotspotThreshold(double threshold) { m_hotspotThreshold = threshold; }
-void LBFGSOptimizer::setHotspotPenalty(double penalty) { m_hotspotPenalty = penalty; }
-void LBFGSOptimizer::setConsistentHotspotGradient(bool consistent) { m_consistentHotspotGradient = consistent; }
 void LBFGSOptimizer::setIterationCallback(IterationCallback cb) { m_iterCallback = std::move(cb); }
 
 void LBFGSOptimizer::setSpatialSmoothing(double lambda, const std::vector<std::vector<int>>& neighbors) {
@@ -85,9 +81,7 @@ OptimizationResult LBFGSOptimizer::optimize(
     {
         std::ostringstream out;
         out << "L-BFGS-B settings: weights in [0, " << ub << "], tolerance=" << m_tolerance
-            << ", hotspot=" << (m_prescriptionDose > 0.0 && m_hotspotPenalty > 0.0 ? "enabled" : "disabled")
-            << " (limit=" << m_prescriptionDose * m_hotspotThreshold << " Gy, coefficient=" << m_hotspotPenalty
-            << "), smoothing=" << m_spatialSmoothingWeight << ", L2=" << m_l2RegWeight
+            << ", smoothing=" << m_spatialSmoothingWeight << ", L2=" << m_l2RegWeight
             << ", L1=" << m_l1RegWeight << " (relative fraction=" << m_relativeL1 << ")";
         Logger::info(out.str());
     }
@@ -313,7 +307,6 @@ void LBFGSOptimizer::logBreakdown(const std::string& context, const std::vector<
         if (m_l1RegWeight > 0.0) l1 += m_l1RegWeight * weights[i];
     }
     logOptimizationBreakdown(context, objectives, dij.computeDose(weights),
-        m_prescriptionDose, m_hotspotThreshold, m_hotspotPenalty,
         {{"Spatial smoothing", smoothing}, {"L2 regularization", l2}, {"L1 / total weight", l1}});
 }
 
@@ -336,8 +329,7 @@ double LBFGSOptimizer::computeObjectiveAndGradient(
         if (!objective->gpuDescription(description)) { supported = false; break; }
         descriptions.push_back(std::move(description));
     }
-    if (!supported || !dij.evaluateObjectives(weights, descriptions, m_prescriptionDose,
-        m_hotspotThreshold, m_hotspotPenalty, objVal, grad, m_consistentHotspotGradient)) {
+    if (!supported || !dij.evaluateObjectives(weights, descriptions, objVal, grad)) {
     std::vector<double> dose = dij.computeDose(weights);
     
     // Compute voxel-space gradient
@@ -351,31 +343,6 @@ double LBFGSOptimizer::computeObjectiveAndGradient(
         #pragma omp parallel for
         for (int i = 0; i < numVoxels; ++i) {
             gVox[i] += objGrad[i];
-        }
-    }
-    
-    // Eclipse-style NTO (Normal Tissue Objective) / Global hotspot penalty
-    // Penalizes ALL voxels receiving dose > prescriptionDose * hotspotThreshold
-    // Uses progressive cubic penalty matching matRad_OptimizerEclipseBased
-    if (m_prescriptionDose > 0 && m_hotspotPenalty > 0) {
-        double hotspotLimit = m_prescriptionDose * m_hotspotThreshold;
-        
-        #pragma omp parallel for reduction(+:objVal)
-        for (int i = 0; i < numVoxels; ++i) {
-            double excess = dose[i] - hotspotLimit;
-            if (excess > 0) {
-                double normalizedExcess = excess / m_prescriptionDose;
-                // Progressive penalty: cubic scaling for stronger hotspot suppression
-                double penaltyScale = m_hotspotPenalty * (normalizedExcess * normalizedExcess) *
-                                      (1.0 + 10.0 * normalizedExcess);
-                objVal += penaltyScale * (excess * excess);
-                
-                // Gradient: 2 * penalty * normalizedExcess * (1 + 15 * normalizedExcess) * excess
-                double gradScale = m_consistentHotspotGradient ?
-                    m_hotspotPenalty * normalizedExcess * normalizedExcess * (4.0 + 50.0 * normalizedExcess) :
-                    2.0 * m_hotspotPenalty * normalizedExcess * (1.0 + 15.0 * normalizedExcess);
-                gVox[i] += gradScale * excess;
-            }
         }
     }
     

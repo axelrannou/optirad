@@ -24,8 +24,8 @@ public:
     void accumulateBixelGradient(BixelLayout& layout, const std::vector<double>& voxelGradient,
                                  std::vector<double>& gradient);
     bool evaluateObjectives(BixelLayout& layout, const std::vector<double>& weights,
-        const std::vector<DoseObjectiveSpec>& objectives, double prescription, double threshold, double penalty,
-        double& value, std::vector<double>& gradient, bool consistentHotspotGradient, bool needGradient);
+        const std::vector<DoseObjectiveSpec>& objectives, double& value, std::vector<double>& gradient,
+        bool needGradient);
 
 private:
     struct Impl;

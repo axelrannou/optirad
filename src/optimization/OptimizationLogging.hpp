@@ -27,11 +27,25 @@ void logDaoProgress(const DaoProgressInfo& info);
 void logObjectiveConfiguration(const std::string& context,
                                const std::vector<ObjectiveFunction*>& objectives);
 
+/// Objectives that cannot have any effect, and targets whose maximum dose is not limited.
+std::vector<std::string> objectiveConfigurationWarnings(const std::vector<ObjectiveFunction*>& objectives);
+
+struct OptimizationBreakdown {
+    std::vector<std::pair<std::string, double>> contributions;
+    double total = 0.0;
+    double maxDose = 0.0;
+};
+
+OptimizationBreakdown computeOptimizationBreakdown(
+    const std::vector<ObjectiveFunction*>& objectives, const std::vector<double>& dose,
+    const std::vector<std::pair<std::string, double>>& penalties = {});
+
+void logOptimizationBreakdown(const std::string& context, const OptimizationBreakdown& breakdown);
+
 // Diagnostic snapshots only: no gradients or changes to the optimizer state.
 void logOptimizationBreakdown(const std::string& context,
                               const std::vector<ObjectiveFunction*>& objectives,
                               const std::vector<double>& dose,
-                              double prescriptionDose, double hotspotThreshold, double hotspotPenalty,
-                              const std::vector<std::pair<std::string, double>>& penalties = {});
+                                                        const std::vector<std::pair<std::string, double>>& penalties = {});
 
 } // namespace optirad

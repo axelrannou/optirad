@@ -155,7 +155,20 @@ add_test(NAME LBFGSOptimizerTest COMMAND test_lbfgs_optimizer)
 add_executable(test_optimization_logging optimization/test_optimization_logging.cpp)
 target_link_libraries(test_optimization_logging PRIVATE optirad_optimization GTest::gtest_main)
 add_test(NAME OptimizationLoggingTest COMMAND test_optimization_logging)
+
+add_executable(test_normal_tissue_objective optimization/test_normal_tissue_objective.cpp)
+target_link_libraries(test_normal_tissue_objective PRIVATE optirad_optimization GTest::gtest_main)
+add_test(NAME NormalTissueObjectiveTest COMMAND test_normal_tissue_objective)
+
 add_test(NAME DicomImporterTest COMMAND test_dicom_importer ${CMAKE_SOURCE_DIR}/data/dicom)
+
+find_package(DCMTK QUIET)
+if(DCMTK_FOUND)
+    add_executable(test_dicom_exporter io/test_dicom_exporter.cpp)
+    target_include_directories(test_dicom_exporter PRIVATE ${CMAKE_SOURCE_DIR}/src ${DCMTK_INCLUDE_DIRS})
+    target_link_libraries(test_dicom_exporter PRIVATE optirad_io ${DCMTK_LIBRARIES} GTest::gtest_main)
+    add_test(NAME DicomExporterTest COMMAND test_dicom_exporter)
+endif()
 
 # ============================================================================
 # UNIT TESTS (GoogleTest) - Phase-Space Module
@@ -287,6 +300,12 @@ if(OpenMP_CXX_FOUND)
     target_link_libraries(test_vmat PRIVATE OpenMP::OpenMP_CXX)
 endif()
 add_test(NAME VmatTest COMMAND test_vmat)
+
+if(TARGET optirad_gui)
+    add_executable(test_dao_progress_gui gui/test_dao_progress.cpp)
+    target_link_libraries(test_dao_progress_gui PRIVATE optirad_gui GTest::gtest_main)
+    add_test(NAME DaoProgressGuiTest COMMAND test_dao_progress_gui)
+endif()
 
 add_executable(test_fluence_dose_model
     validation/test_fluence_dose_model.cpp

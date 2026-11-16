@@ -4,6 +4,7 @@
 #include "../AppState.hpp"
 #include "core/workflow/OptimizationPipeline.hpp"
 #include "optimization/ObjectiveProtocol.hpp"
+#include "DaoOptimizationView.hpp"
 #include <string>
 #include <vector>
 #include <atomic>
@@ -42,10 +43,9 @@ private:
     int m_maxIterations = OptimizationConfig{}.maxIterations;
     float m_tolerance = static_cast<float>(OptimizationConfig{}.tolerance);
 
-    // NTO (Normal Tissue Objective) / hotspot control
-    bool m_ntoEnabled = OptimizationConfig{}.ntoEnabled;
-    float m_ntoThresholdPct = static_cast<float>(100.0 * OptimizationConfig{}.ntoThresholdPct);  // % of prescription dose
-    int m_ntoPenalty = static_cast<int>(OptimizationConfig{}.ntoPenalty);
+    // Normal Tissue Objective (Eclipse-style dose fall-off from the target border)
+    NtoSettings m_nto = OptimizationConfig{}.nto;
+    float m_prescriptionGy = 0.0f;   // 0 = from the target lower objectives
 
     // Spatial smoothing and regularization
     bool m_smoothingEnabled = false;
@@ -78,8 +78,14 @@ private:
     std::unordered_map<int, OptDisplayCache> m_displayCache;
     int m_doseVersion = -1;
 
-    /// DAO plans: store objectives and dose grid, then hand over to the arc stage (no Dij, no fluence optimization).
-    void startDirectDao();
+    /// VMAT plans: direct aperture optimization (no Dij, no fluence optimization, no separate sequencing).
+    DaoOptimizationView m_dao;
+
+    std::vector<ObjectiveSpec> buildSpecs(double& prescriptionDose) const;
+    void renderNto();
+    /// Prescription for the NTO: the manual value, else the highest lower objective dose on a target
+    /// (Squared Deviation / Underdose, MinDVH); upper objectives are hot-spot limits, not the prescription.
+    double prescription() const;
     void renderConvergenceCurve(const std::vector<IterationInfo>& log);
 };
 

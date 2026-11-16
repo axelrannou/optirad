@@ -203,8 +203,10 @@ bool DicomExporter::exportRTPlan(const Plan& plan,
             rbItem->putAndInsertString(DCM_ReferencedBeamNumber,
                                        std::to_string(static_cast<int>(i) + 1).c_str());
 
+            // Segment weights deliver the whole course; BeamMeterset is machine MU per fraction.
+            // Control point cumulative weights stay relative (DICOM scales them by BeamMeterset).
             double meterset = 0.0;
-            if (seqByBeam[i]) meterset = seqByBeam[i]->totalMU;
+            if (seqByBeam[i]) meterset = seqByBeam[i]->totalMU * plan.machineMuPerWeight();
             rbItem->putAndInsertString(DCM_BeamMeterset, toDS(meterset).c_str());
 
             refBeamSeq->insert(rbItem);

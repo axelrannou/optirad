@@ -24,13 +24,6 @@ public:
     void setMaxFluence(double maxFluence);
     void setVerbose(bool verbose);
 
-    // Normal Tissue Objective (NTO) / Eclipse-style hotspot control
-    void setPrescriptionDose(double dose);
-    void setHotspotThreshold(double threshold);  // fraction of Rx (e.g. 1.0 = 100%)
-    void setHotspotPenalty(double penalty);
-    /// Use the exact derivative of the hotspot penalty (the legacy gradient is not consistent with the objective).
-    void setConsistentHotspotGradient(bool consistent);
-
     // Spatial smoothing and regularization
     void setSpatialSmoothing(double lambda, const std::vector<std::vector<int>>& neighbors);
     void setL2Regularization(double alpha);
@@ -59,12 +52,6 @@ private:
     double m_c1 = 1e-4;      // Armijo condition
     double m_c2 = 0.9;       // Wolfe curvature condition
     double m_initialStepSize = 1.0;
-    
-    // NTO parameters (Eclipse-style hotspot control)
-    double m_prescriptionDose = 0.0;   // 0 = disabled
-    double m_hotspotThreshold = 1.04;  // fraction of Rx (104%)
-    double m_hotspotPenalty = 2000.0;  // penalty weight
-    bool m_consistentHotspotGradient = false;
     
     // Spatial smoothing (quadratic difference penalty)
     double m_spatialSmoothingWeight = 0.0;  // lambda

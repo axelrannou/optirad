@@ -2,11 +2,13 @@
 
 #include "optimization/OptimizationLogging.hpp"
 #include "optimization/objectives/DVHObjective.hpp"
+#include "optimization/objectives/NormalTissueObjective.hpp"
 #include "optimization/objectives/SquaredDeviation.hpp"
 #include "optimization/objectives/SquaredOverdose.hpp"
 #include "optimization/objectives/SquaredUnderdose.hpp"
 #include "optimization/optimizers/LBFGSOptimizer.hpp"
 #include "dose/DoseInfluenceMatrix.hpp"
+#include "geometry/Structure.hpp"
 
 #include <array>
 #include <iostream>
@@ -129,6 +131,34 @@ TEST(OptimizationLoggingTest, DaoProgressStaysCompactWithLargeValuesAndTinySteps
     EXPECT_NE(log.find("1.2346e+300"), std::string::npos);
 }
 
+TEST(OptimizationLoggingTest, WarnsAboutDvhObjectivesWithoutEffectAndUnboundedTargets) {
+    Structure ptv, cord;
+    ptv.setName("PTV_66");
+    ptv.setType("PTV");
+    cord.setName("Cord");
+    cord.setType("OAR");
+    DVHObjective lower, upperAll, cordMax;
+    lower.setStructure(&ptv);
+    lower.setVolumeFraction(0.98);
+    upperAll.setStructure(&ptv);
+    upperAll.setType(DVHObjective::Type::MAX_DVH);
+    upperAll.setVolumeFraction(1.0);
+    cordMax.setStructure(&cord);
+    cordMax.setType(DVHObjective::Type::MAX_DVH);
+    cordMax.setVolumeFraction(0.0);
+    auto warnings = objectiveConfigurationWarnings({&lower, &upperAll, &cordMax});
+    ASSERT_EQ(warnings.size(), 2u);
+    EXPECT_NE(warnings[0].find("[2]"), std::string::npos);
+    EXPECT_NE(warnings[0].find("no effect"), std::string::npos);
+    EXPECT_NE(warnings[1].find("target PTV_66 has no upper objective"), std::string::npos);
+
+    upperAll.setVolumeFraction(0.0);
+    EXPECT_TRUE(objectiveConfigurationWarnings({&lower, &upperAll, &cordMax}).empty());
+    DVHObjective lowerNone;
+    lowerNone.setVolumeFraction(0.0);
+    EXPECT_EQ(objectiveConfigurationWarnings({&lowerNone}).size(), 1u);
+}
+
 TEST(OptimizationLoggingTest, DescribesEveryObjectiveTypeAndDvhVolume) {
     Structure structure;
     structure.setName("Target");
@@ -165,21 +195,22 @@ TEST(OptimizationLoggingTest, DescribesEveryObjectiveTypeAndDvhVolume) {
         EXPECT_NE(log.find(expected), std::string::npos) << expected;
 }
 
-TEST(OptimizationLoggingTest, ReportsWeightedContributionsAndExactHotspotCost) {
+TEST(OptimizationLoggingTest, ReportsWeightedContributionsIncludingTheNto) {
     SquaredDeviation deviation;
     deviation.setPrescribedDose(1.0);
     deviation.setWeight(2.0);
     deviation.setVoxelIndices({0, 1});
+    NormalTissueObjective nto({0, 1}, {1.5, 1.5}, "test");
+    nto.setWeight(2.0);   // sum: 2 * (0.5^2 + 1.5^2)
     testing::internal::CaptureStdout();
-    logOptimizationBreakdown("Test", {&deviation}, {2.0, 3.0}, 1.0, 1.0, 2.0,
-                             {{"Extra", 1.0}});
+    logOptimizationBreakdown("Test", {&deviation, &nto}, {2.0, 3.0}, {{"Extra", 1.0}});
     const auto log = testing::internal::GetCapturedStdout();
     EXPECT_DOUBLE_EQ(loggedValue(log, "weight=2 voxels=2: cost="), 5.0);
-    EXPECT_DOUBLE_EQ(loggedValue(log, "Global hotspot: cost="), 694.0);
+    EXPECT_DOUBLE_EQ(loggedValue(log, "NTO (test) priority=2 voxels=2: cost="), 5.0);
     EXPECT_DOUBLE_EQ(loggedValue(log, "Extra: cost="), 1.0);
-    EXPECT_DOUBLE_EQ(loggedValue(log, "breakdown total="), 700.0);
-    EXPECT_NE(log.find("hotspot voxels=2"), std::string::npos);
-    EXPECT_NE(log.find("share=99.14%"), std::string::npos);
+    EXPECT_DOUBLE_EQ(loggedValue(log, "breakdown total="), 11.0);
+    EXPECT_NE(log.find("share=45.45%"), std::string::npos);
+    EXPECT_EQ(log.find("hotspot"), std::string::npos);
 }
 
 TEST(OptimizationLoggingTest, ReportsEachMixedObjectiveWithItsOwnWeightAndNormalization) {
@@ -202,7 +233,7 @@ TEST(OptimizationLoggingTest, ReportsEachMixedObjectiveWithItsOwnWeightAndNormal
     std::vector<ObjectiveFunction*> objectives{&deviation, &overdose, &underdose, &minDvh, &maxDvh};
     for (auto* objective : objectives) objective->setVoxelIndices({0, 1, 2, 3});
     testing::internal::CaptureStdout();
-    logOptimizationBreakdown("Test", objectives, {0.0, 2.0, 4.0, 6.0}, 0.0, 0.0, 0.0);
+    logOptimizationBreakdown("Test", objectives, {0.0, 2.0, 4.0, 6.0});
     const auto log = testing::internal::GetCapturedStdout();
     EXPECT_DOUBLE_EQ(loggedValue(log, deviation.describe() + ": cost="), 9.0);
     EXPECT_DOUBLE_EQ(loggedValue(log, overdose.describe() + ": cost="), 5.0);
@@ -212,17 +243,16 @@ TEST(OptimizationLoggingTest, ReportsEachMixedObjectiveWithItsOwnWeightAndNormal
     EXPECT_DOUBLE_EQ(loggedValue(log, "breakdown total="), 47.0);
 }
 
-TEST(OptimizationLoggingTest, ZeroCostAndDisabledHotspotAreReportedWithoutNan) {
+TEST(OptimizationLoggingTest, ZeroCostIsReportedWithoutNan) {
     SquaredDeviation deviation;
     deviation.setVoxelIndices({0});
     testing::internal::CaptureStdout();
-    logOptimizationBreakdown("Test", {&deviation}, {0.0, 10.0}, 1.0, 1.0, 0.0);
+    logOptimizationBreakdown("Test", {&deviation}, {0.0, 10.0});
     const auto log = testing::internal::GetCapturedStdout();
     EXPECT_DOUBLE_EQ(loggedValue(log, "breakdown total="), 0.0);
     EXPECT_NE(log.find("share=0.00%"), std::string::npos);
     EXPECT_EQ(log.find("nan"), std::string::npos);
     EXPECT_EQ(log.find("inf"), std::string::npos);
-    EXPECT_NE(log.find("hotspot voxels=0"), std::string::npos);
 }
 
 TEST(OptimizationLoggingTest, LbfgsBreakdownMatchesTheSolverIncludingRegularizers) {
@@ -237,16 +267,13 @@ TEST(OptimizationLoggingTest, LbfgsBreakdownMatchesTheSolverIncludingRegularizer
     LBFGSOptimizer optimizer;
     optimizer.setMaxIterations(0);
     optimizer.setInitialWeights({2.0, 3.0});
-    optimizer.setPrescriptionDose(1.0);
-    optimizer.setHotspotThreshold(1.0);
-    optimizer.setHotspotPenalty(2.0);
     optimizer.setSpatialSmoothing(0.5, {{1}, {0}});
     optimizer.setL2Regularization(0.25);
     optimizer.setL1Regularization(0.1);
     testing::internal::CaptureStdout();
     const auto result = optimizer.optimize(dij, {&deviation}, {});
     const auto log = testing::internal::GetCapturedStdout();
-    EXPECT_DOUBLE_EQ(result.finalObjective, 703.25);
+    EXPECT_DOUBLE_EQ(result.finalObjective, 9.25);
     EXPECT_DOUBLE_EQ(loggedValue(log, "breakdown total="), result.finalObjective);
     EXPECT_DOUBLE_EQ(loggedValue(log, "Spatial smoothing: cost="), 0.5);
     EXPECT_DOUBLE_EQ(loggedValue(log, "L2 regularization: cost="), 3.25);
@@ -267,7 +294,6 @@ TEST(OptimizationLoggingTest, VerboseLoggingPreservesResultsAndReportsAtTheExpec
     deviation.setVoxelIndices({0, 1});
     LBFGSOptimizer optimizer;
     optimizer.setMaxIterations(20);
-    optimizer.setHotspotPenalty(0.0);
     optimizer.setTolerance(0.0);
     std::vector<int> callbacks;
     optimizer.setIterationCallback([&](const IterationInfo& info) { callbacks.push_back(info.iteration); });

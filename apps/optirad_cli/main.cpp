@@ -46,7 +46,7 @@ void printUsage(const char* progName) {
               << "  doseCalc [options]               Build dose operator (requires plan)\n"
               << "  optimize [options]               Run optimization (requires dose operator)\n"
               << "  leafSeq [options]                Run leaf sequencing (SMLC plans; requires optimization)\n"
-              << "  arcSeq [options]                 Arc sequencing + aperture weight optimization (VMAT plans; requires optimization, except with --strategy dao)\n"
+              << "  arcSeq [options]                 VMAT direct aperture optimization (DAO; needs only a plan)\n"
               << "  exportRTPlan [options]           Export RT Plan DICOM (requires leaf sequencing)\n"
               << "  loadPhaseSpace [options]          Load phase-space beam source (phase-space machines only)\n"
               << "  interactive                      Enter interactive mode\n"
@@ -66,7 +66,7 @@ void printUsage(const char* progName) {
               << "  --bixel-width <mm>               Bixel width (default: " << planDefaults.bixelWidth << ")\n"
               << "  --delivery <smlc|vmat>           Delivery technique (default: smlc)\n"
               << "  --arc <start> <stop> <cw|ccw> [couch]  Add a VMAT arc (repeatable; default 181 179 cw). Gantry options above are ignored for VMAT\n"
-              << "  --opt-spacing <deg>              VMAT: angular width of one fluence-optimization beam (default: "
+              << "  --opt-spacing <deg>              VMAT: arc sector width (one ray-traced beam per sector) (default: "
               << planDefaults.vmat.optimizationSpacingDeg << ")\n"
               << "  --cp-spacing <deg>               VMAT: angular width of one delivered control point (default: "
               << planDefaults.vmat.controlPointSpacingDeg << ")\n\n"
@@ -82,33 +82,25 @@ void printUsage(const char* progName) {
               << "  --max-iter <n>                   Max iterations (default: " << optDefaults.maxIterations << ")\n"
               << "  --tolerance <val>                Convergence tolerance (default: " << optDefaults.tolerance << ")\n"
               << "  --target-dose <Gy>               Prescribed dose for targets (default: " << optDefaults.targetDose << ")\n"
-              << "  --nto-penalty <w> | --nto-threshold <frac of Rx> | --no-nto  Hot-spot (normal tissue) objective (default: "
-              << optDefaults.ntoPenalty << " above " << optDefaults.ntoThresholdPct << " x Rx)\n"
-              << "  --smooth <w> | --l2-reg <w> | --l1-reg <w>  Spatial smoothing / L2 / L1 (total MU) regularization (default: off)\n\n"
+              << "  --smooth <w> | --l2-reg <w> | --l1-reg <w>  Spatial smoothing / L2 / L1 (total MU) regularization (default: off)\n"
+              << "\nNormal tissue objective (optimize and arcSeq; Eclipse-style dose fall-off from the target border):\n"
+              << "  --nto-priority <w>               Priority (default: " << optDefaults.nto.priority << ")\n"
+              << "  --nto-distance <mm>              Distance from target border where the fall-off starts (default: "
+              << optDefaults.nto.distanceFromTargetMm << ")\n"
+              << "  --nto-start <%> | --nto-end <%>  Start / end dose in % of Rx (default: " << optDefaults.nto.startDosePct
+              << " / " << optDefaults.nto.endDosePct << ")\n"
+              << "  --nto-falloff <1/mm>             Fall-off rate (default: " << optDefaults.nto.fallOffPerMm << ")\n"
+              << "  --no-nto                         Disable the NTO\n\n"
               << "Leaf sequencing options:\n"
               << "  --num-levels <n>                 Intensity quantization levels (default: 15)\n"
               << "  --min-segment-mu <MU>            Min MU per segment (default: 0)\n\n"
-              << "Arc sequencing options:\n"
-              << "  --strategy <sweep|dao>           sweep: fluence sweep + refinement; dao: progressive-resolution direct aperture optimization, needs no doseCalc/optimize (default: sweep)\n"
-              << "  --dose-resolution <mm> | --threads <n> | --full-body | --backend <auto|cpu|cuda> | --gpu-memory-mb <n>  dose grid and engine for DAO without doseCalc\n"
-              << "  --dao-iter <n> | --dao-coarsest <deg> | --dao-mu-penalty <f>  DAO: iterations per resolution (x2 at the last; default: "
-              << arcDefaults.daoIterations << "), first control point spacing (default: " << arcDefaults.daoCoarsestSpacingDeg
-              << "), MU penalty (default: " << arcDefaults.daoMuPenalty << ")\n"
-              << "  --sequencer <auto|sweep|levels|conformal>  Sliding-window sweep, intensity levels or (experimental) conformal apertures (default: auto = sweep when the MLC interdigitates)\n"
-              << "  --max-iter <n>                   Aperture weight optimization iterations (default: " << arcDefaults.weightIterations << ")\n"
-              << "  --no-weight-opt                  Deliver the sequenced MU without refinement\n"
-              << "  --leaf-iter <n>                  Leaf-position/MU refinement iterations (default: " << arcDefaults.leafIterations << ")\n"
-              << "  --no-leaf-opt                    Disable leaf-position refinement\n"
-              << "  --nto-penalty <w> | --nto-threshold <f>  Hot-spot objective of the arc stage (default: sweep " << arcDefaults.hotspotPenalty
-              << " above " << arcDefaults.hotspotThresholdPct << " x Rx, dao " << arcDefaults.daoHotspotPenalty << " above "
-              << arcDefaults.daoHotspotThresholdPct << " x Rx)\n"
-              << "  --mu-penalty <f>                 Total-MU penalty as a fraction of the initial objective; 0 = off (default: " << arcDefaults.muPenalty << ")\n"
+              << "arcSeq (VMAT DAO) options:\n"
+              << "  --dose-resolution <mm> | --threads <n> | --full-body | --backend <auto|cpu|cuda> | --gpu-memory-mb <n>  dose grid and engine\n"
+              << "  --dao-iter <n>                   Iterations per resolution, x2 at the last (default: " << arcDefaults.iterationsPerResolution << ")\n"
+              << "  --dao-coarsest <deg>             Control point spacing of the first resolution (default: " << arcDefaults.coarsestSpacingDeg << ")\n"
+              << "  --mu-penalty <f>                 Total-MU penalty as a fraction of the objective; 0 = off (default: " << arcDefaults.muPenalty << ")\n"
               << "  --mu-smooth <w>                  Penalty on MU differences between neighbouring control points (default: " << arcDefaults.muSmoothingWeight << ")\n"
-              << "  --max-weight-factor <f>          Max MU growth per control point (default: " << arcDefaults.maxWeightFactor << ")\n"
-              << "  --rise-ratio <r>                 Sweep: smooth rows whose upward fluence steps exceed r x peak; 0 = off (default: " << arcDefaults.sequencer.maxRiseRatio << ")\n"
-              << "  --sweep-fraction <f>             Sweep: max share of a sector's time spent sweeping (default: " << arcDefaults.sequencer.maxSweepFraction << ")\n"
               << "  --no-icm                         Dose of a control point from its static aperture (no leaf motion)\n"
-              << "  --num-levels <n>                 Levels: max intensity levels per sector (default: " << arcDefaults.sequencer.numLevels << ")\n"
               << "  --fluence-pixel <mm>             Matrix-free fluence pixel size (default: " << arcDefaults.fluencePixelMm << ")\n"
               << "  --target-dose <Gy>               Prescribed dose (default: plan prescription or " << optDefaults.targetDose << ")\n\n"
               << "Export RT Plan options:\n"
@@ -596,7 +588,20 @@ int leafSeq(const std::vector<std::string>& args, WorkflowState& state) {
     return 0;
 }
 
-// ── arcSeq command: VMAT arc sequencing + aperture weight optimization ──
+/// Parses one NTO option at args[i] (advancing i past its value); returns false if args[i] is not an NTO option.
+static bool parseNtoArg(const std::vector<std::string>& args, size_t& i, NtoSettings& nto) {
+    const bool hasValue = i + 1 < args.size();
+    if (args[i] == "--no-nto") nto.enabled = false;
+    else if (args[i] == "--nto-priority" && hasValue) nto.priority = std::stod(args[++i]);
+    else if (args[i] == "--nto-distance" && hasValue) nto.distanceFromTargetMm = std::stod(args[++i]);
+    else if (args[i] == "--nto-start" && hasValue) nto.startDosePct = std::stod(args[++i]);
+    else if (args[i] == "--nto-end" && hasValue) nto.endDosePct = std::stod(args[++i]);
+    else if (args[i] == "--nto-falloff" && hasValue) nto.fallOffPerMm = std::stod(args[++i]);
+    else return false;
+    return true;
+}
+
+// ── arcSeq command: VMAT direct aperture optimization ──
 int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
     if (!state.plan || !state.plan->isVmat()) {
         std::cerr << "Error: not a VMAT plan. Create one with 'plan --delivery vmat' (or use 'leafSeq' for SMLC).\n";
@@ -613,42 +618,17 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
     cfg.gpuMemoryBudgetMiB = state.gpuMemoryBudgetMiB;
     if (state.doseOp) cfg.engineOptions = state.doseOp->engineOptions();
     cfg.base.targetDose = state.plan->getPrescribedDose() > 0.0 ? state.plan->getPrescribedDose() : cfg.base.targetDose;
-    double hotspotPenalty = -1.0, hotspotThreshold = -1.0;   // apply to the chosen strategy after parsing
-    double doseResolution = DoseCalcPipelineOptions{}.resolution[0];   // DAO without 'doseCalc' only
+    double doseResolution = DoseCalcPipelineOptions{}.resolution[0];
     int numThreads = 0;
     bool excludeExternal = DoseCalcPipelineOptions{}.excludeExternal;
     for (size_t i = 0; i < args.size(); ++i) {
-        if (args[i] == "--num-levels" && i + 1 < args.size()) cfg.sequencer.numLevels = std::stoi(args[++i]);
-        else if (args[i] == "--max-iter" && i + 1 < args.size()) cfg.weightIterations = std::stoi(args[++i]);
-        else if (args[i] == "--target-dose" && i + 1 < args.size()) cfg.base.targetDose = std::stod(args[++i]);
-        else if (args[i] == "--mu-smooth" && i + 1 < args.size()) cfg.muSmoothingWeight = std::stod(args[++i]);
-        else if (args[i] == "--max-weight-factor" && i + 1 < args.size()) cfg.maxWeightFactor = std::stod(args[++i]);
-        else if (args[i] == "--no-weight-opt") cfg.optimizeWeights = false;
-        else if (args[i] == "--leaf-iter" && i + 1 < args.size()) cfg.leafIterations = std::stoi(args[++i]);
-        else if (args[i] == "--no-leaf-opt") cfg.optimizeLeaves = false;
-        else if (args[i] == "--no-icm") cfg.integrateLeafMotion = false;
-        else if (args[i] == "--strategy" && i + 1 < args.size()) {
-            const std::string strategy = args[++i];
-            if (strategy == "sweep") cfg.strategy = ArcStrategy::SweepRefine;
-            else if (strategy == "dao") cfg.strategy = ArcStrategy::ProgressiveDao;
-            else { std::cerr << "Error: --strategy must be sweep or dao\n"; return 1; }
-        }
-        else if (args[i] == "--dao-iter" && i + 1 < args.size()) cfg.daoIterations = std::stoi(args[++i]);
-        else if (args[i] == "--dao-mu-penalty" && i + 1 < args.size()) cfg.daoMuPenalty = std::stod(args[++i]);
-        else if (args[i] == "--dao-coarsest" && i + 1 < args.size()) cfg.daoCoarsestSpacingDeg = std::stod(args[++i]);
-        else if (args[i] == "--nto-penalty" && i + 1 < args.size()) hotspotPenalty = std::stod(args[++i]);
-        else if (args[i] == "--nto-threshold" && i + 1 < args.size()) hotspotThreshold = std::stod(args[++i]);
+        if (parseNtoArg(args, i, cfg.base.nto)) continue;
+        if (args[i] == "--target-dose" && i + 1 < args.size()) cfg.base.targetDose = std::stod(args[++i]);
+        else if (args[i] == "--dao-iter" && i + 1 < args.size()) cfg.iterationsPerResolution = std::stoi(args[++i]);
+        else if (args[i] == "--dao-coarsest" && i + 1 < args.size()) cfg.coarsestSpacingDeg = std::stod(args[++i]);
         else if (args[i] == "--mu-penalty" && i + 1 < args.size()) cfg.muPenalty = std::stod(args[++i]);
-        else if (args[i] == "--rise-ratio" && i + 1 < args.size()) cfg.sequencer.maxRiseRatio = std::stod(args[++i]);
-        else if (args[i] == "--sweep-fraction" && i + 1 < args.size()) cfg.sequencer.maxSweepFraction = std::stod(args[++i]);
-        else if (args[i] == "--sequencer" && i + 1 < args.size()) {
-            const std::string method = args[++i];
-            if (method == "auto") cfg.sequencer.method = ArcSequencerOptions::Method::Auto;
-            else if (method == "sweep") cfg.sequencer.method = ArcSequencerOptions::Method::Sweep;
-            else if (method == "levels") cfg.sequencer.method = ArcSequencerOptions::Method::LevelSet;
-            else if (method == "conformal") cfg.sequencer.method = ArcSequencerOptions::Method::Conformal;
-            else { std::cerr << "Error: --sequencer must be auto, sweep, levels or conformal\n"; return 1; }
-        }
+        else if (args[i] == "--mu-smooth" && i + 1 < args.size()) cfg.muSmoothingWeight = std::stod(args[++i]);
+        else if (args[i] == "--no-icm") cfg.integrateLeafMotion = false;
         else if (args[i] == "--fluence-pixel" && i + 1 < args.size()) cfg.fluencePixelMm = std::stod(args[++i]);
         else if (args[i] == "--dose-resolution" && i + 1 < args.size()) doseResolution = std::stod(args[++i]);
         else if (args[i] == "--threads" && i + 1 < args.size()) numThreads = std::stoi(args[++i]);
@@ -662,37 +642,27 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
         }
         else if (args[i] == "--gpu-memory-mb" && i + 1 < args.size()) cfg.gpuMemoryBudgetMiB = std::stoull(args[++i]);
     }
-    const bool dao = cfg.strategy == ArcStrategy::ProgressiveDao;
     // DAO needs no Dij and no fluence optimization: only a dose grid and the engine settings.
-    const bool direct = dao;   // same as the GUI: any fluence optimization is ignored
-    if (direct) {
-        if (!state.displayGrid) {
-            state.displayGrid = std::make_shared<Grid>(Grid::createDoseGrid(
-                state.patientData->getGrid(), {doseResolution, doseResolution, doseResolution}));
-            state.computeGrid = state.displayGrid;
-        }
-        if (!state.doseOp) {
-            cfg.engineOptions.numThreads = numThreads;
-            cfg.engineOptions.excludeExternal = excludeExternal;
-        }
-    } else if (state.optimizedWeights.empty() || !state.displayGrid) {
-        std::cerr << "Error: no fluence optimization. Run 'doseCalc' and 'optimize' first (or use --strategy dao).\n";
-        return 1;
+    if (!state.displayGrid) {
+        state.displayGrid = std::make_shared<Grid>(Grid::createDoseGrid(
+            state.patientData->getGrid(), {doseResolution, doseResolution, doseResolution}));
+        state.computeGrid = state.displayGrid;
     }
-    if (hotspotPenalty >= 0.0) (dao ? cfg.daoHotspotPenalty : cfg.hotspotPenalty) = hotspotPenalty;
-    if (hotspotThreshold >= 0.0) (dao ? cfg.daoHotspotThresholdPct : cfg.hotspotThresholdPct) = hotspotThreshold;
+    if (!state.doseOp) {
+        cfg.engineOptions.numThreads = numThreads;
+        cfg.engineOptions.excludeExternal = excludeExternal;
+    }
     const double res = state.plan->getMachine().getGeometry().leafPositionResolution;
-    if (res > 0.0) cfg.sequencer.leafPositionResolution = res;
+    if (res > 0.0) cfg.seed.leafPositionResolution = res;
 
-    std::cout << "\n=== Arc Sequencing ===\n";
+    std::cout << "\n=== VMAT Direct Aperture Optimization ===\n";
     try {
         auto protocol = ObjectiveProtocol::lungIMRT(cfg.base.targetDose);
         auto objectives = ObjectiveBuilder::build(protocol, *state.patientData, state.patientData->getGrid(),
                                                   *state.displayGrid, cfg.base.targetDose);
 
         auto result = std::make_shared<ArcPipelineResult>(ArcPipeline::run(
-            direct ? std::vector<double>() : state.optimizedWeights, *state.stf, *state.plan, *state.patientData,
-            *state.displayGrid, std::move(objectives), cfg, nullptr,
+            *state.stf, *state.plan, *state.patientData, *state.displayGrid, std::move(objectives), cfg,
             [](const std::string& stage) { std::cout << "  " << stage << "...\n"; }));
 
         const auto& seq = result->sequence;
@@ -703,12 +673,8 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
                   << " | max leaf speed: " << seq.maxLeafSpeed << " mm/s"
                   << " | mean leaf travel: " << seq.meanLeafTravel << " mm/cp"
                   << " | slowed control points: " << seq.slowedControlPoints << "\n";
-        if (cfg.optimizeWeights)
-            std::cout << "Aperture weight optimization: " << result->iterations << " iterations, objective "
-                      << std::scientific << result->finalObjective << std::fixed << "\n";
-        if (cfg.optimizeLeaves)
-            std::cout << "Leaf refinement: " << result->leafIterations << " accepted steps, objective "
-                      << result->initialLeafObjective << " -> " << result->finalLeafObjective << "\n";
+        std::cout << "DAO: " << result->leafIterations << " accepted steps, objective " << std::scientific
+                  << result->initialLeafObjective << " -> " << result->finalLeafObjective << std::fixed << "\n";
         std::cout << "\n--- Arc Dose Statistics ---\n";
         PlanAnalysis::print(result->stats);
 
@@ -857,12 +823,8 @@ int optimize(const std::vector<std::string>& args, WorkflowState& state) {
             l2Reg = std::stod(args[++i]);
         } else if (args[i] == "--l1-reg" && i + 1 < args.size()) {
             l1Reg = std::stod(args[++i]);
-        } else if (args[i] == "--nto-penalty" && i + 1 < args.size()) {
-            config.ntoPenalty = std::stod(args[++i]);
-        } else if (args[i] == "--nto-threshold" && i + 1 < args.size()) {
-            config.ntoThresholdPct = std::stod(args[++i]);
-        } else if (args[i] == "--no-nto") {
-            config.ntoEnabled = false;
+        } else {
+            parseNtoArg(args, i, config.nto);
         }
     }
 

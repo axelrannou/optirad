@@ -499,7 +499,7 @@ std::vector<size_t> PencilBeamEngine::collectDoseVoxels(
         Logger::warn("PencilBeamEngine: no non-external structure voxels; including the external structure.");
         voxels = gather(0);
     } else if (excludeExternal && m_options.externalSampleStep > 1) {
-        // Keep a coarse lattice of body voxels so global terms (the optimizer's hotspot penalty) still
+        // Keep a coarse lattice of body voxels so global terms (the normal tissue objective) still
         // see the dose outside the structures.
         const auto dims = doseGrid.getDimensions();
         const size_t step = static_cast<size_t>(m_options.externalSampleStep);

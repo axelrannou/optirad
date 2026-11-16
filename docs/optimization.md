@@ -201,12 +201,30 @@ class LBFGSOptimizer : public IOptimizer {
     void setMaxFluence(double maxFluence);      // Upper bound (default: 10.0)
     void setVerbose(bool verbose);
 
-    // NTO / Hotspot control
-    void setPrescriptionDose(double dose);      // 0 = disabled
-    void setHotspotThreshold(double threshold); // Fraction of Rx (default: 1.0)
-    void setHotspotPenalty(double penalty);      // Penalty weight (default: 10000.0)
 };
 ```
+
+#### GUI DAO progress
+
+The **Optimization > DAO Progress** section displays live objective and total-MU
+charts, resolution/iteration progress, maximum dose, and weighted penalty contribution bars.
+Accepted-step counts and elapsed time are shown alongside expandable **Last sampled step**
+details (gradient infinity norm, step size, and line-search iterations).
+Choose a resolution from **History**, or leave **Latest resolution** selected to follow the run.
+Each resolution has its own history because its dose model and penalty settings can change.
+Charts use sampled-update indices, not uniformly spaced iterations. Log cost is enabled by
+default (zero costs are floored at 1e-12 for plotting only).
+
+Updates are published initially, after the first and every 10 accepted leaf/MU steps,
+and after each resolution's feasibility repair. The final update is included even if no
+steps were accepted. Histories remain attached to the resulting arc dose when switching
+between saved dose entries; starting a new run clears the live display.
+
+Bars are sorted by weighted cost and include dose objectives, the NTO, MU smoothing,
+total MU, leaf order and leaf speed. Shares indicate cost contribution, **not clinical goal
+attainment**. GUI snapshots add forward-dose/objective evaluations only when a progress
+observer is attached. Terminal output retains its independent, quieter cadence. These
+are optimization diagnostics, not live dose previews or final dose certification.
 
 #### Terminal diagnostics
 
@@ -216,14 +234,14 @@ Launch the GUI from a terminal to see them. No additional flag is needed.
 - **At startup:** each applied objective is listed by structure and readable type, with dose
   threshold in Gy, DVH volume percentage where applicable, weight, and active dose-grid voxel count.
   Objectives are explicitly identified as soft penalties, not hard clinical guarantees.
-- **L-BFGS-B:** reports weight bounds, tolerance, hotspot threshold/coefficient, smoothing and
+- **L-BFGS-B:** reports weight bounds, tolerance, smoothing and
   L1/L2 coefficients (including the derived relative L1 coefficient). Cost snapshots are emitted
   initially and finally; the compact iteration table continues at iteration 1 and every 10
   iterations. `setVerbose(false)` suppresses these snapshots and the iteration table, but retains
   configuration and warning logs.
 - **DAO:** reports progressive-resolution stage transitions, seed creation or aperture/MU
   interpolation, seed MU calibration, actual dose-model backend, per-stage iteration budget,
-  hotspot continuation settings, derived MU and mechanical penalty coefficients, and machine
+  derived MU and mechanical penalty coefficients, and machine
   bounds. The initial cost breakdown is printed at the first stage and the final breakdown after
   feasibility repair at the last stage. Each stage prints a compact, aligned progress table on
   the first accepted step and every 50 accepted steps, with a header once per stage. Stages
@@ -249,10 +267,9 @@ DAO progress columns:
 | `Time(s)` | Wall time since the start of the stage's leaf refinement |
 
 Each cost snapshot lists every objective's **already-weighted** cost and percentage of the total,
-plus the global hotspot cost and applicable regularization terms. DAO additionally separates
+including the NTO, plus applicable regularization terms. DAO additionally separates
 MU smoothing, total MU, leaf-order and leaf-speed penalties. Zero-cost terms remain visible.
-Snapshot headers include the maximum dose on the computed grid and the number of voxels
-penalized by the enabled hotspot term.
+Snapshot headers include the maximum dose on the computed grid.
 
 **Interpretation:** cost shares describe optimization pressure, not clinical goal attainment,
 gradient magnitude, or the percentage of voxels violating a goal. Squared dose objectives
@@ -260,7 +277,7 @@ are voxel-averaged, while DVH objectives use weighted sums, so equal configured 
 not produce equal costs. Use dose statistics/DVH for clinical evaluation.
 
 DAO's `Objective` column includes total-MU and soft mechanical penalties. The summary's
-`DoseCost` (`initialLeafObjective`/`finalLeafObjective`) includes dose objectives, hotspot and
+`DoseCost` (`initialLeafObjective`/`finalLeafObjective`) includes dose objectives (including the NTO) and
 MU smoothing only; it excludes total-MU and mechanical penalties. `Restarts` lists direction
 restarts and line-search retries as `dir/LS`. Final snapshots describe
 the repaired sequence, which may differ from the best unprojected iterate.
@@ -292,10 +309,6 @@ for iter = 1 to maxIterations:
         f += objective.compute(dose)
         ∇f += objective.gradient(dose)
     
-    // Optional: NTO hotspot penalty
-    if hotspot control enabled:
-        add penalty for voxels above threshold × Rx
-    
     // Transform gradient to weight space
     ∇w = Dij^T × ∇f
     
@@ -311,15 +324,35 @@ for iter = 1 to maxIterations:
     if ||∇w|| < tolerance: converged = true; break
 ```
 
-#### NTO (Normal Tissue Objective) / Hotspot Control
+#### NTO (Normal Tissue Objective)
 
-When `prescriptionDose > 0`, the optimizer adds an additional penalty term for voxels exceeding the hotspot threshold:
+One Eclipse-style NTO (`NormalTissueObjective`, `NtoSettings`) controls the dose fall-off
+outside the targets for both IMRT and VMAT/DAO. Each body voxel outside every target gets a
+limit from its distance $x$ to the target border (Euclidean distance transform to the nearest
+target voxel centre minus half a voxel):
 
-$$f_\text{hotspot} = \lambda \sum_v n_v^2 (1 + 10 n_v) e_v^2,
-\qquad e_v = \max(0, d_v - \theta d_\text{Rx}), \quad n_v = e_v / d_\text{Rx}$$
+$$L(x) = \begin{cases} s\,R_x & x \le x_0 \\ R_x\left(s\,e^{-k(x-x_0)} + e\,(1-e^{-k(x-x_0)})\right) & x > x_0 \end{cases}$$
 
-Where $\theta$ is `hotspotThreshold` (fraction of prescribed dose) and $\lambda$ is `hotspotPenalty`.
-The term is enabled only when the prescription and penalty coefficient are positive.
+with $x_0$ = distance from target border (default 1 mm), $s$ = start dose (105 %),
+$e$ = end dose (60 %) and $k$ = fall-off (0.05 /mm, i.e. ~87 % of the way from start to end
+10 mm beyond $x_0$). The cost is an upper objective summed over voxels,
+$\text{priority}\cdot\sum_v \max(0, d_v - L_v)^2$ (default priority 100), so each voxel feels
+the same pressure as a MaxDVH 0 % objective of equal weight. $R_x$ is the CLI `--target-dose`
+(or plan prescription); in the GUI it is the manual *Prescription (Gy)* or, if 0, the highest
+lower objective (MinDVH / Squared Deviation / Underdose) on a target — target upper objectives are
+hot-spot limits and are not used. The limit curve is logged at startup and previewed in the GUI.
+Without a BODY/EXTERNAL structure the whole grid outside the targets is used (with a warning).
+
+There is no separate global hot-spot penalty: as in Eclipse, control target hot spots with
+Upper / Max DVH objectives on the target. A MaxDVH at volume 0% is a maximum dose (Eclipse Upper 0%);
+at 100% it can never be violated and has no effect (likewise MinDVH at 0%). These cases, and
+targets without any upper objective, are reported as warnings at startup and highlighted in the GUI. CLI: `--nto-priority`, `--nto-distance`,
+`--nto-start`, `--nto-end`, `--nto-falloff`, `--no-nto` (for `optimize` and `arcSeq`).
+
+The optimizer only pushes the dose up to the objective window it is given: a window such as
+Lower 98% 62.7 Gy / Upper 0% 69.3 Gy leaves the target free anywhere between those doses. For a
+homogeneous target, as in Eclipse, tighten it around the prescription, e.g. for 66 Gy:
+Lower 100% 63 Gy, Lower 98% 65 Gy, Upper 0% 68.5 Gy.
 
 ## Auto-Classification (CLI)
 

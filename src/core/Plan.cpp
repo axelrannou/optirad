@@ -13,6 +13,12 @@
 namespace optirad {
 
 void Plan::setName(const std::string& name) { m_name = name; }
+
+double Plan::machineMuPerWeight() const {
+    const double sad = m_machine.getSAD() > 0.0 ? m_machine.getSAD() : 1000.0;
+    const int fractions = m_numOfFractions > 0 ? m_numOfFractions : 1;
+    return 100.0 * (sad / 1000.0) * (sad / 1000.0) / fractions;
+}
 const std::string& Plan::getName() const { return m_name; }
 
 void Plan::addBeam(const Beam& beam) { m_beams.push_back(beam); }

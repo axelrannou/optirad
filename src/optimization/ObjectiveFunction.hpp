@@ -12,7 +12,7 @@ public:
     virtual ~ObjectiveFunction() = default;
 
     virtual std::string getName() const = 0;
-    std::string describe() const;
+    virtual std::string describe() const;
 
     // Compute objective value given dose distribution
     virtual double compute(const std::vector<double>& dose) const = 0;
@@ -25,6 +25,7 @@ public:
     double getWeight() const;
 
     void setStructure(const Structure* structure);
+    const Structure* getStructure() const { return m_structure; }
 
     /// Set pre-mapped voxel indices (e.g., dose-grid indices).
     /// When set, these are used instead of m_structure->getVoxelIndices().

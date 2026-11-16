@@ -27,8 +27,7 @@ public:
     }
     DoseCalcOptions engineOptions() const override;
     bool evaluateObjectives(const std::vector<double>& weights, const std::vector<DoseObjectiveSpec>& objectives,
-        double prescription, double threshold, double penalty, double& value, std::vector<double>& gradient,
-        bool consistentHotspotGradient = false, bool needGradient = true) const override;
+        double& value, std::vector<double>& gradient, bool needGradient = true) const override;
 
     const FluenceDoseModel& model() const { return *m_model; }
 
@@ -54,8 +53,7 @@ public:
     bool isRowComputed(size_t voxel) const override { return m_bixelOperator->isRowComputed(voxel); }
     DoseCalcOptions engineOptions() const override { return m_bixelOperator->engineOptions(); }
     bool evaluateObjectives(const std::vector<double>& weights, const std::vector<DoseObjectiveSpec>& objectives,
-        double prescription, double threshold, double penalty, double& value, std::vector<double>& gradient,
-        bool consistentHotspotGradient = false, bool needGradient = true) const override;
+        double& value, std::vector<double>& gradient, bool needGradient = true) const override;
 private:
     std::vector<double> expand(const std::vector<double>& weights) const;
     void collapse(const std::vector<double>& bixelGradient, std::vector<double>& gradient) const;

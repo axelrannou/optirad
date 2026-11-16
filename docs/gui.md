@@ -135,7 +135,7 @@ struct GuiAppState {
 
 **Cascade resets:** When upstream data changes, downstream pipeline state is invalidated while the selected display dose can remain available through `DoseManager`.
 
-**VMAT with DAO:** choosing *Direct aperture optimization* in the Planning panel's Delivery section replaces the Dose Calculation section by a few dose settings (grid, backend, threads) and skips the Dij, the fluence optimization and the sequencing. *Run DAO* in the Optimization panel stores the objectives and the dose grid, then the Leaf Sequencing panel runs the progressive DAO. Its seed is the target projection of the optimization beams, with an MU scale calibrated against the objectives.
+**VMAT (DAO only):** a VMAT plan is always optimized by direct aperture optimization. The Planning panel's Dose Calculation section is replaced by a few dose settings (grid, backend, threads); no Dij, fluence optimization or sequencing step is needed. The Optimization panel holds the objectives, the NTO, the DAO settings, the *Run DAO* button and the live DAO progress; the Leaf Sequencing panel only shows the resulting apertures and control points.
 
 **Multi-dose support:** The GUI can keep multiple dose maps alive at once, including imported dose, optimization results, and deliverable dose after leaf sequencing. Panels use `DoseManager` versioning and cached per-dose statistics so switching views does not force recomputation every time.
 
@@ -207,12 +207,13 @@ class IPanel {
   - Convergence tolerance
   - Max fluence
   - Memory size (L-BFGS)
-- NTO/Hotspot control:
-  - Prescription dose
-  - Hotspot threshold
-  - Hotspot penalty weight
-- **Optimize** button → runs `LBFGSOptimizer::optimize()` (async)
-- Progress bar with iteration count
+- Normal Tissue Objective (Eclipse-style, one for IMRT and VMAT): Use NTO, prescription (Gy,
+  0 = highest lower target objective), priority, distance from target border (mm, default 1),
+  start dose (% Rx), end dose (% Rx), fall-off (/mm), and a preview of the limit curve (0–50 mm)
+- VMAT plans: Direct Aperture Optimization settings (iterations per resolution, first control
+  point spacing, MU penalty, MU smoothing, integrate leaf motion), **Run DAO** button, status and
+  the live DAO Progress charts/bars (`DaoOptimizationView`)
+- IMRT plans: **Optimize** button → runs `LBFGSOptimizer::optimize()` (async), progress bar
 
 ### DoseStatsPanel
 
@@ -251,10 +252,10 @@ retains its single-dose coverage unless comparison grids are supplied explicitly
 
 ### LeafSequencingPanel
 
-- Activates after optimization completes
-- Configures sequencing parameters such as number of intensity levels and minimum segment MU
-- Runs `LeafSequencingPipeline` asynchronously
-- Displays per-beam aperture decomposition results, sequencing progress, and deliverable dose statistics
+- IMRT: activates after optimization completes, configures intensity levels and minimum segment
+  MU, runs `LeafSequencingPipeline` asynchronously and displays per-beam segments
+- VMAT: results only (summary, DAO accepted steps and objective, speeds, control point table);
+  DAO is configured and run from the Optimization panel
 - Integrates with `DoseManager` so deliverable dose becomes selectable like any other dose map
 
 ### BeamPanel

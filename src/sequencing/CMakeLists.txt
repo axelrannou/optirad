@@ -3,7 +3,6 @@ add_library(optirad_sequencing
     DeliverableDoseCalculator.cpp
     ApertureFluence.cpp
     ArcSequencer.cpp
-    SlidingWindow.cpp
 )
 
 target_include_directories(optirad_sequencing PUBLIC 

@@ -101,14 +101,13 @@ DoseCalcOptions FluenceDoseOperator::engineOptions() const {
 }
 
 bool FluenceDoseOperator::evaluateObjectives(const std::vector<double>& weights,
-    const std::vector<DoseObjectiveSpec>& objectives, double prescription, double threshold, double penalty,
-    double& value, std::vector<double>& gradient, bool consistentHotspotGradient, bool needGradient) const {
+    const std::vector<DoseObjectiveSpec>& objectives, double& value, std::vector<double>& gradient,
+    bool needGradient) const {
 #ifdef OPTIRAD_HAS_CUDA
-    if (m_cudaBixels) return m_model->m_cuda->evaluateObjectives(*m_cudaBixels, weights, objectives,
-        prescription, threshold, penalty, value, gradient, consistentHotspotGradient, needGradient);
+    if (m_cudaBixels) return m_model->m_cuda->evaluateObjectives(*m_cudaBixels, weights, objectives, value, gradient,
+        needGradient);
 #else
-    (void)weights; (void)objectives; (void)prescription; (void)threshold; (void)penalty; (void)value; (void)gradient;
-    (void)consistentHotspotGradient; (void)needGradient;
+    (void)weights; (void)objectives; (void)value; (void)gradient; (void)needGradient;
 #endif
     return false;
 }
@@ -162,11 +161,11 @@ double ApertureDoseOperator::getMaxValue() const {
 }
 
 bool ApertureDoseOperator::evaluateObjectives(const std::vector<double>& weights,
-    const std::vector<DoseObjectiveSpec>& objectives, double prescription, double threshold, double penalty,
-    double& value, std::vector<double>& gradient, bool consistentHotspotGradient, bool needGradient) const {
+    const std::vector<DoseObjectiveSpec>& objectives, double& value, std::vector<double>& gradient,
+    bool needGradient) const {
     std::vector<double> bixelGradient;
-    if (!m_bixelOperator->evaluateObjectives(expand(weights), objectives, prescription, threshold, penalty,
-        value, bixelGradient, consistentHotspotGradient, needGradient)) return false;
+    if (!m_bixelOperator->evaluateObjectives(expand(weights), objectives, value, bixelGradient, needGradient))
+        return false;
     gradient.assign(needGradient ? getNumBixels() : 0, 0.0);
     if (needGradient) collapse(bixelGradient, gradient);
     return true;

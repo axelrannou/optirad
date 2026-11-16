@@ -11,6 +11,7 @@ struct DoseObjectiveSpec {
     int type = 0;
     double threshold = 0.0, weight = 1.0, volumeFraction = 0.0;
     std::vector<size_t> indices;
+    std::vector<double> thresholds;   // type 1 only: per-voxel limits parallel to `indices` (empty = `threshold`)
 };
 
 /// Linear map from bixel weights to dose, d = A w, as the optimizers and sequencers need it.
@@ -38,7 +39,7 @@ public:
     /// Engine settings that reproduce this operator's dose when a dose is recomputed directly.
     virtual DoseCalcOptions engineOptions() const { return {}; }
     virtual bool evaluateObjectives(const std::vector<double>&, const std::vector<DoseObjectiveSpec>&,
-        double, double, double, double&, std::vector<double>&, bool = false, bool = true) const { return false; }
+        double&, std::vector<double>&, bool = true) const { return false; }
 };
 
 } // namespace optirad

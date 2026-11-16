@@ -32,7 +32,7 @@ struct ArcSpec {
 
 struct VmatSettings {
     std::vector<ArcSpec> arcs{ArcSpec{}};
-    double optimizationSpacingDeg = 20.0;  // angular width of one fluence-optimization beam
+    double optimizationSpacingDeg = 20.0;  // angular width of one arc sector (one STF beam)
     double controlPointSpacingDeg = 4.0;   // angular width of one delivered control point
 };
 

@@ -150,4 +150,16 @@ BuiltObjectives ObjectiveBuilder::buildFromSpecs(
     return result;
 }
 
+bool ObjectiveBuilder::addNormalTissueObjective(
+    BuiltObjectives& objectives, const NtoSettings& settings, double prescriptionDose,
+    const PatientData& patientData, const Grid& doseGrid, const IDoseOperator* dose) {
+    auto nto = NormalTissueObjective::build(settings, prescriptionDose, patientData.getStructureSet(),
+                                            patientData.getGrid(), doseGrid, dose);
+    if (!nto) return false;
+    Logger::info("ObjectiveBuilder: added " + nto->describe());
+    objectives.ptrs.push_back(nto.get());
+    objectives.owned.push_back(std::move(nto));
+    return true;
+}
+
 } // namespace optirad

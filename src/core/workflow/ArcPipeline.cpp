@@ -3,9 +3,7 @@
 #include "dose/DoseEngineFactory.hpp"
 #include "dose/FluenceDoseOperator.hpp"
 #include "dose/engines/PencilBeamEngine.hpp"
-#include "optimization/OptimizerFactory.hpp"
 #include "optimization/OptimizationLogging.hpp"
-#include "optimization/optimizers/LBFGSOptimizer.hpp"
 #include "sequencing/ApertureFluence.hpp"
 #include "steering/PhotonIMRTStfGenerator.hpp"
 #include "utils/Logger.hpp"
@@ -35,13 +33,13 @@ const Aperture* neighbour(const ArcSequenceResult& sequence, size_t index, int s
 
 // One run of the leaf/MU optimizer on `result.sequence`. The progressive optimizer calls it once per resolution.
 struct RefineOptions {
+    int stage = 1;
+    int stages = 1;
+    ArcProgressCallback progressCallback;
     int iterations = 0;
-    double muCapFactor = 0.0;       // MU of a control point may grow to this multiple of its seed; 0 = rate limit only
     double maxMoveMm = 0.0;         // largest leaf tip move per iteration; 0 = 4 x leafStepMm
     double* muLambda = nullptr;     // objective units per MU: < 0 on entry = derive from the initial objective
     double muPenalty = 0.0;         // fraction of the starting objective that the total MU costs
-    double hotspotThresholdPct = 1.01;   // fraction of the prescription
-    double hotspotPenalty = 50000.0;
     bool reportInitial = true;
     bool finalStage = true;         // snap to the MLC resolution and report timing at the end
 };
@@ -66,7 +64,7 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
     Logger::info(std::string("DAO leaf refinement: dose/objective backend=") +
                  (model->usesCuda() ? "CUDA" : "CPU") +
                  ", control points=" + std::to_string(result.sequence.controlPoints.size()));
-    const auto& limits = plan.getMachine().getConstraints();
+    const MachineConstraints limits = ArcPipeline::deliveryConstraints(plan);
     const auto& mlc = plan.getMachine().getGeometry();
     const double resolution = mlc.leafPositionResolution;
     auto snap = [resolution](double position) {
@@ -104,6 +102,13 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
     }
     ArcSequencer::computeTiming(result.sequence, limits);
     const auto seed = result.sequence;
+    // The gantry may slow down for a control point that needs more MU than the maximum dose rate delivers at full
+    // speed (as on the machine and in Eclipse); the leaf travel limits keep the full-speed time (conservative).
+    const double slowestGantry = limits.gantryRotationSpeed[0] > 0.0 ? limits.gantryRotationSpeed[0] :
+        0.1 * (limits.gantryRotationSpeed[1] > 0.0 ? limits.gantryRotationSpeed[1] : 6.0);
+    auto maxMuOf = [&](const DeliveredControlPoint& cp) {
+        return limits.monitorUnitRate[1] * std::max(cp.timeSec, cp.geometry.width / slowestGantry);
+    };
     const size_t count = seed.controlPoints.size();
 
     // With `quantize` leaf tips are snapped to the MLC position resolution; the iterations run on continuous positions.
@@ -163,9 +168,7 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
             if (duration <= 0.0 || limits.leafSpeed[1] <= 0.0 ||
                 cp.geometry.width / duration < limits.gantryRotationSpeed[0]) return false;
             const double minMU = original.mu > 0.0 ? limits.monitorUnitRate[0] * duration : 0.0;
-            const double maxMU = std::min(limits.monitorUnitRate[1] * duration,
-                refine.muCapFactor > 0.0 ? std::max(original.mu, 1e-6) * refine.muCapFactor :
-                    std::numeric_limits<double>::infinity());
+            const double maxMU = maxMuOf(original);
             if (minMU > maxMU) return false;
             cp.mu = std::clamp(cp.mu, minMU, maxMU);
             aperture.weight = cp.mu;
@@ -187,9 +190,8 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
         const auto weights = ArcPipeline::bixelWeights(*result.controlPointStf, sequence, config.integrateLeafMotion);
         double value = 0.0;
         std::vector<double> unusedGradient;
-        if (!supported || !doseOperator.evaluateObjectives(weights, descriptions, config.base.targetDose,
-            refine.hotspotThresholdPct, config.base.ntoEnabled ? refine.hotspotPenalty : 0.0,
-            value, gradient ? *gradient : unusedGradient, true, gradient != nullptr)) {
+        if (!supported || !doseOperator.evaluateObjectives(weights, descriptions, value,
+            gradient ? *gradient : unusedGradient, gradient != nullptr)) {
         const auto dose = doseOperator.computeDose(weights);
         std::vector<double> voxelGradient(gradient ? dose.size() : 0, 0.0);
         for (const auto* objective : objectives.ptrs) {
@@ -197,17 +199,6 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
             if (gradient) {
                 const auto contribution = objective->gradient(dose);
                 for (size_t voxel = 0; voxel < dose.size(); ++voxel) voxelGradient[voxel] += contribution[voxel];
-            }
-        }
-        if (config.base.ntoEnabled) {
-            const double prescription = config.base.targetDose;
-            for (size_t voxel = 0; voxel < dose.size(); ++voxel) {
-                const double excess = dose[voxel] - prescription * refine.hotspotThresholdPct;
-                if (excess <= 0.0) continue;
-                const double normalized = excess / prescription;
-                value += refine.hotspotPenalty * normalized * normalized * (1.0 + 10.0 * normalized) * excess * excess;
-                if (gradient) voxelGradient[voxel] += refine.hotspotPenalty * excess * normalized * normalized *
-                    (4.0 + 50.0 * normalized);
             }
         }
         if (gradient) {
@@ -250,9 +241,7 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
     for (size_t index = 0; index < count; ++index) {
         const auto& original = seed.controlPoints[index];
         muLow[index] = original.mu > 0.0 ? limits.monitorUnitRate[0] * original.timeSec : 0.0;
-        muHigh[index] = std::min(limits.monitorUnitRate[1] * original.timeSec,
-            refine.muCapFactor > 0.0 ? std::max(original.mu, 1e-6) * refine.muCapFactor :
-                std::numeric_limits<double>::infinity());
+        muHigh[index] = maxMuOf(original);
         travelLimit[index] = limits.leafSpeed[1] * original.timeSec;
     }
     auto boxClamp = [&](ArcSequenceResult& sequence) {
@@ -360,13 +349,12 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
             }
         }
         for (size_t index = 0; index < count; ++index)
-            direction->controlPoints[index].mu = config.optimizeWeights ?
-                direction->controlPoints[index].mu * muScale[index] : 0.0;
+            direction->controlPoints[index].mu *= muScale[index];
         return value;
     };
 
     result.initialLeafObjective = evaluate(result.sequence, nullptr);
-    if (deriveLambda && config.optimizeWeights && refine.muPenalty > 0.0 && seedMu > 0.0)
+    if (deriveLambda && refine.muPenalty > 0.0 && seedMu > 0.0)
         muLambda = refine.muPenalty * result.initialLeafObjective / seedMu;
 
     // Projected L-BFGS over all leaf tips (mm) and MU (in units of muScale). The speed and MU-rate bounds couple
@@ -427,25 +415,20 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
     {
         std::ostringstream out;
         out << std::setprecision(5) << "DAO settings: iterations=" << refine.iterations
-            << ", leaf step=" << config.leafStepMm << " mm, max move=" << maxMove << " mm, MU="
-            << (config.optimizeWeights ? "yes" : "no")
-            << "\n  Hotspot: " << (config.base.ntoEnabled ? "enabled" : "disabled")
-            << ", limit=" << config.base.targetDose * refine.hotspotThresholdPct
-            << " Gy, weight=" << refine.hotspotPenalty
+            << ", leaf step=" << config.leafStepMm << " mm, max move=" << maxMove << " mm"
             << "\n  Penalties: MU smooth=" << config.muSmoothingWeight
             << ", MU total=" << muLambda << " (seed=" << refine.muPenalty << "), leaf=" << penaltyWeight
             << "\n  Bounds: tips=[" << tipLow << ", " << tipHigh
             << "] mm, leaf<=" << limits.leafSpeed[1]
             << " mm/s, gantry<=" << limits.gantryRotationSpeed[1]
             << " deg/s\n  MU rate=[" << limits.monitorUnitRate[0] << ", " << limits.monitorUnitRate[1]
-            << "] MU/s, cap=";
-        if (refine.muCapFactor > 0.0) out << refine.muCapFactor << "x seed";
-        else out << "rate only";
-        out << ", snap=" << (refine.finalStage ? resolution : 0.0)
+            << "] /s (1 MU = " << ArcPipeline::machineMuPerWeight(plan) << " machine MU/fraction), snap="
+            << (refine.finalStage ? resolution : 0.0)
             << " mm, interdigitation=" << (mlc.interdigitation ? "allowed" : "forbidden");
         Logger::info(out.str());
     }
-    auto report = [&](const std::string& context, const ArcSequenceResult& sequence) {
+    auto report = [&](const std::string& context, const ArcSequenceResult& sequence,
+                      DaoProgressInfo info, bool terminal, bool finished) {
         double mu = 0.0, smoothing = 0.0, orderPenalty = 0.0, speedPenalty = 0.0;
         for (size_t index = 0; index < count; ++index) {
             const auto& cp = sequence.controlPoints[index];
@@ -466,14 +449,23 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
                 speedPenalty += penaltyWeight * (excessA * excessA + excessB * excessB);
             }
         }
-        logOptimizationBreakdown(context, objectives.ptrs, doseOperator.computeDose(
+        auto breakdown = computeOptimizationBreakdown(objectives.ptrs, doseOperator.computeDose(
             ArcPipeline::bixelWeights(*result.controlPointStf, sequence, config.integrateLeafMotion)),
-            config.base.targetDose, refine.hotspotThresholdPct,
-            config.base.ntoEnabled ? refine.hotspotPenalty : 0.0,
             {{"MU smoothing", smoothing}, {"Total MU", muLambda * mu},
              {"Leaf order", orderPenalty}, {"Leaf speed", speedPenalty}});
+        if (terminal) logOptimizationBreakdown(context, breakdown);
+        if (refine.progressCallback) {
+            info.totalMu = mu;
+            info.objective = breakdown.total;
+            info.elapsedSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - startTime).count();
+            ArcProgressSnapshot snapshot{refine.stage, refine.stages, refine.iterations, count,
+                                         finished, info, std::move(breakdown)};
+            result.progressHistory.push_back(snapshot);
+            refine.progressCallback(snapshot);
+        }
     };
-    if (refine.reportInitial) report("DAO initial", current);
+    if (refine.reportInitial || refine.progressCallback)
+        report("DAO initial", current, {}, refine.reportInitial, false);
     std::string stopReason = "iteration budget reached";
     int attemptedIterations = 0;
     int directionRestarts = 0, lineSearchRetries = 0;
@@ -486,7 +478,22 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
             break;
         }
 
+        // Variables on a bound that the step would leave stay where they are.
+        auto freeze = [&](std::vector<double>& dir) {
+            for (size_t k = 0; k < dim; ++k) {
+                const size_t index = k / perCp, slot = k % perCp;
+                const bool isMu = slot == perCp - 1;
+                const double low = isMu ? muLow[index] / muScale[index] : tipLow;
+                const double high = isMu ? std::max(muLow[index], muHigh[index]) / muScale[index] : tipHigh;
+                if ((x[k] <= low + 1e-12 && dir[k] < 0.0) || (x[k] >= high - 1e-12 && dir[k] > 0.0)) dir[k] = 0.0;
+            }
+        };
+        // The quasi-Newton step works on the free variables only (projected gradient); otherwise the curvature of
+        // the active bounds (e.g. MU at the minimum dose rate) turns the direction uphill and forces restarts.
         std::vector<double> d(g);
+        for (double& v : d) v = -v;
+        freeze(d);
+        for (double& v : d) v = -v;
         std::vector<double> alphas(sHistory.size());
         for (size_t i = sHistory.size(); i-- > 0;) {
             alphas[i] = dot(sHistory[i], d) / dot(yHistory[i], sHistory[i]);
@@ -503,16 +510,6 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
             for (size_t k = 0; k < dim; ++k) d[k] += (alphas[i] - beta) * sHistory[i][k];
         }
         for (double& v : d) v = -v;
-        // Variables on a bound that the step would leave stay where they are.
-        auto freeze = [&](std::vector<double>& dir) {
-            for (size_t k = 0; k < dim; ++k) {
-                const size_t index = k / perCp, slot = k % perCp;
-                const bool isMu = slot == perCp - 1;
-                const double low = isMu ? muLow[index] / muScale[index] : tipLow;
-                const double high = isMu ? std::max(muLow[index], muHigh[index]) / muScale[index] : tipHigh;
-                if ((x[k] <= low + 1e-12 && dir[k] < 0.0) || (x[k] >= high - 1e-12 && dir[k] > 0.0)) dir[k] = 0.0;
-            }
-        };
         freeze(d);
         if (dot(d, g) >= 0.0) {   // not a descent direction: restart from the gradient
             sHistory.clear();
@@ -582,6 +579,15 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
         if (value < bestValue) { best = current; bestValue = value; }
         bestHistory.push_back(bestValue);
         const int acceptedSteps = result.leafIterations - initialAcceptedSteps;
+        if (refine.progressCallback && shouldLogOptimizationProgress(acceptedSteps, 10)) {
+            DaoProgressInfo info;
+            info.iteration = iteration + 1;
+            info.acceptedSteps = acceptedSteps;
+            info.preStepGradInf = maxGradient;
+            info.stepSize = step;
+            info.lsIters = lineSearchAttempts;
+            report("", current, info, false, false);
+        }
         if (shouldLogOptimizationProgress(acceptedSteps, 50)) {
             if (acceptedSteps == 1) logDaoProgressHeader(refine.iterations, memory);
             double totalMu = 0.0;
@@ -597,8 +603,8 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
             info.elapsedSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - startTime).count();
             logDaoProgress(info);
         }
-        if (iteration >= 30 && bestHistory[bestHistory.size() - 1 - 15] - bestValue < 1e-3 * bestValue) {
-            stopReason = "best cost improved less than 0.1% over 15 accepted steps";
+        if (bestHistory.size() > 40 && bestHistory[bestHistory.size() - 1 - 40] - bestValue < 1e-3 * bestValue) {
+            stopReason = "best cost improved less than 0.1% over 40 accepted steps";
             break;
         }
     }
@@ -619,7 +625,12 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
     value = evaluate(result.sequence, nullptr);
     result.finalLeafObjective = value;
     ArcSequencer::computeTiming(result.sequence, limits);
-    if (refine.finalStage) report("DAO final (after feasibility repair)", result.sequence);
+    if (refine.finalStage || refine.progressCallback) {
+        DaoProgressInfo info;
+        info.iteration = attemptedIterations;
+        info.acceptedSteps = result.leafIterations - initialAcceptedSteps;
+        report("DAO final (after feasibility repair)", result.sequence, info, refine.finalStage, true);
+    }
     std::ostringstream summary;
     summary << "DAO stopped: " << stopReason << "\n  Iter " << attemptedIterations << "/" << refine.iterations
             << " | Acc " << result.leafIterations - initialAcceptedSteps
@@ -633,11 +644,8 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
     Logger::info(summary.str());
 }
 
-// Dose is linear in MU, so one dose calculation gives the global MU scale of the seed that minimizes the objectives.
-// Returns the fluence model of the stage so the optimizer does not rebuild it.
-std::shared_ptr<FluenceDoseModel> calibrateSeedMu(ArcPipelineResult& stage, const Plan& plan,
+std::shared_ptr<FluenceDoseModel> buildStageModel(const ArcPipelineResult& stage, const Plan& plan,
                                                   const PatientData& patient, const Grid& grid,
-                                                  const BuiltObjectives& objectives,
                                                   const ArcOptimizationConfig& config) {
     PencilBeamEngine engine;
     engine.setOptions(config.engineOptions);
@@ -645,11 +653,14 @@ std::shared_ptr<FluenceDoseModel> calibrateSeedMu(ArcPipelineResult& stage, cons
     options.pixelMm = config.fluencePixelMm;
     options.backend = config.computeBackend;
     options.gpuMemoryBudgetMiB = config.gpuMemoryBudgetMiB;
-    auto model = std::make_shared<FluenceDoseModel>(
+    return std::make_shared<FluenceDoseModel>(
         engine.buildFluenceModel(plan, *stage.controlPointStf, patient, grid, options));
-    FluenceDoseOperator doseOperator(model, stage.controlPointStf);
-    Logger::info("DAO seed: calibrating uniform MU against the dose objectives");
+}
 
+// Dose is linear in MU, so one dose calculation gives the global MU scale of the seed that minimizes the objectives.
+void calibrateSeedMu(ArcPipelineResult& stage, const FluenceDoseOperator& doseOperator,
+                     const BuiltObjectives& objectives, const ArcOptimizationConfig& config) {
+    Logger::info("DAO seed: calibrating uniform MU against the dose objectives");
     for (auto& cp : stage.sequence.controlPoints) cp.mu = cp.aperture.weight = 1.0;
     const auto unitDose = doseOperator.computeDose(
         ArcPipeline::bixelWeights(*stage.controlPointStf, stage.sequence, config.integrateLeafMotion));
@@ -672,26 +683,22 @@ std::shared_ptr<FluenceDoseModel> calibrateSeedMu(ArcPipelineResult& stage, cons
     const double scale = std::exp(0.5 * (low + high));
     for (auto& cp : stage.sequence.controlPoints) cp.mu = cp.aperture.weight = scale;
     Logger::info("DAO seed: uniform MU per control point " + std::to_string(scale));
-    return model;
 }
 
-// Progressive resolution direct aperture optimization (see ArcStrategy::ProgressiveDao).
-// Without a fluence (`fmoWeights` empty) the seed opens every leaf pair over the rays of the optimization beams,
-// i.e. the target projection, and its MU is calibrated against the objectives.
-void runProgressive(ArcPipelineResult& result, const std::vector<double>& fmoWeights, const Stf& fmoStf,
+// Progressive resolution direct aperture optimization (as in Eclipse's VMAT optimizer). The seed opens every leaf
+// pair over the target projection of the sector beams (`sectorStf`) and its MU is calibrated against the objectives.
+// The normal tissue objective is added once the first dose model is known (its dose rows decide which body voxels
+// it can see).
+void runProgressive(ArcPipelineResult& result, const Stf& sectorStf,
                     const Plan& plan, const PatientData& patient, const Grid& grid,
-                    const BuiltObjectives& objectives, const ArcOptimizationConfig& config,
-                    const std::function<void(const std::string&)>& say) {
+                    BuiltObjectives& objectives, const ArcOptimizationConfig& config,
+                    const std::function<void(const std::string&)>& say,
+                    const ArcProgressCallback& progressCallback) {
     const VmatSettings finalSettings = plan.getVmatSettings();
-    const auto& limits = plan.getMachine().getConstraints();
+    const MachineConstraints limits = ArcPipeline::deliveryConstraints(plan);
     std::vector<double> spacings{finalSettings.controlPointSpacingDeg};
-    while (spacings.back() * 2.0 <= config.daoCoarsestSpacingDeg) spacings.push_back(spacings.back() * 2.0);
+    while (spacings.back() * 2.0 <= config.coarsestSpacingDeg) spacings.push_back(spacings.back() * 2.0);
     std::reverse(spacings.begin(), spacings.end());
-
-    const bool noFluence = fmoWeights.empty();
-    const std::vector<double> uniform = noFluence ? std::vector<double>(fmoStf.getTotalNumOfRays(), 1.0) :
-                                                    std::vector<double>();
-    const std::vector<double>& seedWeights = noFluence ? uniform : fmoWeights;
 
     ArcSequenceResult previous;
     double muLambda = 0.0;   // stage 1 runs without MU penalty; the penalty is derived at the first stage after it
@@ -704,9 +711,7 @@ void runProgressive(ArcPipelineResult& result, const std::vector<double>& fmoWei
         say("DAO stage " + std::to_string(level + 1) + "/" + std::to_string(spacings.size()) +
             (first ? ": creating conformal seed" : ": interpolating previous apertures and MU"));
         if (first) {
-            ArcSequencerOptions seed = config.sequencer;
-            seed.method = ArcSequencerOptions::Method::Conformal;
-            stage.sequence = ArcSequencer::sequence(seedWeights, fmoStf, settings, plan.getMachine(), seed);
+            stage.sequence = ArcSequencer::conformalSeed(sectorStf, settings, plan.getMachine(), config.seed);
         } else {
             std::vector<ArcControlPoint> geometry = ArcGeometry::controlPoints(settings);
             stage.sequence = ArcSequencer::resample(previous, geometry, limits);
@@ -721,18 +726,24 @@ void runProgressive(ArcPipelineResult& result, const std::vector<double>& fmoWei
         stage.controlPointStf = ArcPipeline::buildControlPointStf(plan, patient, geometry);
 
         std::shared_ptr<FluenceDoseModel> preparedModel;
-        if (first && noFluence) preparedModel = calibrateSeedMu(stage, plan, patient, grid, objectives, config);
+        if (first) {
+            preparedModel = buildStageModel(stage, plan, patient, grid, config);
+            FluenceDoseOperator doseOperator(preparedModel, stage.controlPointStf);
+            ObjectiveBuilder::addNormalTissueObjective(objectives, config.base.nto, config.base.targetDose,
+                                                       patient, grid, &doseOperator);
+            if (objectives.ptrs.empty()) throw std::invalid_argument("ArcPipeline: DAO needs at least one objective");
+            logObjectiveConfiguration("ArcPipeline", objectives.ptrs);
+            calibrateSeedMu(stage, doseOperator, objectives, config);
+        }
 
         RefineOptions refine;
-        refine.iterations = last ? 2 * config.daoIterations : config.daoIterations;
+        refine.stage = static_cast<int>(level + 1);
+        refine.stages = static_cast<int>(spacings.size());
+        refine.progressCallback = progressCallback;
+        refine.iterations = last ? 2 * config.iterationsPerResolution : config.iterationsPerResolution;
         refine.reportInitial = first;
         refine.finalStage = last;
-        refine.muPenalty = config.daoMuPenalty;
-        // Continuation: the hot-spot term starts like the fluence optimization's and tightens to the arc setting.
-        const double t = spacings.size() > 1 ? static_cast<double>(level) / static_cast<double>(spacings.size() - 1) : 1.0;
-        refine.hotspotThresholdPct = (1.0 - t) * config.base.ntoThresholdPct + t * config.daoHotspotThresholdPct;
-        refine.hotspotPenalty = std::exp((1.0 - t) * std::log(std::max(config.base.ntoPenalty, 1.0)) +
-                                         t * std::log(std::max(config.daoHotspotPenalty, 1.0)));
+        refine.muPenalty = config.muPenalty;
         const double width = stage.sequence.controlPoints.front().geometry.width;
         const double gantryMax = limits.gantryRotationSpeed[1] > 0.0 ? limits.gantryRotationSpeed[1] : 6.0;
         refine.maxMoveMm = std::max(4.0 * config.leafStepMm, 0.25 * limits.leafSpeed[1] * width / gantryMax);
@@ -741,6 +752,8 @@ void runProgressive(ArcPipelineResult& result, const std::vector<double>& fmoWei
         double lambda = derivesLambda ? -1.0 : muLambda;
         refine.muLambda = &lambda;
         refineLeaves(stage, plan, patient, grid, objectives, config, preparedModel, refine);
+        result.progressHistory.insert(result.progressHistory.end(),
+            stage.progressHistory.begin(), stage.progressHistory.end());
         if (derivesLambda) muLambda = lambda;
 
         if (first) result.initialLeafObjective = stage.initialLeafObjective;
@@ -806,32 +819,31 @@ std::vector<double> ArcPipeline::bixelWeights(const Stf& cpStf, const ArcSequenc
     return weights;
 }
 
-ArcPipelineResult ArcPipeline::run(const std::vector<double>& fmoWeights,
-                                   const Stf& fmoStf,
+double ArcPipeline::machineMuPerWeight(const Plan& plan) { return plan.machineMuPerWeight(); }
+
+MachineConstraints ArcPipeline::deliveryConstraints(const Plan& plan) {
+    MachineConstraints limits = plan.getMachine().getConstraints();
+    const double muPerWeight = machineMuPerWeight(plan);
+    for (double& rate : limits.monitorUnitRate) rate /= muPerWeight;
+    return limits;
+}
+
+ArcPipelineResult ArcPipeline::run(const Stf& sectorStf,
                                    const Plan& plan,
                                    const PatientData& patientData,
                                    const Grid& doseGrid,
                                    BuiltObjectives objectives,
                                    const ArcOptimizationConfig& config,
-                                   IterationCallback iterCallback,
-                                   std::function<void(const std::string&)> stage) {
+                                   std::function<void(const std::string&)> stage,
+                                   ArcProgressCallback progressCallback) {
     auto say = [&](const std::string& s) { Logger::info("ArcPipeline: " + s); if (stage) stage(s); };
     if (!plan.isVmat()) throw std::invalid_argument("ArcPipeline: the plan is not a VMAT plan");
-    if (config.maxWeightFactor < 1.0 || !std::isfinite(config.maxWeightFactor) ||
-        config.base.targetDose <= 0.0 || !std::isfinite(config.base.targetDose))
-        throw std::invalid_argument("ArcPipeline: invalid MU growth factor or prescription");
+    if (config.base.targetDose <= 0.0 || !std::isfinite(config.base.targetDose))
+        throw std::invalid_argument("ArcPipeline: invalid prescription");
 
     ArcPipelineResult result;
-    say(std::string("starting ") + (config.strategy == ArcStrategy::ProgressiveDao ?
-        "progressive DAO" : "sweep + refinement") +
-        ", dose voxels=" + std::to_string(doseGrid.getNumVoxels()) +
+    say("starting progressive DAO, dose voxels=" + std::to_string(doseGrid.getNumVoxels()) +
         ", leaf-motion integration=" + (config.integrateLeafMotion ? "enabled" : "disabled"));
-    logObjectiveConfiguration("ArcPipeline", objectives.ptrs);
-    auto completed = [&] {
-        say("complete: control points=" + std::to_string(result.sequence.controlPoints.size()) +
-            ", MU=" + std::to_string(result.sequence.totalMU) +
-            ", delivery time=" + std::to_string(result.sequence.totalTimeSec) + " s");
-    };
     auto engineOptions = config.engineOptions;
     engineOptions.gpuRayTracing = config.computeBackend != DoseComputeBackend::CPU;
     engineOptions.requireGpuRayTracing = config.computeBackend == DoseComputeBackend::CUDA;
@@ -840,134 +852,19 @@ ArcPipelineResult ArcPipeline::run(const std::vector<double>& fmoWeights,
         throw std::runtime_error("CUDA arc dose requested but CUDA support was not built");
 #endif
 
-    if (config.strategy == ArcStrategy::ProgressiveDao) {
-        if (objectives.ptrs.empty() || !config.optimizeLeaves)
-            throw std::invalid_argument("ArcPipeline: progressive optimization needs objectives and leaf optimization");
-        runProgressive(result, fmoWeights, fmoStf, plan, patientData, doseGrid, objectives, config, say);
-        auto engine = DoseEngineFactory::create("PencilBeam");
-        engine->setOptions(engineOptions);
-        say("computing delivered dose");
-        const std::vector<double> weights = bixelWeights(*result.controlPointStf, result.sequence,
-                                                         config.integrateLeafMotion);
-        result.dose = std::make_shared<DoseMatrix>(
-            engine->calculateDoseDirect(plan, *result.controlPointStf, patientData, doseGrid, weights));
-        result.stats = PlanAnalysis::computeStats(*result.dose, patientData, doseGrid, config.base.targetDose);
-        completed();
-        return result;
-    }
-
-    say("arc sequencing");
-    result.sequence = ArcSequencer::sequence(fmoWeights, fmoStf, plan.getVmatSettings(), plan.getMachine(),
-                                             config.sequencer);
-
-    say("building " + std::to_string(result.sequence.controlPoints.size()) + " control point beams");
-    std::vector<ArcControlPoint> geometry;
-    for (const auto& cp : result.sequence.controlPoints) geometry.push_back(cp.geometry);
-    result.controlPointStf = buildControlPointStf(plan, patientData, geometry);
-
+    runProgressive(result, sectorStf, plan, patientData, doseGrid, objectives, config, say, progressCallback);
     auto engine = DoseEngineFactory::create("PencilBeam");
     engine->setOptions(engineOptions);
-    std::shared_ptr<FluenceDoseModel> apertureModel;
-
-    if (config.optimizeWeights && !objectives.ptrs.empty()) {
-        const std::vector<double> baseWeights = bixelWeights(*result.controlPointStf, result.sequence,
-            config.integrateLeafMotion);
-        std::shared_ptr<IDoseOperator> apertureDose;
-#ifdef OPTIRAD_HAS_CUDA
-        if (config.computeBackend != DoseComputeBackend::CPU && config.engineOptions.divergentBixels) {
-            say("preparing CUDA matrix-free aperture dose model");
-            PencilBeamEngine modelEngine;
-            modelEngine.setOptions(config.engineOptions);
-            FluenceModelOptions options;
-            options.pixelMm = config.fluencePixelMm;
-            options.backend = config.computeBackend;
-            options.gpuMemoryBudgetMiB = config.gpuMemoryBudgetMiB;
-            apertureModel = std::make_shared<FluenceDoseModel>(modelEngine.buildFluenceModel(
-                plan, *result.controlPointStf, patientData, doseGrid, options));
-            if (apertureModel->usesCuda()) {
-                auto bixelOperator = std::make_shared<FluenceDoseOperator>(apertureModel, result.controlPointStf);
-                apertureDose = std::make_shared<ApertureDoseOperator>(bixelOperator, *result.controlPointStf, baseWeights);
-            } else apertureModel.reset();
-        }
-#else
-        if (config.computeBackend == DoseComputeBackend::CUDA)
-            throw std::runtime_error("CUDA aperture optimization requested but CUDA support was not built");
-#endif
-        if (!apertureDose) {
-            say("computing aperture dose columns (CPU operator)");
-            apertureDose = std::make_shared<DoseInfluenceMatrix>(
-                engine->calculateBeamDij(plan, *result.controlPointStf, patientData, doseGrid, baseWeights));
-        }
-
-        const size_t n = result.sequence.controlPoints.size();
-        std::vector<double> x0(n, 0.0);
-        for (size_t j = 0; j < n; ++j)
-            if (result.sequence.controlPoints[j].mu > 0.0) x0[j] = 1.0;
-
-        // Neighbours: adjacent control points of the same arc.
-        std::vector<std::vector<int>> neighbors(n);
-        for (size_t j = 0; j + 1 < n; ++j) {
-            const auto& a = result.sequence.controlPoints[j].geometry;
-            const auto& b = result.sequence.controlPoints[j + 1].geometry;
-            if (a.arcIndex == b.arcIndex) {
-                neighbors[j].push_back(static_cast<int>(j + 1));
-                neighbors[j + 1].push_back(static_cast<int>(j));
-            }
-        }
-
-        say(apertureModel ? "optimizing aperture weights (CUDA dose/objectives/gradient)" :
-            "optimizing aperture weights (CPU stored columns)");
-        auto optimizer = OptimizerFactory::create("LBFGS");
-        optimizer->setMaxIterations(config.weightIterations);
-        optimizer->setTolerance(config.base.tolerance);
-        if (iterCallback) optimizer->setIterationCallback(std::move(iterCallback));
-        if (auto* lbfgs = dynamic_cast<LBFGSOptimizer*>(optimizer.get())) {
-            lbfgs->setMaxFluence(config.maxWeightFactor);
-            lbfgs->setInitialWeights(x0);
-            lbfgs->setPrescriptionDose(config.base.targetDose);
-            if (config.base.ntoEnabled) {
-                lbfgs->setHotspotThreshold(config.hotspotThresholdPct);
-                lbfgs->setHotspotPenalty(config.hotspotPenalty);
-                lbfgs->setConsistentHotspotGradient(true);
-            }
-            if (config.muSmoothingWeight > 0.0) lbfgs->setSpatialSmoothing(config.muSmoothingWeight, neighbors);
-            if (config.muPenalty > 0.0) lbfgs->setRelativeL1Regularization(config.muPenalty);
-        }
-
-        std::vector<Constraint> constraints;
-        OptimizationResult opt = optimizer->optimize(*apertureDose, objectives.ptrs, constraints);
-        result.iterations = opt.iterations;
-        result.finalObjective = opt.finalObjective;
-        result.converged = opt.converged;
-
-        for (size_t j = 0; j < n; ++j) {
-            auto& cp = result.sequence.controlPoints[j];
-            cp.mu *= opt.weights[j];
-            cp.aperture.weight = cp.mu;
-        }
-        ArcSequencer::computeTiming(result.sequence, plan.getMachine().getConstraints());
-    }
-
-    if (config.optimizeLeaves && !objectives.ptrs.empty()) {
-        say("refining leaf positions and MU (matrix-free)");
-        RefineOptions refine;
-        refine.hotspotThresholdPct = config.hotspotThresholdPct;
-        refine.hotspotPenalty = config.hotspotPenalty;
-        refine.muPenalty = config.muPenalty;
-        refine.iterations = config.leafIterations;
-        refine.muCapFactor = config.maxWeightFactor;
-        double lambda = -1.0;
-        refine.muLambda = &lambda;
-        refineLeaves(result, plan, patientData, doseGrid, objectives, config, apertureModel, refine);
-    }
-
     say("computing delivered dose");
-    const std::vector<double> finalWeights = bixelWeights(*result.controlPointStf, result.sequence,
-        config.integrateLeafMotion);
+    const std::vector<double> weights = bixelWeights(*result.controlPointStf, result.sequence,
+                                                     config.integrateLeafMotion);
     result.dose = std::make_shared<DoseMatrix>(
-        engine->calculateDoseDirect(plan, *result.controlPointStf, patientData, doseGrid, finalWeights));
+        engine->calculateDoseDirect(plan, *result.controlPointStf, patientData, doseGrid, weights));
     result.stats = PlanAnalysis::computeStats(*result.dose, patientData, doseGrid, config.base.targetDose);
-    completed();
+    say("complete: control points=" + std::to_string(result.sequence.controlPoints.size()) +
+        ", MU=" + std::to_string(result.sequence.totalMU) + " (~" +
+        std::to_string(result.sequence.totalMU * machineMuPerWeight(plan)) + " machine MU/fraction)" +
+        ", delivery time=" + std::to_string(result.sequence.totalTimeSec) + " s");
     return result;
 }
 

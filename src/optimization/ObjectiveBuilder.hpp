@@ -2,6 +2,7 @@
 
 #include "ObjectiveProtocol.hpp"
 #include "ObjectiveFunction.hpp"
+#include "objectives/NormalTissueObjective.hpp"
 #include "core/PatientData.hpp"
 #include "geometry/Grid.hpp"
 #include <memory>
@@ -43,6 +44,16 @@ public:
         const PatientData& patientData,
         const Grid& ctGrid,
         const Grid& doseGrid);
+
+    /// Appends the Eclipse-style normal tissue objective (no-op when disabled or without a target).
+    /// Returns true when an NTO was added.
+    static bool addNormalTissueObjective(
+        BuiltObjectives& objectives,
+        const NtoSettings& settings,
+        double prescriptionDose,
+        const PatientData& patientData,
+        const Grid& doseGrid,
+        const IDoseOperator* dose = nullptr);
 };
 
 } // namespace optirad

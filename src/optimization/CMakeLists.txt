@@ -8,6 +8,7 @@ add_library(optirad_optimization
     objectives/SquaredOverdose.cpp
     objectives/SquaredUnderdose.cpp
     objectives/DVHObjective.cpp
+    objectives/NormalTissueObjective.cpp
     optimizers/LBFGSOptimizer.cpp
 )
 

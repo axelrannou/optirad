@@ -11,6 +11,7 @@
 #include "dose/DoseMatrix.hpp"
 #include "geometry/Grid.hpp"
 #include "optimization/ObjectiveBuilder.hpp"
+#include "optimization/OptimizationLogging.hpp"
 #include "sequencing/ArcSequencer.hpp"
 #include <functional>
 #include <memory>
@@ -19,85 +20,63 @@
 
 namespace optirad {
 
-enum class ArcStrategy {
-    /// Fluence-based: sweep sequencing of the optimized fluence, aperture weight optimization, leaf refinement.
-    SweepRefine,
-    /// Progressive resolution direct aperture optimization (as in Eclipse's VMAT optimizer): conformal apertures at a
-    /// few widely spaced control points are optimized (leaf positions and MU against the dose objectives), then
-    /// control points are inserted by interpolation and the optimization continues, until the final spacing.
-    ProgressiveDao
-};
-
+/// VMAT direct aperture optimization (DAO) settings, as in Eclipse's progressive resolution VMAT optimizer:
+/// conformal apertures at a few widely spaced control points are optimized (leaf positions and MU against the dose
+/// objectives), then control points are inserted by interpolation and the optimization continues, until the plan's
+/// control point spacing.
 struct ArcOptimizationConfig {
-    ArcStrategy strategy = ArcStrategy::SweepRefine;
-
-    /// ProgressiveDao: control point spacing of the first resolution; each further resolution halves it until the
-    /// plan's control point spacing is reached (e.g. 16, 8, 4, 2 deg).
-    double daoCoarsestSpacingDeg = 16.0;
-    /// ProgressiveDao: iterations of the leaf/MU optimizer at every resolution but the last, which gets twice as many
-    /// (`leafIterations` is the sweep strategy's budget). The hot-spot term tightens from the fluence stage's setting to
-    /// the arc setting over the resolutions. The MU penalty is off for this strategy by default: open conformal
-    /// apertures need little MU (see `daoMuPenalty`).
-    int daoIterations = 500;
-    double daoMuPenalty = 0.0;
-    /// ProgressiveDao: final hot-spot term. Less strict than the sweep's: with one opening per leaf pair a stricter
-    /// term trades PTV coverage for the maximum (1.01 x Rx: max 69.8 Gy but D95 63.7 Gy on the lung case).
-    double daoHotspotThresholdPct = 1.03;
-    double daoHotspotPenalty = 5000.0;
-
-    /// Targets, hotspot control and iteration limits shared with the fluence optimization.
+    /// Prescription and normal tissue objective (`base.nto`) shared with the IMRT optimizer.
     OptimizationConfig base;
-    ArcSequencerOptions sequencer;
 
-    /// Aperture MU may grow up to this multiple of its sequenced value.
-    double maxWeightFactor = 3.0;
-
+    /// Control point spacing of the first resolution; each further resolution halves it until the plan's control
+    /// point spacing is reached (e.g. 16, 8, 4, 2 deg).
+    double coarsestSpacingDeg = 16.0;
+    /// Leaf/MU iterations at every resolution but the last, which gets twice as many.
+    int iterationsPerResolution = 500;
+    /// Penalty on the total MU, as the fraction of the objective (at the second resolution) that the whole MU costs.
+    /// 0 = none: open conformal apertures need little MU and the dose objectives decide how much MU a plan is worth.
+    double muPenalty = 0.0;
     /// Penalty on MU differences between neighbouring control points (smooth dose rate / gantry speed).
     double muSmoothingWeight = 0.05;
-
-    /// Hot-spot term of the arc stages (active when `base.ntoEnabled`). Stricter than the fluence stage: the
-    /// delivered dose differs from the optimized fluence dose and the difference shows up as hot spots.
-    double hotspotThresholdPct = 1.01;   // fraction of the prescription
-    double hotspotPenalty = 50000.0;
-
-    /// Iterations of the aperture weight (MU) optimization. `base` supplies targets, hotspot control and tolerance.
-    int weightIterations = 100;
-
-    /// Refine the MU of each control point against the objectives. Off = deliver the sequenced MU as is.
-    bool optimizeWeights = true;
-    bool optimizeLeaves = true;
-    /// Penalty on the total MU, as the fraction of the initial objective (of each refinement stage) that the
-    /// whole sequenced MU costs. 0 = none. The dose objectives decide how much MU a plan is worth.
-    double muPenalty = 0.3;
     bool integrateLeafMotion = true;   // dose of a control point = average over the leaf motion in its slice
-    int leafIterations = 300;
-    double leafStepMm = 1.0;   // first step and base of the per-iteration move limit (4x) of the leaf refinement
+    double leafStepMm = 1.0;   // first step and base of the per-iteration move limit (4x)
     double fluencePixelMm = 1.5;
+    /// Conformal seed apertures.
+    ArcSequencerOptions seed;
     /// Backend for optimization and final delivered dose: Auto tries CUDA with logged CPU fallback;
     /// CUDA requires GPU execution; CPU disables GPU tracing and deposition.
     DoseComputeBackend computeBackend = DoseComputeBackend::Auto;
     size_t gpuMemoryBudgetMiB = 0;
 
-    /// Dose engine settings; must match the engine that produced the fluence (IDoseOperator::engineOptions()).
+    /// Dose engine settings of the arc dose.
     DoseCalcOptions engineOptions;
 };
 
+struct ArcProgressSnapshot {
+    int stage = 1;
+    int stages = 1;
+    int maxIterations = 0;
+    size_t controlPoints = 0;
+    bool stageFinished = false;
+    DaoProgressInfo progress;
+    OptimizationBreakdown breakdown;
+};
+
+using ArcProgressCallback = std::function<void(const ArcProgressSnapshot&)>;
+
 struct ArcPipelineResult {
+    std::vector<ArcProgressSnapshot> progressHistory;
     ArcSequenceResult sequence;                 // final apertures, MU and timing
     std::shared_ptr<Stf> controlPointStf;       // one beam per control point
     std::shared_ptr<DoseMatrix> dose;           // dose of the delivered arc, whole phantom/patient
     std::vector<StructureDoseStats> stats;
 
-    int iterations = 0;
-    double finalObjective = 0.0;
-    bool converged = false;
-    int leafIterations = 0;
+    int leafIterations = 0;                     // accepted DAO steps over all resolutions
     double initialLeafObjective = 0.0;
     double finalLeafObjective = 0.0;
 };
 
-/// VMAT workflow after fluence optimization: arc sequencing, then aperture weight optimization.
-/// Refines aperture weights and leaf positions before recomputing the final dose.
+/// VMAT workflow: progressive resolution DAO from a conformal seed, then the delivered dose.
 class ArcPipeline {
 public:
     /// Build one beam per control point at the given angles, with the same isocenter, bixel width and
@@ -112,17 +91,24 @@ public:
     static std::vector<double> bixelWeights(const Stf& cpStf, const ArcSequenceResult& sequence,
                                             bool integrateLeafMotion = true);
 
-    /// `fmoWeights` may be empty with ArcStrategy::ProgressiveDao: the seed then comes from the target projection of
-    /// `fmoStf` (no fluence optimization needed).
-    static ArcPipelineResult run(const std::vector<double>& fmoWeights,
-                                 const Stf& fmoStf,
+    /// Machine MU per fraction of one unit of control point "MU" (`Plan::machineMuPerWeight`).
+    static double machineMuPerWeight(const Plan& plan);
+
+    /// Machine constraints with the dose rate converted to weight units per second (`machineMuPerWeight`),
+    /// i.e. the limits that apply to the sequence's `mu` and `doseRate`.
+    static MachineConstraints deliveryConstraints(const Plan& plan);
+
+    /// `sectorStf` has one beam per arc sector (centre angle), as built for the plan; its rays (the target
+    /// projection) define the conformal seed. The normal tissue objective of `config.base.nto` is added to
+    /// `objectives`.
+    static ArcPipelineResult run(const Stf& sectorStf,
                                  const Plan& plan,
                                  const PatientData& patientData,
                                  const Grid& doseGrid,
                                  BuiltObjectives objectives,
                                  const ArcOptimizationConfig& config,
-                                 IterationCallback iterCallback = nullptr,
-                                 std::function<void(const std::string&)> stageCallback = nullptr);
+                                 std::function<void(const std::string&)> stageCallback = nullptr,
+                                 ArcProgressCallback progressCallback = nullptr);
 };
 
 } // namespace optirad
