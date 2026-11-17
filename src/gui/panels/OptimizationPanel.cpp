@@ -77,15 +77,15 @@ void OptimizationPanel::render() {
         };
         
         std::vector<DefaultObjective> defaults = {
-            // Lungs: SquaredOverdose at MLD 20 Gy
-            {"Poumon_D",          true,  1,  20.0f,  10.0f,  5.0f},
-            {"Poumon_G",          true,  1,  20.0f,  10.0f,  5.0f},
+            // Lungs: MaxDVH V20 <= 30%; MLD is evaluated separately.
+            {"Poumon_D",          true,  4,  20.0f, 150.0f, 30.0f},
+            {"Poumon_G",          true,  4,  20.0f, 150.0f, 30.0f},
             // Heart: MaxDVH V40 < 30%
-            {"Coeur",             true,  4,  40.0f,  30.0f, 30.0f},
+            {"Coeur",             true,  4,  40.0f,  50.0f, 30.0f},
             // Esophagus: MaxDVH V50 < 30%
             {"Oesophage",         true,  4,  50.0f,  50.0f, 30.0f},
-            // Spinal cord: MaxDVH V10Gy <= 0%
-            {"Canal_Medullaire",  true,  4,  10.0f, 200.0f,  0.0f},
+            // Spinal cord: MaxDVH V45Gy <= 0%
+            {"Canal_Medullaire",  true,  4,  45.0f, 150.0f,  0.0f},
         };
 
         for (size_t i = 0; i < ss->getCount(); ++i) {

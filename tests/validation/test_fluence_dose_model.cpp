@@ -31,6 +31,8 @@ struct ModelFixture {
 
     ModelFixture() {
         PlanConfig pc;
+        pc.machineName = "Generic";
+        pc.deliveryMode = DeliveryMode::SMLC;
         pc.bixelWidth = 5.0;
         pc.gantryStart = 0.0;
         pc.gantryStep = 120.0;

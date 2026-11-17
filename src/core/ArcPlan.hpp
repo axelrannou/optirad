@@ -10,8 +10,8 @@ enum class DeliveryMode { SMLC, VMAT };
 
 /// One gantry arc. Angles are in degrees on the 0..360 scale.
 struct ArcSpec {
-    double startAngle = 181.0;
-    double stopAngle  = 179.0;
+    double startAngle = 0.0;
+    double stopAngle  = 360.0;
     bool   clockwise  = true;   // clockwise = gantry angle increases
     double couchAngle = 0.0;
 
@@ -32,8 +32,8 @@ struct ArcSpec {
 
 struct VmatSettings {
     std::vector<ArcSpec> arcs{ArcSpec{}};
-    double optimizationSpacingDeg = 20.0;  // angular width of one arc sector (one STF beam)
-    double controlPointSpacingDeg = 4.0;   // angular width of one delivered control point
+    double optimizationSpacingDeg = 10.0; // angular width of one arc sector (one STF beam)
+    double controlPointSpacingDeg = 2.0;  // angular width of one delivered control point
 };
 
 /// A fluence-optimization beam covering one angular sector of an arc.

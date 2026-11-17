@@ -68,6 +68,7 @@ WaterPhantomResult WaterPhantom::compute(const WaterPhantomConfig& cfg) {
     patient->convertHUtoED();
 
     PlanConfig pc;
+    pc.deliveryMode = DeliveryMode::SMLC;
     pc.machineName = cfg.machineName;
     pc.bixelWidth = cfg.bixelWidthMm;
     pc.gantryAngles = {0.0};

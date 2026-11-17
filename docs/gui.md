@@ -170,7 +170,9 @@ class IPanel {
 ### PlanningPanel
 
 - Radiation mode selector (photons)
-- Machine selector (Generic, Varian_TrueBeam6MV)
+- Machine selector (Generic, HD120, Varian_TrueBeam6MV; default HD120)
+- Delivery defaults to VMAT with a clockwise 0 to 360 degree arc, 10 degree sectors,
+  2 degree control point spacing, and 3 mm bixels (also the CLI planning defaults)
 - Gantry angle configuration (start, step, stop)
 - Bixel width slider
 - Number of fractions input
@@ -208,6 +210,22 @@ class IPanel {
   D98% ≥ Rx, Upper 0% ≤ 105% Rx, Squared Deviation Rx, priority 100; OAR protocol; NTO 100).
   Disabled, and the template is not loaded for a new patient, until a prescription is known
   (no dose is assumed); *Run* is disabled without a prescription
+- Default OAR objectives (also restored by **Recommended**, matched by exact structure name):
+
+  | Structure | Objective | Dose (Gy) | Volume (%) | Weight |
+  |-----------|-----------|-----------|------------|--------|
+  | Canal_Medullaire | MaxDVH | 45 | 0 | 150 |
+  | Poumon_D, Poumon_G (each) | MaxDVH | 20 | 30 | 150 |
+  | Coeur | MaxDVH | 40 | 30 | 50 |
+  | Oesophage | MaxDVH | 50 | 30 | 50 |
+
+  These are soft optimization penalties, not guaranteed hard constraints. Lung mean dose
+  <= 20 Gy remains a separate plan-evaluation criterion; the V20 objective does not enforce it.
+  Evaluate the requested strict V20/V40/V50 < 30% criteria after optimization: MaxDVH targets
+  an allowed 30% volume, rather than a strict inequality. Per-lung objectives do not replace
+  evaluating a combined-lung volume when required by the protocol. Cord and lung limits take
+  precedence over heart/oesophagus goals during plan review; weights alone do not guarantee
+  this hierarchy. These curated GUI OAR presets do not change the CLI's objective selection.
 - Optimizer settings:
   - Max iterations
   - Convergence tolerance

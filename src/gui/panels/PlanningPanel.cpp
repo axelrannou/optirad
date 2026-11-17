@@ -31,7 +31,15 @@ static bool InputTextMultilineString(const char* label, std::string* str, const 
     return ImGui::InputTextMultiline(label, &(*str)[0], str->capacity() + 1, size, flags, InputTextCallback, str);
 }
 
-PlanningPanel::PlanningPanel(GuiAppState& state) : m_state(state) {}
+PlanningPanel::PlanningPanel(GuiAppState& state) : m_state(state) {
+    const auto defaultMachine = PlanConfig{}.machineName;
+    for (int i = 0; i < IM_ARRAYSIZE(kMachines); ++i) {
+        if (defaultMachine == kMachines[i]) {
+            m_machineIdx = i;
+            break;
+        }
+    }
+}
 
 PlanningPanel::~PlanningPanel() {
     if (m_stfThread.joinable()) m_stfThread.join();

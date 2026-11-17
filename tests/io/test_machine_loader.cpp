@@ -100,6 +100,14 @@ TEST_F(MachineLoaderTest, ConstraintsCorrect) {
     EXPECT_DOUBLE_EQ(c.monitorUnitRate[1], 10.0);
 }
 
+TEST_F(MachineLoaderTest, HD120LeafSpeedIs25MillimetersPerSecond) {
+    const Machine machine = MachineLoader::load("photons", "HD120", OPTIRAD_DATA_DIR);
+    EXPECT_EQ(machine.getName(), "HD120");
+    EXPECT_EQ(machine.getGeometry().numLeaves, 120);
+    EXPECT_DOUBLE_EQ(machine.getConstraints().leafSpeed[0], 0.0);
+    EXPECT_DOUBLE_EQ(machine.getConstraints().leafSpeed[1], 25.0);
+}
+
 // ============================================================================
 // Error cases
 // ============================================================================

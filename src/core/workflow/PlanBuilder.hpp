@@ -15,9 +15,9 @@ namespace optirad {
 /// Configuration for creating a treatment plan.
 struct PlanConfig {
     std::string radiationMode = "photons";
-    std::string machineName = "Generic";
+    std::string machineName = "HD120";
     int numFractions = 30;
-    double bixelWidth = 7.0;
+    double bixelWidth = 3.0;
 
     // Gantry angles: use explicit list if non-empty, else range
     std::vector<double> gantryAngles;
@@ -33,7 +33,7 @@ struct PlanConfig {
 
     // Delivery technique. For VMAT the gantry/couch fields above are ignored: the fluence-optimization
     // beams are the sector centres of the arcs in `vmat`.
-    DeliveryMode deliveryMode = DeliveryMode::SMLC;
+    DeliveryMode deliveryMode = DeliveryMode::VMAT;
     VmatSettings vmat;
 };
 

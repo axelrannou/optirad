@@ -24,6 +24,34 @@ namespace optirad::tests {
 // Arc geometry
 // ============================================================================
 
+TEST(ArcGeometryTest, PlanningDefaultsCoverAFullArcWithRequestedResolution) {
+    const PlanConfig config;
+    EXPECT_EQ(config.machineName, "HD120");
+    EXPECT_EQ(config.deliveryMode, DeliveryMode::VMAT);
+    EXPECT_DOUBLE_EQ(config.bixelWidth, 3.0);
+    const auto& settings = config.vmat;
+    ASSERT_EQ(settings.arcs.size(), 1u);
+    EXPECT_DOUBLE_EQ(settings.arcs[0].startAngle, 0.0);
+    EXPECT_DOUBLE_EQ(settings.arcs[0].stopAngle, 360.0);
+    EXPECT_TRUE(settings.arcs[0].clockwise);
+    EXPECT_DOUBLE_EQ(settings.arcs[0].span(), 360.0);
+    EXPECT_DOUBLE_EQ(settings.optimizationSpacingDeg, 10.0);
+    EXPECT_DOUBLE_EQ(settings.controlPointSpacingDeg, 2.0);
+
+    const auto sectors = ArcGeometry::sectors(settings);
+    const auto cps = ArcGeometry::controlPoints(settings);
+    ASSERT_EQ(sectors.size(), 36u);
+    ASSERT_EQ(cps.size(), 180u);
+    double totalWidth = 0.0;
+    for (size_t i = 0; i < cps.size(); ++i) {
+        EXPECT_DOUBLE_EQ(cps[i].width, 2.0);
+        EXPECT_DOUBLE_EQ(cps[i].gantryAngle, 1.0 + 2.0 * i);
+        EXPECT_EQ(cps[i].sectorIndex, i / 5);
+        totalWidth += cps[i].width;
+    }
+    EXPECT_DOUBLE_EQ(totalWidth, 360.0);
+}
+
 TEST(ArcGeometryTest, SpanOfClockwiseAndCounterClockwiseArcs) {
     ArcSpec cw;  cw.startAngle = 181; cw.stopAngle = 179; cw.clockwise = true;
     ArcSpec ccw; ccw.startAngle = 179; ccw.stopAngle = 181; ccw.clockwise = false;
@@ -207,6 +235,7 @@ struct ArcFixture {
 
     ArcFixture() {
         PlanConfig pc;
+        pc.machineName = "Generic";
         pc.bixelWidth = 10.0;
         pc.deliveryMode = DeliveryMode::VMAT;
         pc.vmat.arcs[0].startAngle = 0;

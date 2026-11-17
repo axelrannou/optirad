@@ -102,12 +102,16 @@ cd build
 
 ```
 --mode <photons|protons>     Radiation mode (default: photons)
---machine <name>             Machine name (Generic, Varian_TrueBeam6MV)
+--machine <name>             Machine name (default: HD120; also Generic, Varian_TrueBeam6MV)
 --fractions <n>              Number of fractions (default: 30)
 --gantry-start <deg>         Gantry start angle (default: 0)
 --gantry-step <deg>          Gantry angle step (default: 4)
 --gantry-stop <deg>          Gantry stop angle exclusive (default: 360)
---bixel-width <mm>           Bixel width (default: 7)
+--bixel-width <mm>           Bixel width (default: 3)
+--delivery <smlc|vmat>       Delivery technique (default: vmat)
+--arc <start> <stop> <cw|ccw> [couch]  VMAT arc (repeatable; default: 0 360 cw)
+--opt-spacing <deg>          VMAT arc sector width (default: 10)
+--cp-spacing <deg>           VMAT control point spacing (default: 2)
 ```
 
 #### Dose Calculation Options
@@ -141,7 +145,7 @@ cd build
 ./apps/optirad_cli/optirad_cli interactive
 
 optirad> load ../data/dicom/JOHN_DOE
-optirad> plan --machine Generic --gantry-step 40 --bixel-width 7
+optirad> plan --delivery smlc --machine Generic --gantry-step 40 --bixel-width 7
 optirad> generateStf
 optirad> doseCalc --dose-resolution 2.5
 optirad> optimize --target-dose 60 --oar-max-dose 30 --max-iter 500

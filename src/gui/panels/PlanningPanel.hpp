@@ -36,7 +36,7 @@ private:
     int m_machineIdx = 0;
 
     // Delivery technique: 0=SMLC, 1=VMAT
-    int m_deliveryIdx = 0;
+    int m_deliveryIdx = PlanConfig{}.deliveryMode == DeliveryMode::VMAT ? 1 : 0;
     struct ArcUi {
         float start = static_cast<float>(ArcSpec{}.startAngle);
         float stop = static_cast<float>(ArcSpec{}.stopAngle);
