@@ -305,6 +305,13 @@ if(TARGET optirad_gui)
     add_executable(test_dao_progress_gui gui/test_dao_progress.cpp)
     target_link_libraries(test_dao_progress_gui PRIVATE optirad_gui GTest::gtest_main)
     add_test(NAME DaoProgressGuiTest COMMAND test_dao_progress_gui)
+
+    if(DCMTK_FOUND)
+        add_executable(test_patient_import_gui gui/test_patient_import.cpp)
+        target_include_directories(test_patient_import_gui PRIVATE ${DCMTK_INCLUDE_DIRS})
+        target_link_libraries(test_patient_import_gui PRIVATE optirad_gui ${DCMTK_LIBRARIES} GTest::gtest_main)
+        add_test(NAME PatientImportGuiTest COMMAND test_patient_import_gui)
+    endif()
 endif()
 
 add_executable(test_fluence_dose_model

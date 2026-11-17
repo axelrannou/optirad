@@ -9,7 +9,7 @@
 
 namespace optirad {
 
-/// Dose statistics panel: shows comprehensive plan analysis after optimization.
+/// Dose statistics panel: shows analysis for imported or computed dose maps.
 /// Supports comparison of two dose maps side-by-side.
 class DoseStatsPanel : public IPanel {
 public:

@@ -159,6 +159,10 @@ class IPanel {
 
 - File browser dialog for DICOM directory selection
 - DICOM import trigger (`DicomImporter::importAll()`)
+- Imported RT Dose is selected and available to DVH and Dose Statistics immediately
+  when CT and structures are present; no plan or optimization is required.
+- A successful patient import replaces the previous patient's plan, doses, and
+  analysis caches. A failed import preserves the current patient.
 - Patient demographics display (name, ID)
 - CT volume information (dimensions, spacing, origin, HU range)
 - Structure list with:

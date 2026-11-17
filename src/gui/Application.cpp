@@ -252,36 +252,6 @@ void Application::run() {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
-        // Update data bridges
-        if (m_patientPanel->hasData()) {
-            auto* data = m_patientPanel->getPatientData();
-
-            if (!m_appState.dicomLoaded()) {
-                m_appState.patientData = std::shared_ptr<PatientData>(
-                    data, [](PatientData*) {});
-            }
-
-            m_view3D->setPatientData(data);
-            m_axialView->setPatientData(data);
-            m_sagittalView->setPatientData(data);
-            m_coronalView->setPatientData(data);
-        }
-
-        if (m_appState.stfGenerated()) {
-            m_view3D->setStf(m_appState.stf.get());
-            m_stfPanel->setBeamRenderer(m_view3D->getBeamRenderer());
-        }
-
-        if (m_appState.phaseSpaceLoaded()) {
-            std::vector<const PhaseSpaceBeamSource*> sources;
-            sources.reserve(m_appState.phaseSpaceSources.size());
-            for (const auto& src : m_appState.phaseSpaceSources) {
-                sources.push_back(src.get());
-            }
-            m_view3D->setPhaseSpaceSources(sources);
-            m_phaseSpacePanel->setPhaseSpaceRenderer(m_view3D->getPhaseSpaceRenderer());
-        }
-        
         // Start ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -327,6 +297,27 @@ void Application::run() {
         
         // Render panels
         m_patientPanel->render();
+
+        // Imports can replace the patient and reset the plan in this frame.
+        auto* data = m_patientPanel->getPatientData();
+        m_view3D->setPatientData(data);
+        m_axialView->setPatientData(data);
+        m_sagittalView->setPatientData(data);
+        m_coronalView->setPatientData(data);
+
+        m_view3D->setStf(m_appState.stf.get());
+        m_stfPanel->setBeamRenderer(m_view3D->getBeamRenderer());
+
+        std::vector<const PhaseSpaceBeamSource*> sources;
+        if (m_appState.phaseSpaceLoaded()) {
+            sources.reserve(m_appState.phaseSpaceSources.size());
+            for (const auto& src : m_appState.phaseSpaceSources) {
+                sources.push_back(src.get());
+            }
+        }
+        m_view3D->setPhaseSpaceSources(sources);
+        m_phaseSpacePanel->setPhaseSpaceRenderer(m_view3D->getPhaseSpaceRenderer());
+
         m_planningPanel->render();
         m_stfPanel->render();
         if (m_phaseSpacePanel->isVisible()) {

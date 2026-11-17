@@ -37,8 +37,10 @@ void PatientPanel::render() {
         const float spacing = ImGui::GetStyle().ItemSpacing.x;
         const float btnW    = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
 
+        ImGui::BeginDisabled(m_state.taskRunning);
         if (ImGui::Button("Import DICOM", ImVec2(btnW, 0)))
             m_showImportDialog = true;
+        ImGui::EndDisabled();
 
         ImGui::SameLine();
 
@@ -74,7 +76,7 @@ void PatientPanel::render() {
     ImGui::Separator();
     
     // Show patient info if loaded
-    if (m_patientData) {
+    if (m_state.patientData) {
         renderPatientInfo();
         ImGui::Separator();
 
@@ -199,12 +201,12 @@ void PatientPanel::renderFileBrowser() {
 }
 
 void PatientPanel::renderPatientInfo() {
-    if (!m_patientData) return;
+    if (!m_state.patientData) return;
     
     if (ImGui::CollapsingHeader("Patient Information", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
         
-        if (auto* patient = m_patientData->getPatient()) {
+        if (auto* patient = m_state.patientData->getPatient()) {
             ImGui::Text("Name: %s", patient->getName().c_str());
             ImGui::Text("ID:   %s", patient->getID().c_str());
         }
@@ -212,7 +214,7 @@ void PatientPanel::renderPatientInfo() {
         ImGui::Unindent();
     }
     
-    if (auto* ct = m_patientData->getCTVolume()) {
+    if (auto* ct = m_state.patientData->getCTVolume()) {
         if (ImGui::CollapsingHeader("CT Volume")) {
             ImGui::Indent();
             
@@ -251,9 +253,9 @@ void PatientPanel::renderPatientInfo() {
 }
 
 void PatientPanel::renderStructureList() {
-    if (!m_patientData) return;
+    if (!m_state.patientData) return;
     
-    auto* structures = m_patientData->getStructureSet();
+    auto* structures = m_state.patientData->getStructureSet();
     if (!structures || structures->getCount() == 0) return;
     
     if (ImGui::BeginTable("Structures", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
@@ -447,6 +449,11 @@ void PatientPanel::renderDoseList() {
 
 void PatientPanel::importDicom(const std::string& path) {
     namespace fs = std::filesystem;
+
+    if (m_state.taskRunning) {
+        Logger::error("Cannot import DICOM while a task is running");
+        return;
+    }
     
     if (!fs::exists(path)) {
         Logger::error("Path does not exist: " + path);
@@ -457,9 +464,15 @@ void PatientPanel::importDicom(const std::string& path) {
     Logger::info("Importing DICOM from: " + path);
     
     // Import in main thread (for now - TODO: move to background thread)
-    m_patientData = m_importer.importAll(path);
+    auto patientData = m_importer.importAll(path);
     
-    if (m_patientData) {
+    if (patientData) {
+        m_state.resetAllDoses();
+        m_state.resetPlan();
+        m_state.resetLeafSequence();
+        m_state.patientData = std::move(patientData);
+        m_editingDoseIdx = -1;
+
         Logger::info("DICOM import successful");
         m_showImportDialog = false;
 
@@ -482,7 +495,7 @@ void PatientPanel::importDicom(const std::string& path) {
 void PatientPanel::exportAllStatsCSV() {
     namespace fs = std::filesystem;
 
-    if (!m_patientData) {
+    if (!m_state.patientData) {
         Logger::error("DoseStats CSV export: no patient data loaded");
         return;
     }
@@ -491,7 +504,7 @@ void PatientPanel::exportAllStatsCSV() {
     if (dm.count() == 0) return;
 
     std::string patientID;
-    if (auto* patient = m_patientData->getPatient()) patientID = patient->getID();
+    if (auto* patient = m_state.patientData->getPatient()) patientID = patient->getID();
     if (patientID.empty()) patientID = "UnknownPatient";
 
     const std::string outDir =
@@ -520,7 +533,7 @@ void PatientPanel::exportAllStatsCSV() {
     for (int i = 0; i < dm.count(); ++i) {
         const auto* entry = dm.getEntry(i);
         if (!entry || !entry->dose || !entry->grid) continue;
-        const auto& stats = m_state.getOrComputeStats(i, *m_patientData, rxDose);
+        const auto& stats = m_state.getOrComputeStats(i, *m_state.patientData, rxDose);
         writeDoseStatsCsvRows(f, entry->name, stats);
     }
 

@@ -18,8 +18,10 @@ public:
     std::string getName() const override { return "Patient"; }
     
     // Access to loaded data
-    PatientData* getPatientData() { return m_patientData.get(); }
-    bool hasData() const { return m_patientData != nullptr; }
+    PatientData* getPatientData() { return m_state.patientData.get(); }
+    bool hasData() const { return m_state.patientData != nullptr; }
+
+    void importDicom(const std::string& path);
     
 private:
     void renderImportDialog();
@@ -28,11 +30,9 @@ private:
     void renderStructureList();
     void renderDoseList();
     
-    void importDicom(const std::string& path);
     void exportAllStatsCSV();
     
     GuiAppState& m_state;
-    std::unique_ptr<PatientData> m_patientData;
     DicomImporter m_importer;
     
     // UI state

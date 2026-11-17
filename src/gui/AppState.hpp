@@ -310,7 +310,8 @@ struct GuiAppState {
     }
     void resetAllDoses() {
         doseStore.clear(); doseResult.reset(); displayGrid.reset(); computeGrid.reset();
-        optWeightsCache.clear(); seqCache.clear(); statsCache.clear(); activeOptDoseId = -1;
+        optWeightsCache.clear(); seqCache.clear(); arcCache.clear(); statsCache.clear(); activeOptDoseId = -1;
+        statsDoseIds.clear(); statsPatient = nullptr; statsPrescribedDose = 0.0;
     }
 };
 

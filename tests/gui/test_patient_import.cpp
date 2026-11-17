@@ -1,0 +1,186 @@
+#include <gtest/gtest.h>
+#include "gui/panels/PatientPanel.hpp"
+#include "gui/panels/DoseStatsPanel.hpp"
+#include "gui/panels/DVHPanel.hpp"
+#include <dcmtk/dcmdata/dctk.h>
+#include <imgui.h>
+#include <filesystem>
+
+namespace optirad::tests {
+
+class PatientImportGuiTest : public testing::Test {
+protected:
+    GuiAppState state;
+    std::filesystem::path dir;
+
+    void SetUp() override {
+        char uid[100];
+        dcmGenerateUniqueIdentifier(uid, SITE_INSTANCE_UID_ROOT);
+        dir = std::filesystem::path(testing::TempDir()) / ("optirad_import_" + std::string(uid));
+        ASSERT_TRUE(std::filesystem::create_directory(dir));
+        writeImage("ct.dcm", UID_CTImageStorage, {0, 0, 0, 0});
+        writeImage("dose.dcm", UID_RTDoseStorage, {1000, 2000, 3000, 4000});
+
+        DcmFileFormat file;
+        auto* ds = file.getDataset();
+        ASSERT_TRUE(ds->putAndInsertString(DCM_SOPClassUID, UID_RTStructureSetStorage).good());
+        DcmItem* roi = nullptr;
+        ASSERT_TRUE(ds->findOrCreateSequenceItem(DCM_StructureSetROISequence, roi, 0).good());
+        ASSERT_TRUE(roi->putAndInsertString(DCM_ROINumber, "1").good());
+        ASSERT_TRUE(roi->putAndInsertString(DCM_ROIName, "BODY").good());
+        DcmItem* contours = nullptr;
+        ASSERT_TRUE(ds->findOrCreateSequenceItem(DCM_ROIContourSequence, contours, 0).good());
+        ASSERT_TRUE(contours->putAndInsertString(DCM_ReferencedROINumber, "1").good());
+        DcmItem* contour = nullptr;
+        ASSERT_TRUE(contours->findOrCreateSequenceItem(DCM_ContourSequence, contour, 0).good());
+        ASSERT_TRUE(contour->putAndInsertString(DCM_ContourGeometricType, "CLOSED_PLANAR").good());
+        ASSERT_TRUE(contour->putAndInsertString(DCM_NumberOfContourPoints, "4").good());
+        ASSERT_TRUE(contour->putAndInsertString(
+            DCM_ContourData, "-0.5\\-0.5\\0\\1.5\\-0.5\\0\\1.5\\1.5\\0\\-0.5\\1.5\\0").good());
+        ASSERT_TRUE(file.saveFile((dir / "struct.dcm").c_str(), EXS_LittleEndianExplicit).good());
+
+        ImGui::CreateContext();
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = ImVec2(1600, 1200);
+        io.DeltaTime = 1.0f / 60.0f;
+        unsigned char* pixels;
+        int width, height;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    }
+
+    void TearDown() override {
+        ImGui::DestroyContext();
+        std::filesystem::remove_all(dir);
+    }
+
+    void writeImage(const char* name, const char* sopClass, const std::vector<Uint16>& pixels) {
+        DcmFileFormat file;
+        auto* ds = file.getDataset();
+        ASSERT_TRUE(ds->putAndInsertString(DCM_SOPClassUID, sopClass).good());
+        ASSERT_TRUE(ds->putAndInsertUint16(DCM_Rows, 2).good());
+        ASSERT_TRUE(ds->putAndInsertUint16(DCM_Columns, 2).good());
+        ASSERT_TRUE(ds->putAndInsertUint16(DCM_BitsAllocated, 16).good());
+        ASSERT_TRUE(ds->putAndInsertString(DCM_PixelSpacing, "1\\1").good());
+        ASSERT_TRUE(ds->putAndInsertString(DCM_ImagePositionPatient, "0\\0\\0").good());
+        ASSERT_TRUE(ds->putAndInsertString(DCM_ImageOrientationPatient, "1\\0\\0\\0\\1\\0").good());
+        ASSERT_TRUE(ds->putAndInsertString(DCM_RescaleSlope, "1").good());
+        ASSERT_TRUE(ds->putAndInsertString(DCM_RescaleIntercept, "0").good());
+        ASSERT_TRUE(ds->putAndInsertString(DCM_DoseGridScaling, "0.01").good());
+        ASSERT_TRUE(ds->putAndInsertUint16Array(DCM_PixelData, pixels.data(), pixels.size()).good());
+        ASSERT_TRUE(file.saveFile((dir / name).c_str(), EXS_LittleEndianExplicit).good());
+    }
+
+    void expectStats(double scale = 1.0) {
+        const auto* entry = state.doseStore.getSelected();
+        ASSERT_NE(entry, nullptr);
+        const auto it = state.statsCache.find(entry->id);
+        ASSERT_NE(it, state.statsCache.end());
+        ASSERT_EQ(it->second.size(), 1u);
+        const auto& stats = it->second.front();
+        EXPECT_EQ(stats.name, "BODY");
+        EXPECT_EQ(stats.numVoxels, 4u);
+        EXPECT_DOUBLE_EQ(stats.minDose, 10.0 * scale);
+        EXPECT_DOUBLE_EQ(stats.maxDose, 40.0 * scale);
+        EXPECT_DOUBLE_EQ(stats.meanDose, 25.0 * scale);
+        EXPECT_DOUBLE_EQ(stats.coveragePercent(), 100.0);
+        const auto curves = PlanAnalysis::computeDVHCurves(it->second, 40.0 * scale, 5);
+        ASSERT_EQ(curves.size(), 1u);
+        EXPECT_FLOAT_EQ(curves.front().volumes.front(), 100.0f);
+        EXPECT_FLOAT_EQ(curves.front().volumes.back(), 25.0f);
+    }
+};
+
+TEST_F(PatientImportGuiTest, ImportedDoseIsAnalysedInTheImportFrameWithoutAPlan) {
+    PatientPanel patient(state);
+    DoseStatsPanel stats(state);
+    DVHPanel dvh(state);
+    ImGui::NewFrame();
+    patient.importDicom(dir.string());
+    ASSERT_TRUE(state.dicomLoaded());
+    EXPECT_EQ(patient.getPatientData(), state.patientData.get());
+    ASSERT_TRUE(state.doseAvailable());
+    EXPECT_EQ(state.doseResult, state.doseStore.getSelected()->dose);
+    EXPECT_EQ(state.displayGrid, state.doseStore.getSelected()->grid);
+    EXPECT_FALSE(state.planCreated());
+    EXPECT_FALSE(state.optimizationDone());
+
+    stats.render();
+    expectStats();
+    state.statsCache.clear();
+    dvh.render();
+    expectStats();
+    ImGui::Render();
+}
+
+TEST_F(PatientImportGuiTest, ReimportRefreshesBothPanelsForTheNewDose) {
+    PatientPanel patient(state);
+    DoseStatsPanel stats(state);
+    DVHPanel dvh(state);
+    patient.importDicom(dir.string());
+    ASSERT_TRUE(state.patientData);
+    ImGui::NewFrame();
+    stats.render();
+    dvh.render();
+    expectStats();
+    ImGui::Render();
+
+    writeImage("dose.dcm", UID_RTDoseStorage, {2000, 4000, 6000, 8000});
+    ImGui::NewFrame();
+    patient.importDicom(dir.string());
+    EXPECT_EQ(state.doseStore.count(), 1);
+    stats.render();
+    expectStats(2.0);
+    state.statsCache.clear();
+    dvh.render();
+    expectStats(2.0);
+    ImGui::Render();
+}
+
+TEST_F(PatientImportGuiTest, ReplacementWithoutDoseClearsOldPatientResults) {
+    PatientPanel patient(state);
+    patient.importDicom(dir.string());
+    ASSERT_TRUE(state.patientData);
+    auto oldPatient = state.patientData;
+    state.plan = std::make_shared<Plan>();
+    state.arcCache[1] = {};
+    state.getOrComputeStats(0, *state.patientData);
+    ASSERT_FALSE(state.statsCache.empty());
+    ASSERT_TRUE(std::filesystem::remove(dir / "dose.dcm"));
+
+    patient.importDicom(dir.string());
+    ASSERT_TRUE(patient.hasData());
+    EXPECT_NE(state.patientData, oldPatient);
+    EXPECT_FALSE(state.planCreated());
+    EXPECT_FALSE(state.doseAvailable());
+    EXPECT_EQ(state.doseStore.count(), 0);
+    EXPECT_EQ(state.doseResult, nullptr);
+    EXPECT_EQ(state.displayGrid, nullptr);
+    EXPECT_TRUE(state.statsCache.empty());
+    EXPECT_TRUE(state.arcCache.empty());
+}
+
+TEST_F(PatientImportGuiTest, FailedImportPreservesTheCurrentPatientAndDose) {
+    PatientPanel patient(state);
+    patient.importDicom(dir.string());
+    ASSERT_TRUE(state.patientData);
+    const auto oldPatient = state.patientData;
+    const auto oldDose = state.doseResult;
+    const int version = state.doseStore.version();
+
+    ASSERT_TRUE(std::filesystem::create_directory(dir / "empty"));
+    patient.importDicom((dir / "empty").string());
+    EXPECT_EQ(state.patientData, oldPatient);
+    EXPECT_EQ(state.doseResult, oldDose);
+    EXPECT_EQ(state.doseStore.version(), version);
+}
+
+TEST_F(PatientImportGuiTest, ImportCannotReplacePatientWhileATaskIsRunning) {
+    PatientPanel patient(state);
+    state.taskRunning = true;
+    patient.importDicom(dir.string());
+    EXPECT_FALSE(patient.hasData());
+    EXPECT_FALSE(state.doseAvailable());
+}
+
+} // namespace optirad::tests
