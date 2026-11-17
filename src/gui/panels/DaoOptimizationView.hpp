@@ -37,7 +37,7 @@ private:
     int m_iterations = ArcOptimizationConfig{}.iterationsPerResolution;
     float m_coarsestSpacing = static_cast<float>(ArcOptimizationConfig{}.coarsestSpacingDeg);
     float m_muPenalty = static_cast<float>(ArcOptimizationConfig{}.muPenalty);
-    float m_muSmoothing = static_cast<float>(ArcOptimizationConfig{}.muSmoothingWeight);
+    float m_muSmoothing = static_cast<float>(ArcOptimizationConfig{}.muSmoothing);
     bool m_integrateMotion = ArcOptimizationConfig{}.integrateLeafMotion;
 
     std::atomic<bool> m_running{false};

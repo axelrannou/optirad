@@ -201,15 +201,15 @@ TEST(OptimizationLoggingTest, ReportsWeightedContributionsIncludingTheNto) {
     deviation.setWeight(2.0);
     deviation.setVoxelIndices({0, 1});
     NormalTissueObjective nto({0, 1}, {1.5, 1.5}, "test");
-    nto.setWeight(2.0);   // sum: 2 * (0.5^2 + 1.5^2)
+    nto.setWeight(2.0);   // mean: 2 * (0.5^2 + 1.5^2) / 2
     testing::internal::CaptureStdout();
     logOptimizationBreakdown("Test", {&deviation, &nto}, {2.0, 3.0}, {{"Extra", 1.0}});
     const auto log = testing::internal::GetCapturedStdout();
     EXPECT_DOUBLE_EQ(loggedValue(log, "weight=2 voxels=2: cost="), 5.0);
-    EXPECT_DOUBLE_EQ(loggedValue(log, "NTO (test) priority=2 voxels=2: cost="), 5.0);
+    EXPECT_DOUBLE_EQ(loggedValue(log, "NTO (test) priority=2 voxels=2: cost="), 2.5);
     EXPECT_DOUBLE_EQ(loggedValue(log, "Extra: cost="), 1.0);
-    EXPECT_DOUBLE_EQ(loggedValue(log, "breakdown total="), 11.0);
-    EXPECT_NE(log.find("share=45.45%"), std::string::npos);
+    EXPECT_DOUBLE_EQ(loggedValue(log, "breakdown total="), 8.5);
+    EXPECT_NE(log.find("share=58.82%"), std::string::npos);
     EXPECT_EQ(log.find("hotspot"), std::string::npos);
 }
 
@@ -238,9 +238,9 @@ TEST(OptimizationLoggingTest, ReportsEachMixedObjectiveWithItsOwnWeightAndNormal
     EXPECT_DOUBLE_EQ(loggedValue(log, deviation.describe() + ": cost="), 9.0);
     EXPECT_DOUBLE_EQ(loggedValue(log, overdose.describe() + ": cost="), 5.0);
     EXPECT_DOUBLE_EQ(loggedValue(log, underdose.describe() + ": cost="), 10.0);
-    EXPECT_DOUBLE_EQ(loggedValue(log, minDvh.describe() + ": cost="), 3.0);
-    EXPECT_DOUBLE_EQ(loggedValue(log, maxDvh.describe() + ": cost="), 20.0);
-    EXPECT_DOUBLE_EQ(loggedValue(log, "breakdown total="), 47.0);
+    EXPECT_DOUBLE_EQ(loggedValue(log, minDvh.describe() + ": cost="), 0.75);
+    EXPECT_DOUBLE_EQ(loggedValue(log, maxDvh.describe() + ": cost="), 5.0);
+    EXPECT_DOUBLE_EQ(loggedValue(log, "breakdown total="), 29.75);
 }
 
 TEST(OptimizationLoggingTest, ZeroCostIsReportedWithoutNan) {

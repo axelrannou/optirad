@@ -110,7 +110,7 @@ VMAT plans are always optimized with progressive-resolution DAO, the approach of
 
 The L-BFGS direction is computed on the projected gradient (variables on an active bound are excluded), and each resolution stops at its iteration budget or when the best cost improves less than 0.1 % over 40 accepted steps.
 
-Leaf-speed and ordering limits are quadratic penalties during the iterations (box limits on tips and MU are clamped), and an exact projection repairs the result at the end of every resolution (projecting after each step turned descent directions into ascent directions). MU smoothing between neighbouring control points (`muSmoothingWeight`) and an optional total-MU penalty (`muPenalty`, fraction of the initial objective, default 0) are added to the cost.
+Leaf-speed and ordering limits are quadratic penalties during the iterations (box limits on tips and MU are clamped), and an exact projection repairs the result at the end of every resolution (projecting after each step turned descent directions into ascent directions). A scale-free MU smoothing between neighbouring control points (`muSmoothing`, default 0.2: cost = muSmoothing × objective at the second resolution × mean((ΔMU / mean MU)²), so it does not depend on the objective weights or the MU scale; it keeps the MU from piling up in a few control points, which shows as streaks in the dose) and an optional total-MU penalty (`muPenalty`, fraction of the initial objective, default 0) are added to the cost.
 
 The selected compute backend also applies to the final delivered-dose calculation. `Auto` tries CUDA and logs a warning if it falls back to CPU; `CUDA` requires GPU execution; `CPU` disables it.
 

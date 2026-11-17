@@ -22,19 +22,20 @@ struct BuiltObjectives {
 class ObjectiveBuilder {
 public:
     /// Build objectives from a protocol, adding PTV targets from the structure set.
-    /// PTV structures are auto-detected and get MinDVH D98% objectives.
+    /// Target structures are auto-detected and get MinDVH D98% >= Rx, MaxDVH 0% <= 105% Rx and
+    /// SquaredDeviation(Rx) objectives (the GUI "Recommended" template).
     /// @param protocol     OAR objectives specification
     /// @param patientData  Patient with structure set
     /// @param ctGrid       CT grid (for voxel index mapping)
     /// @param doseGrid     Dose grid (for voxel index mapping)
-    /// @param targetDose   Prescribed dose for PTV objectives (Gy)
+    /// @param targetDose   Prescribed dose for PTV objectives (Gy); required, throws if not > 0
     /// @param targetWeight Weight for PTV objectives
     static BuiltObjectives build(
         const ObjectiveProtocol& protocol,
         const PatientData& patientData,
         const Grid& ctGrid,
         const Grid& doseGrid,
-        double targetDose = 66.0,
+        double targetDose,
         double targetWeight = 100.0);
 
     /// Build objectives from a flat list of ObjectiveSpec (without auto-PTV detection).

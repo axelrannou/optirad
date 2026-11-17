@@ -60,9 +60,12 @@ void OptimizationPanel::render() {
     // ── Initialize objectives from curated structure list ──
     // Only include clinically relevant structures with protocol-appropriate defaults.
     // User can still add/remove objectives via the table UI.
-    if (!m_objectivesInitialized && m_state.patientData && m_state.patientData->getStructureSet()) {
+    // The template is only built once a prescription is known (no assumed dose).
+    if (!m_objectivesInitialized && m_state.patientData && m_state.patientData->getStructureSet() &&
+        templatePrescription() > 0.0) {
         const auto* ss = m_state.patientData->getStructureSet();
-        
+        const float rx = static_cast<float>(templatePrescription());
+
         // Curated default objectives: structure name pattern -> {typeIdx, dose, weight, volPct}
         struct DefaultObjective {
             std::string namePattern;  // exact match or substring
@@ -92,17 +95,22 @@ void OptimizationPanel::render() {
             std::string name = s->getName();
 
             if (s->getType() == "PTV") {
+                // Tested template (patient1 VMAT DAO ~ Eclipse homogeneity), all priorities 100 (volume-normalized):
+                // Lower D98% >= Rx, Upper 0% <= 105% Rx (caps the maximum) and Squared Deviation to Rx, which
+                // makes the target dose homogeneous.
                 ObjectiveConfig obj;
                 obj.structureName = name;
-                obj.typeIdx = 3;        // MinDVH
-                obj.doseValue = 66.0f;
                 obj.weight = 100.0f;
+                obj.typeIdx = 3;        // MinDVH
+                obj.doseValue = rx;
                 obj.volumePct = 98.0f;
                 m_objectives.push_back(obj);
-                // Eclipse "Upper 0%": caps the target maximum (MinDVH alone pushes the dose up freely)
-                obj.typeIdx = 4;
-                obj.doseValue = 69.3f;
+                obj.typeIdx = 4;        // MaxDVH
+                obj.doseValue = 1.05f * rx;
                 obj.volumePct = 0.0f;
+                m_objectives.push_back(obj);
+                obj.typeIdx = 0;        // Squared Deviation
+                obj.doseValue = rx;
                 m_objectives.push_back(obj);
             }
 
@@ -218,7 +226,36 @@ void OptimizationPanel::render() {
 
         // Add objective button
         if (m_state.patientData && m_state.patientData->getStructureSet()) {
+            ImGui::SetNextItemWidth(80);
+            ImGui::InputFloat("Prescription (Gy)", &m_prescriptionGy, 0.0f, 0.0f, "%.1f");
+            m_prescriptionGy = std::max(m_prescriptionGy, 0.0f);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Prescription used by the Recommended template and the NTO.\n"
+                                  "0 = use the plan prescription (template) / target lower objectives (NTO).");
+            const char* rxSource = nullptr;
+            const double templateRx = templatePrescription(&rxSource);
+            ImGui::SameLine();
+            if (templateRx > 0.0) {
+                ImGui::TextDisabled("template Rx %.1f Gy (%s)", templateRx, rxSource);
+            } else {
+                ImGui::TextColored(getThemeColors().failText, "No prescription: enter it to use the template");
+            }
+            if (templateRx <= 0.0) ImGui::BeginDisabled();
+            if (ImGui::Button("Recommended")) {
+                m_objectives.clear();
+                m_objectivesInitialized = false;
+                m_nto = OptimizationConfig{}.nto;
+            }
+            if (templateRx <= 0.0) ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Replace the objectives and the NTO by the recommended template:\n"
+                                  "PTV Lower D98%% >= Rx, Upper 0%% <= 105%% Rx, Squared Deviation Rx (priority 100 each),\n"
+                                  "OAR protocol objectives and NTO priority 100 (1 mm, 105%% -> 60%%, 0.05/mm).\n"
+                                  "Rx = Prescription (Gy) field, else the plan prescription.\n"
+                                  "Disabled until one of them is set: no dose is assumed.");
+            ImGui::SameLine();
             if (ImGui::Button("+ Add Objective")) {
+                m_objectivesInitialized = true;   // manual objectives: don't add the template later
                 ObjectiveConfig obj;
                 const auto* ss = m_state.patientData->getStructureSet();
                 if (ss->getCount() > 0 && ss->getStructure(0)) {
@@ -356,8 +393,13 @@ void OptimizationPanel::render() {
                                       });
         if (!canOptimize) {
             ImGui::TextColored(getThemeColors().failText, "No valid PTV constraints.");
-            ImGui::BeginDisabled();
+        } else if (prescription() <= 0.0) {
+            canOptimize = false;
+            ImGui::TextColored(getThemeColors().failText, "No prescription: set Prescription (Gy).");
+        } else {
+            ImGui::TextDisabled("Prescription for the NTO: %.1f Gy", prescription());
         }
+        if (!canOptimize) ImGui::BeginDisabled();
 
         if (dao) {
             const bool taskBusy = m_state.taskRunning;
@@ -366,7 +408,7 @@ void OptimizationPanel::render() {
                 double prescriptionDose = 0.0;
                 auto specs = buildSpecs(prescriptionDose);
                 OptimizationConfig config;
-                config.targetDose = prescriptionDose > 0 ? prescriptionDose : 66.0;
+                config.targetDose = prescriptionDose;
                 config.nto = m_nto;
                 m_dao.start(std::move(specs), config);
             }
@@ -430,7 +472,7 @@ void OptimizationPanel::render() {
                     OptimizationConfig config;
                     config.maxIterations = maxIter;
                     config.tolerance = static_cast<double>(tolerance);
-                    config.targetDose = prescriptionDose > 0 ? prescriptionDose : 66.0;
+                    config.targetDose = prescriptionDose;
                     config.nto = nto;
                     config.spatialSmoothingWeight = smoothingEnabled ? static_cast<double>(spatialSmoothingWeight) : 0.0;
                     config.l2RegWeight = l2RegEnabled ? static_cast<double>(l2RegWeight) : 0.0;
@@ -520,6 +562,19 @@ std::vector<ObjectiveSpec> OptimizationPanel::buildSpecs(double& prescriptionDos
     return specs;
 }
 
+double OptimizationPanel::templatePrescription(const char** source) const {
+    if (m_prescriptionGy > 0.0f) {
+        if (source) *source = "Prescription field";
+        return m_prescriptionGy;
+    }
+    if (m_state.plan && m_state.plan->getPrescribedDose() > 0.0) {
+        if (source) *source = "plan prescription";
+        return m_state.plan->getPrescribedDose();
+    }
+    if (source) *source = "none";
+    return 0.0;
+}
+
 double OptimizationPanel::prescription() const {
     if (m_prescriptionGy > 0.0f) return m_prescriptionGy;
     if (!m_state.patientData || !m_state.patientData->getStructureSet()) return 0.0;
@@ -540,16 +595,12 @@ void OptimizationPanel::renderNto() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Upper dose limit on the body outside the targets that falls off with the distance\n"
                           "from the target border (Eclipse NTO). Hot spots inside targets need Upper objectives.");
-    ImGui::SetNextItemWidth(120);
-    ImGui::InputFloat("Prescription (Gy)", &m_prescriptionGy, 0.0f, 0.0f, "%.1f");
-    m_prescriptionGy = std::max(m_prescriptionGy, 0.0f);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Dose the NTO percentages refer to. 0 = highest lower objective on a target\n"
-                          "(MinDVH / Squared Deviation / Underdose); target upper objectives are ignored.");
     const double rx = prescription();
-    ImGui::SameLine();
-    if (rx > 0.0) ImGui::TextDisabled("using %.1f Gy", rx);
-    else ImGui::TextDisabled("no target objective");
+    if (rx > 0.0) ImGui::TextDisabled("NTO percentages refer to Rx = %.1f Gy", rx);
+    else ImGui::TextDisabled("NTO Rx: no prescription");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Prescription (Gy) field above the objectives; if 0, the highest lower objective on a\n"
+                          "target (MinDVH / Squared Deviation / Underdose). Target upper objectives are ignored.");
     if (!m_nto.enabled) ImGui::BeginDisabled();
     auto inputDouble = [](const char* label, double& value, const char* format, double minValue, const char* tip) {
         float v = static_cast<float>(value);

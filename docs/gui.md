@@ -201,17 +201,23 @@ class IPanel {
 - Per-structure objective configuration:
   - Objective type selector (SquaredDeviation, SquaredOverdose, SquaredUnderdose, DVH MIN, DVH MAX)
   - Dose/volume parameters
-  - Weight sliders
+  - Weight sliders (volume-normalized priorities: ~100 for targets and the NTO is a good start)
+- **Prescription (Gy)** field, with the template Rx and its source shown next to it ("Prescription
+  field" or "plan prescription"); 0 = use the plan prescription
+- **Recommended** button: replaces the objectives and NTO by the tested template (per PTV Lower
+  D98% ≥ Rx, Upper 0% ≤ 105% Rx, Squared Deviation Rx, priority 100; OAR protocol; NTO 100).
+  Disabled, and the template is not loaded for a new patient, until a prescription is known
+  (no dose is assumed); *Run* is disabled without a prescription
 - Optimizer settings:
   - Max iterations
   - Convergence tolerance
   - Max fluence
   - Memory size (L-BFGS)
-- Normal Tissue Objective (Eclipse-style, one for IMRT and VMAT): Use NTO, prescription (Gy,
-  0 = highest lower target objective), priority, distance from target border (mm, default 1),
+- Normal Tissue Objective (Eclipse-style, one for IMRT and VMAT): Use NTO, the Rx it uses (Prescription
+  field, else the highest lower target objective), priority, distance from target border (mm, default 1),
   start dose (% Rx), end dose (% Rx), fall-off (/mm), and a preview of the limit curve (0–50 mm)
 - VMAT plans: Direct Aperture Optimization settings (iterations per resolution, first control
-  point spacing, MU penalty, MU smoothing, integrate leaf motion), **Run DAO** button, status and
+  point spacing, MU penalty, relative MU smoothing (default 0.2), integrate leaf motion), **Run DAO** button, status and
   the live DAO Progress charts/bars (`DaoOptimizationView`)
 - IMRT plans: **Optimize** button → runs `LBFGSOptimizer::optimize()` (async), progress bar
 

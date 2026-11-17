@@ -86,6 +86,9 @@ private:
     /// Prescription for the NTO: the manual value, else the highest lower objective dose on a target
     /// (Squared Deviation / Underdose, MinDVH); upper objectives are hot-spot limits, not the prescription.
     double prescription() const;
+    /// Prescription for the Recommended template: the Prescription (Gy) field, else the plan
+    /// prescription; 0 (no template) if neither is set. @p source names where it came from.
+    double templatePrescription(const char** source = nullptr) const;
     void renderConvergenceCurve(const std::vector<IterationInfo>& log);
 };
 

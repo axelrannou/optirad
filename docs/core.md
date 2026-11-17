@@ -405,7 +405,7 @@ struct DoseCalcPipelineOptions {
 struct OptimizationConfig {
     int maxIterations = 400;
     double tolerance = 1e-5;
-    double targetDose = 66.0;
+    double targetDose = 0.0;   // prescription (Gy), required: the pipelines throw if not > 0
     NtoSettings nto;   // Eclipse-style normal tissue objective
     double spatialSmoothingWeight = 0.0;
     double l2RegWeight = 0.0;

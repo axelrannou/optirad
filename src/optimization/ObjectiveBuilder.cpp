@@ -5,6 +5,8 @@
 #include "objectives/SquaredDeviation.hpp"
 #include "geometry/StructureSet.hpp"
 #include "utils/Logger.hpp"
+#include <stdexcept>
+#include <cmath>
 
 namespace optirad {
 
@@ -59,33 +61,31 @@ BuiltObjectives ObjectiveBuilder::build(
     double targetDose,
     double targetWeight) {
 
+    if (targetDose <= 0.0 || !std::isfinite(targetDose))
+        throw std::invalid_argument("ObjectiveBuilder: no prescription (target dose must be > 0 Gy)");
     BuiltObjectives result;
     const auto* ss = patientData.getStructureSet();
     if (!ss || ss->getCount() == 0) return result;
 
-    // Auto-add PTV objectives: MinDVH D98% for each target structure
+    // Auto-add the target template for each target structure (same as the GUI "Recommended"):
+    // MinDVH D98% >= Rx, MaxDVH 0% <= 105% Rx and SquaredDeviation to Rx, all with the target weight.
     for (size_t i = 0; i < ss->getCount(); ++i) {
         const auto* structure = ss->getStructure(i);
         if (!structure || structure->getVoxelIndices().empty()) continue;
         if (!structure->isTarget()) continue;
 
         auto doseIndices = Grid::mapVoxelIndices(ctGrid, doseGrid, structure->getVoxelIndices());
-
-        auto obj = std::make_unique<DVHObjective>();
-        obj->setType(DVHObjective::Type::MIN_DVH);
-        obj->setDoseThreshold(targetDose);
-        obj->setVolumeFraction(0.98);
-        obj->setWeight(targetWeight);
-        obj->setStructure(structure);
-        obj->setVoxelIndices(doseIndices);
-
-        Logger::info("ObjectiveBuilder: Target " + structure->getName() +
-                     " -> MinDVH D98% >= " + std::to_string(targetDose) +
-                     " Gy (w=" + std::to_string(targetWeight) + ", " +
-                     std::to_string(doseIndices.size()) + " voxels)");
-
-        result.ptrs.push_back(obj.get());
-        result.owned.push_back(std::move(obj));
+        for (const ObjectiveSpec& spec : {ObjectiveSpec{"", true, 3, targetDose, targetWeight, 98.0},
+                                          ObjectiveSpec{"", true, 4, 1.05 * targetDose, targetWeight, 0.0},
+                                          ObjectiveSpec{"", true, 0, targetDose, targetWeight, 0.0}}) {
+            auto obj = createObjective(spec);
+            obj->setWeight(spec.weight);
+            obj->setStructure(structure);
+            obj->setVoxelIndices(doseIndices);
+            Logger::info("ObjectiveBuilder: Target " + structure->getName() + " -> " + obj->describe());
+            result.ptrs.push_back(obj.get());
+            result.owned.push_back(std::move(obj));
+        }
     }
 
     // Add OAR objectives from protocol

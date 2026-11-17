@@ -9,20 +9,20 @@ std::string DVHObjective::getName() const {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Voxel-sorting DVH penalty (matches matRad formulation: raw sum, no 1/N)
+// Voxel-sorting DVH penalty (matRad formulation, normalized by the structure voxel count N)
 //
 // MinDVH D_v% >= d:
 //   At least v% of volume should receive >= d.
 //   The lowest (1-v)% are "free"; remaining voxels MUST be >= d.
-//   Penalty = weight * SUM_{violating} (d - dose_i)^2
+//   Penalty = weight / N * SUM_{violating} (d - dose_i)^2
 //
 // MaxDVH V_d <= v%:
 //   At most v% of volume should receive >= d.
 //   The highest v% are "free"; remaining voxels MUST be < d.
-//   Penalty = weight * SUM_{violating} (dose_i - d)^2
+//   Penalty = weight / N * SUM_{violating} (dose_i - d)^2
 //
-// No 1/N normalization: the raw sum scales naturally with the number of
-// violating voxels, producing gradients that compete with NTO.
+// As for every objective, the 1/N makes the weight independent of the structure size and the dose grid
+// resolution (Eclipse-like priorities).
 // ─────────────────────────────────────────────────────────────────────────────
 
 double DVHObjective::compute(const std::vector<double>& dose) const {
@@ -64,7 +64,7 @@ double DVHObjective::compute(const std::vector<double>& dose) const {
         }
     }
     
-    return m_weight * obj;
+    return m_weight * obj / static_cast<double>(indices.size());
 }
 
 std::vector<double> DVHObjective::gradient(const std::vector<double>& dose) const {
@@ -83,7 +83,7 @@ std::vector<double> DVHObjective::gradient(const std::vector<double>& dose) cons
     
     std::sort(sortedDoses.begin(), sortedDoses.end());
     size_t N = sortedDoses.size();
-    double scale = 2.0 * m_weight;
+    double scale = 2.0 * m_weight / static_cast<double>(indices.size());
     
     if (m_type == Type::MIN_DVH) {
         size_t numFree = static_cast<size_t>(std::floor((1.0 - m_volumeFraction) * N));

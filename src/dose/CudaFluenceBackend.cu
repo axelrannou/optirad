@@ -506,14 +506,15 @@ bool CudaFluenceBackend::evaluateObjectives(BixelLayout& layout, const std::vect
         if (!count) continue;
         const size_t* indices = workspace.deviceIndices.data + offset;
         size_t begin = 0, end = count;
-        double scale = objective.weight;
+        // Every objective is a mean over its voxels.
+        const double scale = objective.weight / static_cast<double>(objective.indices.size());
         if (objective.type >= 3) {
             rankDoses<<<blocks(count), 256>>>(indices, count, state.dose.data, workspace.ranked.data);
             auto ranked = thrust::device_pointer_cast(workspace.ranked.data);
             thrust::sort(ranked, ranked + count, DoseRankLess{});
             if (objective.type == 3) begin = static_cast<size_t>(std::floor((1.0 - objective.volumeFraction) * count));
             else end = count - std::min(count, static_cast<size_t>(std::ceil(objective.volumeFraction * count)));
-        } else scale /= objective.indices.size();
+        }
         const double* thresholds = workspace.hasThresholds[index] ? workspace.deviceThresholds.data + offset : nullptr;
         doseObjective<<<blocks(count), 256>>>(indices, workspace.ranked.data, count, begin, end, objective.type,
             objective.threshold, thresholds, scale, state.dose.data, workspace.gradient.data, workspace.value.data);

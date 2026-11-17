@@ -8,6 +8,7 @@
 #include <chrono>
 #include <unordered_map>
 #include <cmath>
+#include <stdexcept>
 
 namespace optirad {
 
@@ -86,6 +87,8 @@ static OptimizationPipelineResult runImpl(
     const Stf* stf,
     const Plan* plan) {
 
+    if (config.targetDose <= 0.0 || !std::isfinite(config.targetDose))
+        throw std::invalid_argument("OptimizationPipeline: no prescription (targetDose must be > 0 Gy)");
     OptimizationPipelineResult result;
 
     ObjectiveBuilder::addNormalTissueObjective(objectives, config.nto, config.targetDose, patientData, doseGrid, &dij);

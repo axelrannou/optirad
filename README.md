@@ -122,7 +122,7 @@ cd build
 ```
 --max-iter <n>               Max iterations (default: 500)
 --tolerance <val>            Convergence tolerance (default: 1e-5)
---target-dose <Gy>           Prescribed dose for targets (default: 60)
+--target-dose <Gy>           Prescribed dose for targets (required unless the plan has one)
 --oar-max-dose <Gy>          Max dose for OARs (default: 30)
 ```
 

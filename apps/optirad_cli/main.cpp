@@ -23,6 +23,7 @@
 #include <chrono>
 #include <algorithm>
 #include <numeric>
+#include <cmath>
 #include <iomanip>
 
 using namespace optirad;
@@ -81,7 +82,7 @@ void printUsage(const char* progName) {
               << "Optimize options:\n"
               << "  --max-iter <n>                   Max iterations (default: " << optDefaults.maxIterations << ")\n"
               << "  --tolerance <val>                Convergence tolerance (default: " << optDefaults.tolerance << ")\n"
-              << "  --target-dose <Gy>               Prescribed dose for targets (default: " << optDefaults.targetDose << ")\n"
+              << "  --target-dose <Gy>               Prescribed dose for targets (required unless the plan has a prescription)\n"
               << "  --smooth <w> | --l2-reg <w> | --l1-reg <w>  Spatial smoothing / L2 / L1 (total MU) regularization (default: off)\n"
               << "\nNormal tissue objective (optimize and arcSeq; Eclipse-style dose fall-off from the target border):\n"
               << "  --nto-priority <w>               Priority (default: " << optDefaults.nto.priority << ")\n"
@@ -99,10 +100,10 @@ void printUsage(const char* progName) {
               << "  --dao-iter <n>                   Iterations per resolution, x2 at the last (default: " << arcDefaults.iterationsPerResolution << ")\n"
               << "  --dao-coarsest <deg>             Control point spacing of the first resolution (default: " << arcDefaults.coarsestSpacingDeg << ")\n"
               << "  --mu-penalty <f>                 Total-MU penalty as a fraction of the objective; 0 = off (default: " << arcDefaults.muPenalty << ")\n"
-              << "  --mu-smooth <w>                  Penalty on MU differences between neighbouring control points (default: " << arcDefaults.muSmoothingWeight << ")\n"
+              << "  --mu-smooth <f>                  Relative penalty on MU differences between neighbouring control points (default: " << arcDefaults.muSmoothing << ")\n"
               << "  --no-icm                         Dose of a control point from its static aperture (no leaf motion)\n"
               << "  --fluence-pixel <mm>             Matrix-free fluence pixel size (default: " << arcDefaults.fluencePixelMm << ")\n"
-              << "  --target-dose <Gy>               Prescribed dose (default: plan prescription or " << optDefaults.targetDose << ")\n\n"
+              << "  --target-dose <Gy>               Prescribed dose (required unless the plan has a prescription)\n\n"
               << "Export RT Plan options:\n"
               << "  --output <dir>                   Output directory for RT Plan file (default: ./rtplan_export)\n\n"
               << "Phase-space options:\n"
@@ -617,17 +618,21 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
     cfg.computeBackend = state.computeBackend;
     cfg.gpuMemoryBudgetMiB = state.gpuMemoryBudgetMiB;
     if (state.doseOp) cfg.engineOptions = state.doseOp->engineOptions();
-    cfg.base.targetDose = state.plan->getPrescribedDose() > 0.0 ? state.plan->getPrescribedDose() : cfg.base.targetDose;
+    cfg.base.targetDose = state.plan->getPrescribedDose();
+    std::string rxSource = "plan prescription";
     double doseResolution = DoseCalcPipelineOptions{}.resolution[0];
     int numThreads = 0;
     bool excludeExternal = DoseCalcPipelineOptions{}.excludeExternal;
     for (size_t i = 0; i < args.size(); ++i) {
         if (parseNtoArg(args, i, cfg.base.nto)) continue;
-        if (args[i] == "--target-dose" && i + 1 < args.size()) cfg.base.targetDose = std::stod(args[++i]);
+        if (args[i] == "--target-dose" && i + 1 < args.size()) {
+            cfg.base.targetDose = std::stod(args[++i]);
+            rxSource = "--target-dose";
+        }
         else if (args[i] == "--dao-iter" && i + 1 < args.size()) cfg.iterationsPerResolution = std::stoi(args[++i]);
         else if (args[i] == "--dao-coarsest" && i + 1 < args.size()) cfg.coarsestSpacingDeg = std::stod(args[++i]);
         else if (args[i] == "--mu-penalty" && i + 1 < args.size()) cfg.muPenalty = std::stod(args[++i]);
-        else if (args[i] == "--mu-smooth" && i + 1 < args.size()) cfg.muSmoothingWeight = std::stod(args[++i]);
+        else if (args[i] == "--mu-smooth" && i + 1 < args.size()) cfg.muSmoothing = std::stod(args[++i]);
         else if (args[i] == "--no-icm") cfg.integrateLeafMotion = false;
         else if (args[i] == "--fluence-pixel" && i + 1 < args.size()) cfg.fluencePixelMm = std::stod(args[++i]);
         else if (args[i] == "--dose-resolution" && i + 1 < args.size()) doseResolution = std::stod(args[++i]);
@@ -641,6 +646,10 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
             else { std::cerr << "Error: --backend must be auto, cpu or cuda\n"; return 1; }
         }
         else if (args[i] == "--gpu-memory-mb" && i + 1 < args.size()) cfg.gpuMemoryBudgetMiB = std::stoull(args[++i]);
+    }
+    if (!(cfg.base.targetDose > 0.0) || !std::isfinite(cfg.base.targetDose)) {
+        std::cerr << "Error: no prescription. Pass --target-dose <Gy> (the plan has none).\n";
+        return 1;
     }
     // DAO needs no Dij and no fluence optimization: only a dose grid and the engine settings.
     if (!state.displayGrid) {
@@ -656,6 +665,7 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
     if (res > 0.0) cfg.seed.leafPositionResolution = res;
 
     std::cout << "\n=== VMAT Direct Aperture Optimization ===\n";
+    std::cout << "Prescription: " << cfg.base.targetDose << " Gy (" << rxSource << ")\n";
     try {
         auto protocol = ObjectiveProtocol::lungIMRT(cfg.base.targetDose);
         auto objectives = ObjectiveBuilder::build(protocol, *state.patientData, state.patientData->getGrid(),
@@ -805,7 +815,8 @@ int optimize(const std::vector<std::string>& args, WorkflowState& state) {
     OptimizationConfig config;
     int maxIter = config.maxIterations;
     double tolerance = config.tolerance;
-    double targetDose = config.targetDose;
+    double targetDose = state.plan ? state.plan->getPrescribedDose() : 0.0;
+    std::string rxSource = "plan prescription";
     double smooth = config.spatialSmoothingWeight;
     double l2Reg = config.l2RegWeight;
     double l1Reg = config.l1RegWeight;
@@ -817,6 +828,7 @@ int optimize(const std::vector<std::string>& args, WorkflowState& state) {
             tolerance = std::stod(args[++i]);
         } else if (args[i] == "--target-dose" && i + 1 < args.size()) {
             targetDose = std::stod(args[++i]);
+            rxSource = "--target-dose";
         } else if (args[i] == "--smooth" && i + 1 < args.size()) {
             smooth = std::stod(args[++i]);
         } else if (args[i] == "--l2-reg" && i + 1 < args.size()) {
@@ -828,9 +840,14 @@ int optimize(const std::vector<std::string>& args, WorkflowState& state) {
         }
     }
 
+    if (!(targetDose > 0.0) || !std::isfinite(targetDose)) {
+        std::cerr << "Error: no prescription. Pass --target-dose <Gy> (the plan has none).\n";
+        return 1;
+    }
+
     std::cout << "\n=== Optimization ===\n";
     std::cout << "Max iter: " << maxIter << " | Tolerance: " << tolerance
-              << " | Target dose: " << targetDose << " Gy\n";
+              << " | Prescription: " << targetDose << " Gy (" << rxSource << ")\n";
     if (smooth > 0.0) std::cout << "Spatial smoothing: " << smooth << "\n";
     if (l2Reg > 0.0) std::cout << "L2 regularization: " << l2Reg << "\n";
     if (l1Reg > 0.0) std::cout << "L1 regularization (MU penalty): " << l1Reg << "\n";

@@ -158,6 +158,15 @@ class DVHObjective : public ObjectiveFunction {
 | `MIN_DVH` | At least `volumeFraction` of structure receives ≥ `doseThreshold` | D95 ≥ 57 Gy for targets |
 | `MAX_DVH` | At most `volumeFraction` of structure receives ≥ `doseThreshold` | D2 ≤ 63 Gy (hotspot limit) |
 
+Only the violating voxels count (the coldest / hottest voxels allowed by the volume are free):
+$f = \frac{w}{N} \sum_{v \in \text{violating}} (d_v - d_\text{threshold})^2$.
+
+**Priorities are volume-normalized.** Every objective, including the NTO, divides by its
+structure voxel count $N$ (as in matRad and like Eclipse priorities), so a weight means the same
+whatever the structure size, the objective type or the dose grid resolution. Weights of the order
+of 100 for targets and the NTO are a good start; raise one objective in steps of ~50–100 if its
+goal is not met.
+
 ## Constraints
 
 ### Constraint
@@ -272,8 +281,8 @@ MU smoothing, total MU, leaf-order and leaf-speed penalties. Zero-cost terms rem
 Snapshot headers include the maximum dose on the computed grid.
 
 **Interpretation:** cost shares describe optimization pressure, not clinical goal attainment,
-gradient magnitude, or the percentage of voxels violating a goal. Squared dose objectives
-are voxel-averaged, while DVH objectives use weighted sums, so equal configured weights need
+gradient magnitude, or the percentage of voxels violating a goal. All objectives are
+voxel-averaged, but a DVH objective only counts its violating voxels, so equal weights need
 not produce equal costs. Use dose statistics/DVH for clinical evaluation.
 
 DAO's `Objective` column includes total-MU and soft mechanical penalties. The summary's
@@ -335,12 +344,15 @@ $$L(x) = \begin{cases} s\,R_x & x \le x_0 \\ R_x\left(s\,e^{-k(x-x_0)} + e\,(1-e
 
 with $x_0$ = distance from target border (default 1 mm), $s$ = start dose (105 %),
 $e$ = end dose (60 %) and $k$ = fall-off (0.05 /mm, i.e. ~87 % of the way from start to end
-10 mm beyond $x_0$). The cost is an upper objective summed over voxels,
-$\text{priority}\cdot\sum_v \max(0, d_v - L_v)^2$ (default priority 100), so each voxel feels
-the same pressure as a MaxDVH 0 % objective of equal weight. $R_x$ is the CLI `--target-dose`
-(or plan prescription); in the GUI it is the manual *Prescription (Gy)* or, if 0, the highest
+10 mm beyond $x_0$). The cost is an upper objective averaged over the normal tissue voxels,
+$\frac{\text{priority}}{N}\sum_v \max(0, d_v - L_v)^2$ (default priority 100), comparable with
+target objectives of priority ~100. $R_x$ is the CLI `--target-dose`
+(or plan prescription); in the GUI it is the *Prescription (Gy)* field (above the objectives) or, if 0, the highest
 lower objective (MinDVH / Squared Deviation / Underdose) on a target — target upper objectives are
-hot-spot limits and are not used. The limit curve is logged at startup and previewed in the GUI.
+hot-spot limits and are not used. No prescription is ever assumed: `ObjectiveBuilder::build`,
+`OptimizationPipeline` and `ArcPipeline` throw if it is not > 0, the CLI `optimize`/`arcSeq` stop
+with an error when there is neither `--target-dose` nor a plan prescription, and the GUI disables
+*Run* until one is known. The limit curve is logged at startup and previewed in the GUI.
 Without a BODY/EXTERNAL structure the whole grid outside the targets is used (with a warning).
 
 There is no separate global hot-spot penalty: as in Eclipse, control target hot spots with
@@ -350,9 +362,18 @@ targets without any upper objective, are reported as warnings at startup and hig
 `--nto-start`, `--nto-end`, `--nto-falloff`, `--no-nto` (for `optimize` and `arcSeq`).
 
 The optimizer only pushes the dose up to the objective window it is given: a window such as
-Lower 98% 62.7 Gy / Upper 0% 69.3 Gy leaves the target free anywhere between those doses. For a
-homogeneous target, as in Eclipse, tighten it around the prescription, e.g. for 66 Gy:
-Lower 100% 63 Gy, Lower 98% 65 Gy, Upper 0% 68.5 Gy.
+Lower 98% 62.7 Gy / Upper 0% 69.3 Gy leaves the target free anywhere between those doses. A
+Squared Deviation to Rx makes the target homogeneous inside the window.
+
+**Recommended start (GUI *Recommended* button, CLI target template).** Per target: Lower D98% ≥ Rx,
+Upper 0% ≤ 105% Rx and Squared Deviation to Rx, priority 100 each; NTO priority 100 (1 mm, 105% →
+60%, 0.05/mm); OAR protocol objectives; DAO MU smoothing 0.2. Rx is the GUI *Prescription (Gy)*
+field, else the plan prescription (CLI: `--target-dose`, else the plan prescription); the GUI shows
+the value and its source next to the button, and the template is neither built automatically nor
+selectable until a prescription is set. On the lung test case (66 Gy, one
+VMAT arc) this reaches PTV D95 ≈ 65 Gy, HI ≈ 0.045 and max ≈ 68.7 Gy (Eclipse plan: 64.8 Gy,
+0.040, 68.3 Gy) with a lower body dose. Adjust from there: raise the priority of an objective that
+is not met by ~50–100, or lower the NTO priority if the target coverage suffers.
 
 ## Auto-Classification (CLI)
 
@@ -360,7 +381,7 @@ The CLI automatically classifies structures and creates objectives:
 
 | Structure Type | Objectives Created |
 |---------------|-------------------|
-| **TARGET** | SquaredDeviation(Rx), MinDVH(D95 ≥ 0.95×Rx), MaxDVH(D2 ≤ 1.05×Rx) |
+| **TARGET** | MinDVH(D98 ≥ Rx), MaxDVH(D0 ≤ 1.05×Rx), SquaredDeviation(Rx), priority 100 |
 | **OAR** | SquaredOverdose(maxDose) |
 | **EXTERNAL** | (skipped) |
 

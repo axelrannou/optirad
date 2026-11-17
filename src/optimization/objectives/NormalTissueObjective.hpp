@@ -21,8 +21,8 @@ struct NtoSettings {
 /// target border, as in Eclipse:
 ///   limit(x) = start                                                  for x <= distance
 ///   limit(x) = start * e^(-k (x - distance)) + end * (1 - e^(-k (x - distance)))   beyond
-/// Cost = priority * sum over the normal tissue voxels of max(0, dose - limit)^2, the same per-voxel
-/// pressure as a MaxDVH 0% (Eclipse Upper) objective of equal weight.
+/// Cost = priority * mean over the normal tissue voxels of max(0, dose - limit)^2: like every objective it is
+/// normalized by its voxel count, so the priority does not depend on the body size or the dose grid.
 class NormalTissueObjective : public ObjectiveFunction {
 public:
     NormalTissueObjective(std::vector<size_t> voxels, std::vector<double> limits, std::string summary = "");
@@ -39,8 +39,7 @@ public:
     std::string getName() const override { return "NTO"; }
     std::string describe() const override;
     bool gpuDescription(DoseObjectiveSpec& output) const override {
-        // The GPU averages type 1 objectives over their voxels; the NTO is a sum.
-        output = {1, 0.0, m_weight * static_cast<double>(getActiveIndices().size()), 0.0, getActiveIndices(), m_limits};
+        output = {1, 0.0, m_weight, 0.0, getActiveIndices(), m_limits};
         return true;
     }
     double compute(const std::vector<double>& dose) const override;

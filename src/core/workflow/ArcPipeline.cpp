@@ -39,6 +39,7 @@ struct RefineOptions {
     int iterations = 0;
     double maxMoveMm = 0.0;         // largest leaf tip move per iteration; 0 = 4 x leafStepMm
     double* muLambda = nullptr;     // objective units per MU: < 0 on entry = derive from the initial objective
+    double* smoothingReference = nullptr;   // objective scale of the MU smoothing: < 0 on entry = initial objective
     double muPenalty = 0.0;         // fraction of the starting objective that the total MU costs
     bool reportInitial = true;
     bool finalStage = true;         // snap to the MLC resolution and report timing at the end
@@ -186,6 +187,7 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
         if (!objective->gpuDescription(description)) { supported = false; break; }
         descriptions.push_back(std::move(description));
     }
+    double muSmooth = 0.0;   // objective units per MU^2, set from config.muSmoothing once the MU scale is known
     auto evaluate = [&](const ArcSequenceResult& sequence, std::vector<double>* gradient) {
         const auto weights = ArcPipeline::bixelWeights(*result.controlPointStf, sequence, config.integrateLeafMotion);
         double value = 0.0;
@@ -211,7 +213,7 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
             const auto& previous = sequence.controlPoints[index - 1];
             if (cp.geometry.arcIndex != previous.geometry.arcIndex) continue;
             const double difference = cp.mu - previous.mu;
-            value += config.muSmoothingWeight * difference * difference;
+            value += muSmooth * difference * difference;
         }
         return value;
     };
@@ -314,7 +316,7 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
             const auto& cp = sequence.controlPoints[index];
             const auto& previous = sequence.controlPoints[index - 1];
             if (cp.geometry.arcIndex != previous.geometry.arcIndex) continue;
-            const double derivative = 2.0 * config.muSmoothingWeight * (cp.mu - previous.mu);
+            const double derivative = 2.0 * muSmooth * (cp.mu - previous.mu);
             delta.mu += derivative;
             direction->controlPoints[index - 1].mu -= derivative;
         }
@@ -356,6 +358,16 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
     result.initialLeafObjective = evaluate(result.sequence, nullptr);
     if (deriveLambda && refine.muPenalty > 0.0 && seedMu > 0.0)
         muLambda = refine.muPenalty * result.initialLeafObjective / seedMu;
+    if (refine.smoothingReference && config.muSmoothing > 0.0 && seedMu > 0.0) {
+        double& reference = *refine.smoothingReference;
+        if (reference < 0.0) reference = result.initialLeafObjective;
+        size_t neighbours = 0;
+        for (size_t index = 1; index < count; ++index)
+            if (seed.controlPoints[index].geometry.arcIndex == seed.controlPoints[index - 1].geometry.arcIndex)
+                ++neighbours;
+        const double meanMu = seedMu / static_cast<double>(count);
+        if (neighbours > 0) muSmooth = config.muSmoothing * reference / (static_cast<double>(neighbours) * meanMu * meanMu);
+    }
 
     // Projected L-BFGS over all leaf tips (mm) and MU (in units of muScale). The speed and MU-rate bounds couple
     // neighbouring control points, so they are enforced by `project`; a step that is not a descent direction after
@@ -416,7 +428,7 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
         std::ostringstream out;
         out << std::setprecision(5) << "DAO settings: iterations=" << refine.iterations
             << ", leaf step=" << config.leafStepMm << " mm, max move=" << maxMove << " mm"
-            << "\n  Penalties: MU smooth=" << config.muSmoothingWeight
+            << "\n  Penalties: MU smooth=" << muSmooth << " (relative " << config.muSmoothing << ")"
             << ", MU total=" << muLambda << " (seed=" << refine.muPenalty << "), leaf=" << penaltyWeight
             << "\n  Bounds: tips=[" << tipLow << ", " << tipHigh
             << "] mm, leaf<=" << limits.leafSpeed[1]
@@ -440,7 +452,7 @@ void refineLeaves(ArcPipelineResult& result, const Plan& plan, const PatientData
             if (index == 0 || cp.geometry.arcIndex != sequence.controlPoints[index - 1].geometry.arcIndex) continue;
             const auto& previous = sequence.controlPoints[index - 1];
             const double difference = cp.mu - previous.mu;
-            smoothing += config.muSmoothingWeight * difference * difference;
+            smoothing += muSmooth * difference * difference;
             for (size_t pair = 0; pair < cp.aperture.bankA.size(); ++pair) {
                 const double excessA = std::max(0.0,
                     std::abs(cp.aperture.bankA[pair] - previous.aperture.bankA[pair]) - travelLimit[index]);
@@ -702,6 +714,7 @@ void runProgressive(ArcPipelineResult& result, const Stf& sectorStf,
 
     ArcSequenceResult previous;
     double muLambda = 0.0;   // stage 1 runs without MU penalty; the penalty is derived at the first stage after it
+    double smoothingReference = 0.0;   // likewise for the MU smoothing (0 = off)
     for (size_t level = 0; level < spacings.size(); ++level) {
         VmatSettings settings = finalSettings;
         settings.controlPointSpacingDeg = spacings[level];
@@ -751,6 +764,8 @@ void runProgressive(ArcPipelineResult& result, const Stf& sectorStf,
         const bool derivesLambda = level == (spacings.size() > 1 ? 1 : 0);
         double lambda = derivesLambda ? -1.0 : muLambda;
         refine.muLambda = &lambda;
+        if (derivesLambda) smoothingReference = -1.0;
+        refine.smoothingReference = &smoothingReference;
         refineLeaves(stage, plan, patient, grid, objectives, config, preparedModel, refine);
         result.progressHistory.insert(result.progressHistory.end(),
             stage.progressHistory.begin(), stage.progressHistory.end());

@@ -22,7 +22,7 @@ namespace optirad {
 struct OptimizationConfig {
     int maxIterations = 400;
     double tolerance = 1e-5;
-    double targetDose = 66.0;
+    double targetDose = 0.0;   // prescription (Gy); required (> 0), there is no default
 
     // Eclipse-style normal tissue objective (dose fall-off outside the targets)
     NtoSettings nto;

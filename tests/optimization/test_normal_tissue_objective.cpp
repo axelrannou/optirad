@@ -103,7 +103,7 @@ TEST(NormalTissueObjectiveTest, CostPenalizesOnlyDoseAboveTheLimitAndGradientMat
     NormalTissueObjective nto({0, 2, 3}, {10.0, 20.0, 5.0});
     nto.setWeight(2.0);
     std::vector<double> dose = {12.0, 100.0, 15.0, 9.0};
-    EXPECT_NEAR(nto.compute(dose), 2.0 * (4.0 + 0.0 + 16.0), 1e-12);   // sum, like MaxDVH 0%
+    EXPECT_NEAR(nto.compute(dose), 2.0 * (4.0 + 0.0 + 16.0) / 3.0, 1e-12);   // mean over the NTO voxels
     const auto gradient = nto.gradient(dose);
     ASSERT_EQ(gradient.size(), dose.size());
     EXPECT_DOUBLE_EQ(gradient[1], 0.0);   // not a normal tissue voxel
@@ -118,7 +118,7 @@ TEST(NormalTissueObjectiveTest, CostPenalizesOnlyDoseAboveTheLimitAndGradientMat
     DoseObjectiveSpec description;
     ASSERT_TRUE(nto.gpuDescription(description));
     EXPECT_EQ(description.type, 1);
-    EXPECT_DOUBLE_EQ(description.weight / description.indices.size(), 2.0);   // the GPU averages type 1
+    EXPECT_DOUBLE_EQ(description.weight, 2.0);   // the GPU averages type 1 over its voxels
     EXPECT_EQ(description.thresholds, nto.limits());
 }
 

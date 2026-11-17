@@ -7,6 +7,7 @@
 #include "core/workflow/ArcPipeline.hpp"
 #include "core/workflow/PlanBuilder.hpp"
 #include "optimization/OptimizationLogging.hpp"
+#include "optimization/ObjectiveProtocol.hpp"
 #include "dose/engines/PencilBeamEngine.hpp"
 #include "sequencing/ApertureFluence.hpp"
 #include "sequencing/ArcSequencer.hpp"
@@ -440,7 +441,7 @@ TEST(ArcPipelineTest, MuPenaltyLowersTheTotalMuWhileTheTargetStaysCovered) {
     cfg.computeBackend = DoseComputeBackend::CPU;
     cfg.base.targetDose = 60.0;
     cfg.base.nto.enabled = false;
-    cfg.muSmoothingWeight = 0.0;
+    cfg.muSmoothing = 0.0;
     cfg.coarsestSpacingDeg = 20.0;
     cfg.iterationsPerResolution = 30;
 
@@ -595,6 +596,24 @@ TEST(ArcPipelineTest, ProgressiveDaoReportsProgressAndCalibratesItsOwnMu) {
     EXPECT_NEAR(ptvMeanDose(r), 60.0, 0.25 * 60.0);
     for (const auto& cp : r.sequence.controlPoints)
         for (size_t p = 0; p < cp.aperture.bankA.size(); ++p) EXPECT_LE(cp.aperture.bankA[p], cp.aperture.bankB[p]);
+}
+
+TEST(ArcPipelineTest, APrescriptionIsRequiredAndNeverAssumed) {
+    ArcFixture f;
+    const Grid doseGrid = Grid::createDoseGrid(f.patient->getGrid(), {5.0, 5.0, 5.0});
+    EXPECT_EQ(OptimizationConfig{}.targetDose, 0.0);
+    const auto protocol = ObjectiveProtocol::lungIMRT(0.0);
+    EXPECT_THROW(ObjectiveBuilder::build(protocol, *f.patient, f.patient->getGrid(), doseGrid, 0.0),
+                 std::invalid_argument);
+    testing::internal::CaptureStdout();
+    const auto built = ObjectiveBuilder::build(protocol, *f.patient, f.patient->getGrid(), doseGrid, 60.0);
+    testing::internal::GetCapturedStdout();
+    ASSERT_EQ(built.ptrs.size(), 3u);   // target template: Lower D98%, Upper 0% (105%), Squared Deviation
+    EXPECT_NE(built.ptrs[1]->describe().find("63"), std::string::npos) << built.ptrs[1]->describe();
+    ArcOptimizationConfig cfg;          // no targetDose set
+    EXPECT_THROW(ArcPipeline::run(*f.built.stf, *f.built.plan, *f.patient, doseGrid,
+                                  ptvObjective(*f.patient, doseGrid, 60.0), cfg),
+                 std::invalid_argument);
 }
 
 TEST(ArcPipelineTest, DaoAddsTheNormalTissueObjectiveToTheCostBreakdown) {

@@ -36,8 +36,10 @@ struct ArcOptimizationConfig {
     /// Penalty on the total MU, as the fraction of the objective (at the second resolution) that the whole MU costs.
     /// 0 = none: open conformal apertures need little MU and the dose objectives decide how much MU a plan is worth.
     double muPenalty = 0.0;
-    /// Penalty on MU differences between neighbouring control points (smooth dose rate / gantry speed).
-    double muSmoothingWeight = 0.05;
+    /// Penalty on MU differences between neighbouring control points (smooth dose rate / gantry speed), relative
+    /// and scale-free: the cost is muSmoothing x (objective at the second resolution) x mean((dMU / mean MU)^2).
+    /// It keeps the optimizer from concentrating the MU in a few control points (streaks in the dose).
+    double muSmoothing = 0.2;
     bool integrateLeafMotion = true;   // dose of a control point = average over the leaf motion in its slice
     double leafStepMm = 1.0;   // first step and base of the per-iteration move limit (4x)
     double fluencePixelMm = 1.5;

@@ -29,9 +29,11 @@ void DaoOptimizationView::renderSettings() {
     m_muPenalty = std::max(m_muPenalty, 0.0f);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Cost of the total MU as a fraction of the objective at the second resolution. 0 = none.");
-    ImGui::InputFloat("MU smoothing", &m_muSmoothing, 0.01f, 0.1f, "%.3f");
+    ImGui::InputFloat("MU smoothing", &m_muSmoothing, 0.05f, 0.1f, "%.2f");
     m_muSmoothing = std::max(m_muSmoothing, 0.0f);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Penalty on MU differences between neighbouring control points.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Relative penalty on MU differences between neighbouring control points.\n"
+                                                      "Spreads the MU over the arc (no streaks from a few heavy control points).\n"
+                                                      "0 = off; 0.1-0.5 typical.");
     ImGui::Checkbox("Integrate leaf motion", &m_integrateMotion);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Dose of a control point = average over the leaf motion in its slice.");
@@ -54,7 +56,7 @@ void DaoOptimizationView::start(std::vector<ObjectiveSpec> specs, const Optimiza
     cfg.iterationsPerResolution = m_iterations;
     cfg.coarsestSpacingDeg = static_cast<double>(m_coarsestSpacing);
     cfg.muPenalty = static_cast<double>(m_muPenalty);
-    cfg.muSmoothingWeight = static_cast<double>(m_muSmoothing);
+    cfg.muSmoothing = static_cast<double>(m_muSmoothing);
     cfg.integrateLeafMotion = m_integrateMotion;
     const double resolution = m_state.plan->getMachine().getGeometry().leafPositionResolution;
     if (resolution > 0.0) cfg.seed.leafPositionResolution = resolution;

@@ -155,14 +155,14 @@ double NormalTissueObjective::compute(const std::vector<double>& dose) const {
         const double excess = dose[indices[i]] - m_limits[i];
         if (excess > 0.0) sum += excess * excess;
     }
-    return m_weight * sum;
+    return m_weight * sum / static_cast<double>(indices.size());
 }
 
 std::vector<double> NormalTissueObjective::gradient(const std::vector<double>& dose) const {
     std::vector<double> grad(dose.size(), 0.0);
     const auto& indices = getActiveIndices();
     if (indices.empty()) return grad;
-    const double scale = 2.0 * m_weight;
+    const double scale = 2.0 * m_weight / static_cast<double>(indices.size());
     #pragma omp parallel for
     for (long long i = 0; i < static_cast<long long>(indices.size()); ++i) {
         if (indices[i] >= dose.size()) continue;
