@@ -302,6 +302,10 @@ endif()
 add_test(NAME VmatTest COMMAND test_vmat)
 
 if(TARGET optirad_gui)
+    add_executable(test_bev_renderer gui/test_bev_renderer.cpp)
+    target_link_libraries(test_bev_renderer PRIVATE optirad_gui GTest::gtest_main)
+    add_test(NAME BevRendererTest COMMAND test_bev_renderer)
+
     add_executable(test_dao_progress_gui gui/test_dao_progress.cpp)
     target_link_libraries(test_dao_progress_gui PRIVATE optirad_gui GTest::gtest_main)
     add_test(NAME DaoProgressGuiTest COMMAND test_dao_progress_gui)

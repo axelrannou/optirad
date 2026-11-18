@@ -3,6 +3,7 @@
 #include "IView.hpp"
 #include "../AppState.hpp"
 #include "core/FluenceMap.hpp"
+#include "renderers/BevRenderer.hpp"
 #include <GL/glew.h>
 #include <imgui.h>
 #include <string>
@@ -10,8 +11,7 @@
 
 namespace optirad {
 
-/// Beam's Eye View (BEV) — displays fluence heatmap, MLC leaf positions,
-/// and projected patient structure contours for a selected beam and segment.
+/// Beam's Eye View with source-perspective anatomy/MLC and a fluence display.
 class BevView : public IView {
 public:
     explicit BevView(GuiAppState& state);
@@ -25,14 +25,18 @@ public:
 private:
     void renderControls();
     void renderArcMotion();
+    void renderSceneControls();
+    void handleZoom(float& zoom);
+    void renderScene(const Beam& beam, const std::vector<const Aperture*>& apertures,
+                     const std::vector<double>& boundaries, double extentX, double extentZ);
     bool m_arcPlaying = false;
     float m_arcTime = 0.0f;
     float m_arcPlaybackSpeed = 1.0f;
     int m_arcSelection = 0;
+    int m_selectedDoseId = -1;
     void renderBevContent();
     void updateFluenceTexture();
     void renderMlcLeaves(ImDrawList* dl, ImVec2 imgMin, ImVec2 imgMax);
-    void renderProjectedContours(ImDrawList* dl, ImVec2 imgMin, ImVec2 imgMax);
 
     /// Jet colormap: value in [0,1] → R,G,B,A
     static void jetColormap(float t, unsigned char& r, unsigned char& g,
@@ -45,12 +49,10 @@ private:
 
     // Selection state
     int m_beamIndex = 0;
-    int m_segmentIndex = -1; // -1 = "All" (show combined fluence)
+    int m_segmentIndex = 0; // -1 = "All" (show combined fluence/aperture outlines)
 
-    // Zoom and pan (UV-based, same as SliceView)
+    // Centered fluence zoom
     float m_zoom = 1.0f;
-    float m_panU = 0.5f;
-    float m_panV = 0.5f;
 
     // BEV extent for the current beam (mm)
     double m_bevMinX = 0, m_bevMaxX = 0;
@@ -64,12 +66,9 @@ private:
     int m_lastTexHeight = -1;
     bool m_needsUpdate = true;
 
-    // Contour visibility toggle
-    bool m_showContours = true;
-
-    // Leaf pair boundary cache
-    std::vector<double> m_leafBoundaries; // cumulative Z positions
-    int m_cachedNumLeaves = -1;
+    BevRenderer m_sceneRenderer;
+    bool m_showAnatomy = true;
+    float m_sceneZoom = 1.0f;
 
     // Dose version tracking for auto-refresh
     int m_doseVersion = -1;

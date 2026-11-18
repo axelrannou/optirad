@@ -2,7 +2,6 @@
 #include "core/Aperture.hpp"
 #include "core/FluenceMap.hpp"
 #include "geometry/MathUtils.hpp"
-#include "geometry/Structure.hpp"
 #include <imgui.h>
 #include <cmath>
 #include <cstdio>
@@ -39,13 +38,13 @@ ImVec2 BevView::bevToScreen(double bevX, double bevZ,
     float u = static_cast<float>((bevX - m_bevMinX) / rangeX);
     float v = 1.0f - static_cast<float>((bevZ - m_bevMinZ) / rangeZ);
 
-    // Apply zoom/pan
+    // Apply centered zoom
     float halfU = 0.5f / m_zoom;
     float halfV = 0.5f / m_zoom;
-    float uvMinX = m_panU - halfU;
-    float uvMaxX = m_panU + halfU;
-    float uvMinY = m_panV - halfV;
-    float uvMaxY = m_panV + halfV;
+    float uvMinX = 0.5f - halfU;
+    float uvMaxX = 0.5f + halfU;
+    float uvMinY = 0.5f - halfV;
+    float uvMaxY = 0.5f + halfV;
 
     float sx = (u - uvMinX) / (uvMaxX - uvMinX);
     float sy = (v - uvMinY) / (uvMaxY - uvMinY);
@@ -60,7 +59,16 @@ void BevView::render() {
     ImGui::Begin("BEV", &m_visible);
 
     const auto* selected = m_state.doseStore.getSelected();
-    if (selected && m_state.arcCache.count(selected->id) && m_state.arcResult) {
+    const int selectedId = selected ? selected->id : -1;
+    if (selectedId != m_selectedDoseId) {
+        m_selectedDoseId = selectedId;
+        m_segmentIndex = 0;
+        m_arcTime = 0.0f;
+        m_arcPlaying = false;
+        m_needsUpdate = true;
+    }
+    if (selected && m_state.arcCache.count(selected->id) &&
+        m_state.arcCache.at(selected->id).result) {
         renderArcMotion();
         ImGui::End();
         return;
@@ -80,7 +88,8 @@ void BevView::render() {
 }
 
 void BevView::renderArcMotion() {
-    const auto& points = m_state.arcResult->sequence.controlPoints;
+    const auto& result = *m_state.arcCache.at(m_state.doseStore.getSelected()->id).result;
+    const auto& points = result.sequence.controlPoints;
     if (points.empty()) return;
     const int arcCount = static_cast<int>(points.back().geometry.arcIndex) + 1;
     m_arcSelection = std::clamp(m_arcSelection, 0, arcCount - 1);
@@ -108,7 +117,7 @@ void BevView::renderArcMotion() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rewind");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(130.0f);
-    ImGui::SliderFloat("Speed", &m_arcPlaybackSpeed, 0.1f, 10.0f, "%.1fx");
+    ImGui::SliderFloat("Playback", &m_arcPlaybackSpeed, 0.1f, 10.0f, "%.1fx");
     if (m_arcPlaying) m_arcTime += ImGui::GetIO().DeltaTime * m_arcPlaybackSpeed;
     m_arcTime = std::clamp(m_arcTime, 0.0f, static_cast<float>(duration));
     if (m_arcTime >= duration) m_arcPlaying = false;
@@ -124,11 +133,39 @@ void BevView::renderArcMotion() {
     const double angle = std::fmod(previous.geometry.gantryAngle + fraction * angularDifference + 360.0, 360.0);
     ImGui::Text("CP %zu | Gantry %.1f | Couch %.1f | %.2f MU/s | %.1f mm/s",
         index, angle, current.geometry.couchAngle, current.doseRate, current.leafSpeed);
+    ImGui::Text("Gantry speed: %.2f deg/s (delivery)", current.gantrySpeed);
+    renderSceneControls();
+    if (m_showAnatomy) {
+        const auto* cpBeam = result.controlPointStf ? result.controlPointStf->getBeam(index) : nullptr;
+        if (!cpBeam) {
+            ImGui::TextDisabled("Control point geometry unavailable.");
+            return;
+        }
+        Beam beam;
+        beam.setIsocenter(cpBeam->getIsocenter());
+        beam.setSAD(cpBeam->getSAD());
+        beam.setSCD(cpBeam->getSCD());
+        beam.setGantryAngle(angle);
+        beam.setCouchAngle(current.geometry.couchAngle);
+        Aperture aperture = current.aperture;
+        if (previous.leafPairBoundariesZ == current.leafPairBoundariesZ &&
+            previous.aperture.bankA.size() == aperture.bankA.size() &&
+            previous.aperture.bankB.size() == aperture.bankB.size()) {
+            for (size_t pair = 0; pair < aperture.bankA.size(); ++pair)
+                aperture.bankA[pair] = interpolate(previous.aperture.bankA[pair], aperture.bankA[pair]);
+            for (size_t pair = 0; pair < aperture.bankB.size(); ++pair)
+                aperture.bankB[pair] = interpolate(previous.aperture.bankB[pair], aperture.bankB[pair]);
+        }
+        renderScene(beam, {&aperture}, current.leafPairBoundariesZ, extentX, extentZ);
+        return;
+    }
     const ImVec2 available = ImGui::GetContentRegionAvail();
     if (available.x <= 0.0f || available.y <= 0.0f) return;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##arc_bev_zoom", available);
+    handleZoom(m_zoom);
     const float scale = std::min(available.x / static_cast<float>(2.0 * extentX),
-                                 available.y / static_cast<float>(2.0 * extentZ));
+                                 available.y / static_cast<float>(2.0 * extentZ)) * m_zoom;
     auto screen = [&](double lateral, double longitudinal) {
         return ImVec2(origin.x + available.x * 0.5f + static_cast<float>(lateral) * scale,
                       origin.y + available.y * 0.5f - static_cast<float>(longitudinal) * scale);
@@ -138,6 +175,7 @@ void BevView::renderArcMotion() {
     draw->AddRectFilled(screen(-extentX, extentZ), screen(extentX, -extentZ), IM_COL32(24, 30, 34, 255));
     for (size_t pair = 0; pair < current.aperture.bankA.size(); ++pair) {
         const bool matched = pair < previous.aperture.bankA.size() &&
+            pair < previous.aperture.bankB.size() &&
             previous.leafPairBoundariesZ == current.leafPairBoundariesZ;
         const double left = matched ? interpolate(previous.aperture.bankA[pair], current.aperture.bankA[pair]) : current.aperture.bankA[pair];
         const double right = matched ? interpolate(previous.aperture.bankB[pair], current.aperture.bankB[pair]) : current.aperture.bankB[pair];
@@ -149,7 +187,6 @@ void BevView::renderArcMotion() {
         }
     }
     draw->PopClipRect();
-    ImGui::Dummy(available);
 }
 
 void BevView::renderControls() {
@@ -168,6 +205,7 @@ void BevView::renderControls() {
 
     if (ImGui::SliderInt("Beam", &m_beamIndex, 0, numBeams - 1, beamLabel.c_str())) {
         changed = true;
+        beam = m_state.stf->getBeam(static_cast<size_t>(m_beamIndex));
     }
 
     // Segment slider (only if viewing a deliverable dose with leaf sequencing data)
@@ -181,6 +219,7 @@ void BevView::renderControls() {
         const auto& seq = m_state.leafSequences[static_cast<size_t>(m_beamIndex)];
         int numSegs = static_cast<int>(seq.segments.size());
         if (numSegs > 0) {
+            m_segmentIndex = std::clamp(m_segmentIndex, -1, numSegs - 1);
             // -1 = "All", 0..numSegs-1 = individual segments
             std::string segLabel;
             if (m_segmentIndex < 0) {
@@ -203,8 +242,7 @@ void BevView::renderControls() {
 
     if (changed) m_needsUpdate = true;
 
-    // Contour toggle
-    ImGui::Checkbox("Show Contours", &m_showContours);
+    renderSceneControls();
 
     // Info line — show different details for optimization vs deliverable dose
     if (beam) {
@@ -258,6 +296,36 @@ void BevView::renderBevContent() {
     m_bevMaxX = xMax + bw;
     m_bevMinZ = zMin - bw;
     m_bevMaxZ = zMax + bw;
+
+    if (m_showAnatomy) {
+        std::vector<const Aperture*> apertures;
+        std::vector<double> boundaries;
+        const auto* selected = m_state.doseStore.getSelected();
+        if (selected && m_state.seqCache.count(selected->id) && m_state.leafSequenceDone() &&
+            m_beamIndex < static_cast<int>(m_state.leafSequences.size())) {
+            const auto& sequence = m_state.leafSequences[static_cast<size_t>(m_beamIndex)];
+            for (size_t segment = 0; segment < sequence.segments.size(); ++segment) {
+                if (m_segmentIndex < 0 || segment == static_cast<size_t>(m_segmentIndex))
+                    apertures.push_back(&sequence.segments[segment]);
+            }
+            boundaries = sequence.leafPairBoundariesZ;
+            if (boundaries.empty() && !apertures.empty()) {
+                for (size_t pair = 0; pair <= apertures.front()->bankA.size(); ++pair)
+                    boundaries.push_back(zMin - bw * 0.5 + pair * bw);
+            }
+            if (apertures.size() > 1)
+                ImGui::TextDisabled("All segments: aperture outlines. Select a segment to see leaves.");
+        }
+        double extentX = std::max(std::abs(m_bevMinX), std::abs(m_bevMaxX)) + 15.0;
+        double extentZ = std::max(std::abs(m_bevMinZ), std::abs(m_bevMaxZ)) + 5.0;
+        for (const auto* aperture : apertures) {
+            for (double tip : aperture->bankA) extentX = std::max(extentX, std::abs(tip) + 15.0);
+            for (double tip : aperture->bankB) extentX = std::max(extentX, std::abs(tip) + 15.0);
+        }
+        for (double boundary : boundaries) extentZ = std::max(extentZ, std::abs(boundary) + 5.0);
+        renderScene(*beam, apertures, boundaries, extentX, extentZ);
+        return;
+    }
 
     // Update fluence texture
     int ver = m_state.doseStore.version();
@@ -351,34 +419,9 @@ void BevView::renderBevContent() {
         renderMlcLeaves(dl, imgMin, imgMax);
     }
 
-    // Draw projected structure contours
-    if (m_showContours && m_state.patientData) {
-        renderProjectedContours(dl, imgMin, imgMax);
-    }
-
-    // Handle mouse interaction for zoom/pan
-    // Use an invisible button to capture mouse events in the image area
     ImGui::SetCursorScreenPos(imgMin);
     ImGui::InvisibleButton("##bev_interact", ImVec2(imgW, imgH));
-
-    if (ImGui::IsItemHovered()) {
-        // Scroll = zoom
-        float wheel = ImGui::GetIO().MouseWheel;
-        if (wheel != 0.0f) {
-            m_zoom *= (1.0f + wheel * 0.1f);
-            m_zoom = std::clamp(m_zoom, 0.5f, 10.0f);
-        }
-        // Middle-drag = pan
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
-            ImVec2 delta = ImGui::GetIO().MouseDelta;
-            float uvRangeX = 1.0f / m_zoom;
-            float uvRangeY = 1.0f / m_zoom;
-            m_panU -= delta.x / imgW * uvRangeX;
-            m_panV -= delta.y / imgH * uvRangeY;
-            m_panU = std::clamp(m_panU, 0.0f, 1.0f);
-            m_panV = std::clamp(m_panV, 0.0f, 1.0f);
-        }
-    }
+    handleZoom(m_zoom);
 }
 
 void BevView::updateFluenceTexture() {
@@ -622,60 +665,44 @@ void BevView::renderMlcLeaves(ImDrawList* dl, ImVec2 imgMin, ImVec2 imgMax) {
     }
 }
 
-void BevView::renderProjectedContours(ImDrawList* dl, ImVec2 imgMin, ImVec2 imgMax) {
-    if (!m_state.patientData || !m_state.stfGenerated()) return;
-
-    const auto* beam = m_state.stf->getBeam(static_cast<size_t>(m_beamIndex));
-    if (!beam) return;
-
-    // Build rotation matrix for this beam (R = BEV→LPS, so R^T = LPS→BEV)
-    auto R = getRotationMatrix(beam->getGantryAngle(), beam->getCouchAngle());
-    Mat3 Rt = transpose(R);
-    Vec3 isocenter = beam->getIsocenter();
-    double SAD = beam->getSAD();
-
-    const auto* structSet = m_state.patientData->getStructureSet();
-    if (!structSet) return;
-
-    // Push clip rect so contours don't draw outside image bounds
-    dl->PushClipRect(imgMin, imgMax, true);
-
-    for (size_t si = 0; si < structSet->getCount(); ++si) {
-        const auto* structure = structSet->getStructure(si);
-        if (!structure || !structure->isVisible()) continue;
-
-        auto clr = structure->getColor();
-        ImU32 color = IM_COL32(clr[0], clr[1], clr[2], 80);
-
-        for (const auto& contour : structure->getContours()) {
-            if (contour.points.size() < 3) continue;
-
-            std::vector<ImVec2> projectedPts;
-            projectedPts.reserve(contour.points.size());
-
-            for (const auto& pt : contour.points) {
-                // LPS → BEV
-                Vec3 relative = {pt[0] - isocenter[0],
-                                 pt[1] - isocenter[1],
-                                 pt[2] - isocenter[2]};
-                Vec3 bev = Rt * relative;
-
-                // SAD divergence correction
-                double scale = (SAD + bev[1]) != 0.0 ? SAD / (SAD + bev[1]) : 1.0;
-                double projX = bev[0] * scale;
-                double projZ = bev[2] * scale;
-
-                projectedPts.push_back(bevToScreen(projX, projZ, imgMin, imgMax));
-            }
-
-            // Draw closed polyline
-            dl->AddPolyline(projectedPts.data(),
-                            static_cast<int>(projectedPts.size()),
-                            color, ImDrawFlags_Closed, 1.5f);
-        }
+void BevView::renderSceneControls() {
+    ImGui::Checkbox("3D anatomy", &m_showAnatomy);
+    ImGui::SameLine();
+    if (ImGui::Button("Reset zoom")) {
+        m_sceneZoom = 1.0f;
+        m_zoom = 1.0f;
     }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Reset magnification. Scroll over the view to zoom; the view stays source-aligned.");
+}
 
-    dl->PopClipRect();
+void BevView::handleZoom(float& zoom) {
+    if (ImGui::IsItemHovered()) {
+        zoom *= std::exp(ImGui::GetIO().MouseWheel * 0.1f);
+        zoom = std::clamp(zoom, 0.25f, 10.0f);
+    }
+}
+
+void BevView::renderScene(const Beam& beam, const std::vector<const Aperture*>& apertures,
+                          const std::vector<double>& boundaries, double extentX, double extentZ) {
+    ImGui::TextDisabled("MLC: %.0f mm from source | %.0f mm before isocenter",
+                       beam.getSCD(), beam.getSAD() - beam.getSCD());
+    const auto available = ImGui::GetContentRegionAvail();
+    if (available.x < 1.0f || available.y < 1.0f) return;
+    const auto origin = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##bev_scene", available);
+    handleZoom(m_sceneZoom);
+    const auto dpi = ImGui::GetIO().DisplayFramebufferScale;
+    const auto texture = m_sceneRenderer.render(m_state.patientData.get(), beam, apertures, boundaries,
+        extentX, extentZ, std::max(1, static_cast<int>(available.x * dpi.x)),
+        std::max(1, static_cast<int>(available.y * dpi.y)), m_sceneZoom);
+    if (texture) {
+        ImGui::GetWindowDrawList()->AddImage(reinterpret_cast<void*>(static_cast<intptr_t>(texture)),
+            origin, ImVec2(origin.x + available.x, origin.y + available.y), ImVec2(0, 1), ImVec2(1, 0));
+    } else {
+        ImGui::SetCursorScreenPos(origin);
+        ImGui::TextUnformatted("Cannot render BEV: invalid source/collimator geometry (see log).");
+    }
 }
 
 } // namespace optirad

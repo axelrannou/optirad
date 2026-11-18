@@ -288,9 +288,9 @@ void PlanningPanel::render() {
         config.machineName = kMachines[m_machineIdx];
         config.numFractions = m_numFractions;
         config.bixelWidth = m_bixelWidth;
+        config.deliveryMode = isVmat ? DeliveryMode::VMAT : DeliveryMode::SMLC;
 
         if (isVmat) {
-            config.deliveryMode = DeliveryMode::VMAT;
             config.vmat.arcs.clear();
             for (const auto& arc : m_arcs) {
                 ArcSpec spec;

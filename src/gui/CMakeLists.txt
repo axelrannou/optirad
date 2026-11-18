@@ -50,6 +50,7 @@ add_library(optirad_gui
     views/SliceView.cpp
     views/DVHView.cpp
     views/BevView.cpp
+    views/renderers/BevRenderer.cpp
     views/View3D.cpp
     views/renderers/CubeRenderer.cpp
     views/renderers/AxisLabels.cpp

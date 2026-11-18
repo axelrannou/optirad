@@ -177,7 +177,8 @@ class IPanel {
 - Machine selector (Generic, HD120, Varian_TrueBeam6MV; default HD120)
 - Delivery defaults to VMAT with a clockwise 0 to 360 degree arc, 10 degree sectors,
   2 degree control point spacing, and 3 mm bixels (also the CLI planning defaults)
-- Gantry angle configuration (start, step, stop)
+- SMLC uses the configured gantry range (start, step, stop-exclusive) or explicit
+  list, with one beam per gantry entry. Arc sector width applies only to VMAT.
 - Bixel width slider
 - Number of fractions input
 - **Create Plan** button → creates `Plan` with `StfProperties`
@@ -345,12 +346,22 @@ Dose-volume histogram plot using ImGui drawing primitives.
 
 ### BevView
 
-Beam's Eye View for inspection of sequenced and optimized beam fluence.
+Beam's Eye View for SMLC segments and VMAT control-point playback.
 
-- Displays a fluence heatmap for the selected beam
-- Overlays MLC leaf positions for a selected segment or the combined fluence
-- Optionally draws projected patient structure contours in BEV coordinates
-- Supports zoom and pan similar to `SliceView`
+- Defaults to translucent anatomy surfaces using the same structure renderer,
+  colors, and visibility as `View3D`, instead of projected contour lines
+- Source-aligned perspective with MLC leaves at the beam's source-to-collimator
+  distance (SCD); isocenter leaf positions and widths are scaled by SCD/SAD
+- Translucent leaf banks keep the anatomy visible, with highlighted leaf tips
+- SMLC segment selection shows individual leaves; "All" shows aperture outlines
+  rather than superimposing incompatible physical leaf positions
+- VMAT playback interpolates anatomy viewing angle and leaf motion together
+- Gantry angle is interpolated linearly between control points; delivery speed
+  can vary with leaf travel and dose-rate limits. The current planned gantry
+  speed is shown in degrees/second, separately from the **Playback** multiplier
+- Scroll to zoom; **Reset zoom** restores magnification. Pan and manual orbit
+  are disabled so the view always stays aligned with the beam source
+- Disable **3D anatomy** to retain the fluence heatmap / 2D aperture display
 - Refreshes automatically when dose or sequencing selection changes
 
 ## 3D Renderers

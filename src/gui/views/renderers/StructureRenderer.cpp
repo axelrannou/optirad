@@ -712,6 +712,8 @@ void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projectio
     GLint viewport[4];
     glGetIntegerv(GL_VIEWPORT, viewport);
     int vpW=viewport[2], vpH=viewport[3];
+    GLint readFBO=0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
     ensureWboitFBO(vpW, vpH);
 
     // -90° rotation to align with anatomical axes
@@ -732,8 +734,6 @@ void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projectio
     // ── Copy opaque depth into the WBOIT FBO ──────────────────────────────
     // Blit the current depth buffer so that structures are correctly occluded
     // by opaque geometry rendered before this call.
-    GLint readFBO=0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, readFBO);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_wboitFBO);
     glBlitFramebuffer(0,0,vpW,vpH, 0,0,vpW,vpH, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
