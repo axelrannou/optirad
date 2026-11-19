@@ -15,7 +15,9 @@
 
 namespace optirad {
 
-PatientPanel::PatientPanel(GuiAppState& state) : m_state(state) {
+PatientPanel::PatientPanel(GuiAppState& state, unsigned int eyeOpenTexture,
+                           unsigned int eyeClosedTexture)
+    : m_state(state), m_eyeOpenTexture(eyeOpenTexture), m_eyeClosedTexture(eyeClosedTexture) {
     // Default to project data/ directory
     snprintf(m_dicomPath, sizeof(m_dicomPath), "%s", OPTIRAD_DATA_DIR);
     m_dicomPath[sizeof(m_dicomPath) - 1] = '\0';
@@ -258,12 +260,57 @@ void PatientPanel::renderStructureList() {
     auto* structures = m_state.patientData->getStructureSet();
     if (!structures || structures->getCount() == 0) return;
     
-    if (ImGui::BeginTable("Structures", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Visible");
+    bool allVisible = true;
+    for (size_t i = 0; i < structures->getCount(); ++i) {
+        const auto* structure = structures->getStructure(i);
+        if (structure && !structure->isVisible()) {
+            allVisible = false;
+            break;
+        }
+    }
+
+    auto visibilityButton = [&](const char* id, bool visible, const char* tooltip) {
+        const unsigned int texture = visible ? m_eyeOpenTexture : m_eyeClosedTexture;
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+        bool clicked;
+        if (texture) {
+            const float size = ImGui::GetTextLineHeight();
+            clicked = ImGui::ImageButton(id,
+                reinterpret_cast<void*>(static_cast<intptr_t>(texture)),
+                ImVec2(size * 1.58f, size), ImVec2(0, 0), ImVec2(1, 1),
+                ImVec4(0, 0, 0, 0), ImGui::GetStyleColorVec4(ImGuiCol_Text));
+        } else {
+            clicked = ImGui::SmallButton((std::string(visible ? "Hide" : "Show") + id).c_str());
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s %s", visible ? "Hide" : "Show", tooltip);
+        return clicked;
+    };
+
+    if (ImGui::BeginTable("Structures", 3)) {
         ImGui::TableSetupColumn("Name");
         ImGui::TableSetupColumn("Type");
         ImGui::TableSetupColumn("Contours");
-        ImGui::TableHeadersRow();
+
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        ImGui::TableNextColumn();
+        if (visibilityButton("##allVisibility", allVisible, "all structures")) {
+            for (size_t i = 0; i < structures->getCount(); ++i) {
+                if (auto* structure = structures->getStructure(i))
+                    structure->setVisible(!allVisible);
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Name");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Type");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Contours");
         
         for (size_t i = 0; i < structures->getCount(); ++i) {
             auto* s = structures->getStructure(i);
@@ -271,15 +318,14 @@ void PatientPanel::renderStructureList() {
             
             ImGui::TableNextRow();
             
-            // Visible checkbox
             ImGui::TableNextColumn();
-            bool visible = s->isVisible();
-            if (ImGui::Checkbox(("##vis" + std::to_string(i)).c_str(), &visible)) {
-                const_cast<Structure*>(s)->setVisible(visible);
-            }
+            const bool visible = s->isVisible();
+            const std::string id = "##vis" + std::to_string(i);
+            if (visibilityButton(id.c_str(), visible, s->getName().c_str()))
+                s->setVisible(!visible);
             
             // Name with color indicator
-            ImGui::TableNextColumn();
+            ImGui::SameLine();
             auto color = s->getColor();
             ImGui::ColorButton(("##color" + std::to_string(i)).c_str(),
                              ImVec4(color[0]/255.0f, color[1]/255.0f, color[2]/255.0f, 1.0f),

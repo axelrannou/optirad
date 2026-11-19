@@ -50,6 +50,8 @@ private:
     // Theme
     AppTheme m_theme = AppTheme::Dark;
     GLuint m_themeIconTexture = 0;
+    GLuint m_eyeOpenTexture = 0;
+    GLuint m_eyeClosedTexture = 0;
 
     // Layout state
     bool m_layoutInitialized = false;

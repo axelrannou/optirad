@@ -4,6 +4,7 @@
 #include "gui/panels/DVHPanel.hpp"
 #include <dcmtk/dcmdata/dctk.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <filesystem>
 
 namespace optirad::tests {
@@ -181,6 +182,83 @@ TEST_F(PatientImportGuiTest, ImportCannotReplacePatientWhileATaskIsRunning) {
     patient.importDicom(dir.string());
     EXPECT_FALSE(patient.hasData());
     EXPECT_FALSE(state.doseAvailable());
+}
+
+TEST_F(PatientImportGuiTest, StructureVisibilityButtonsToggleIndividualAndAllStructures) {
+    PatientPanel patient(state, 1, 2);
+    patient.importDicom(dir.string());
+    ASSERT_TRUE(state.patientData);
+    auto* structures = state.patientData->getStructureSet();
+    ASSERT_NE(structures, nullptr);
+    ASSERT_EQ(structures->getCount(), 1u);
+    auto second = std::make_unique<Structure>();
+    second->setName("Second");
+    structures->addStructure(std::move(second));
+
+    auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(800, 700), ImGuiCond_Always);
+        patient.render();
+        ImGui::Render();
+    };
+    frame();
+    const auto* window = ImGui::FindWindowByName("Patient Data");
+    ASSERT_NE(window, nullptr);
+    const ImGuiID tableId = ImHashStr("Structures", 0, window->ID);
+    const ImGuiID firstRowId = ImHashStr("##vis0", 0, tableId);
+    const ImGuiID allId = ImHashStr("##allVisibility", 0, tableId);
+
+    auto findButton = [&](ImGuiID id) {
+        auto& io = ImGui::GetIO();
+        for (int y = 30; y < 500; y += 5) {
+            for (int x = 10; x < 200; x += 5) {
+                io.AddMousePosEvent(static_cast<float>(x), static_cast<float>(y));
+                frame();
+                if (GImGui->HoveredId == id) return ImVec2(static_cast<float>(x), static_cast<float>(y));
+            }
+        }
+        return ImVec2(-1, -1);
+    };
+    auto click = [&](ImVec2 pos) {
+        auto& io = ImGui::GetIO();
+        io.AddMousePosEvent(pos.x, pos.y);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+    };
+
+    const ImVec2 rowButton = findButton(firstRowId);
+    ASSERT_GE(rowButton.x, 0);
+    click(rowButton);
+    EXPECT_FALSE(structures->getStructure(0)->isVisible());
+    EXPECT_TRUE(structures->getStructure(1)->isVisible());
+
+    const ImVec2 allButton = findButton(allId);
+    ASSERT_GE(allButton.x, 0);
+    click(allButton);
+    EXPECT_TRUE(structures->getStructure(0)->isVisible());
+    EXPECT_TRUE(structures->getStructure(1)->isVisible());
+
+    click(allButton);
+    EXPECT_FALSE(structures->getStructure(0)->isVisible());
+    EXPECT_FALSE(structures->getStructure(1)->isVisible());
+
+    click(allButton);
+    EXPECT_TRUE(structures->getStructure(0)->isVisible());
+    EXPECT_TRUE(structures->getStructure(1)->isVisible());
+    click(allButton);
+    EXPECT_FALSE(structures->getStructure(0)->isVisible());
+    EXPECT_FALSE(structures->getStructure(1)->isVisible());
+
+    click(rowButton);
+    EXPECT_TRUE(structures->getStructure(0)->isVisible());
+    EXPECT_FALSE(structures->getStructure(1)->isVisible());
+    click(allButton);
+    EXPECT_TRUE(structures->getStructure(0)->isVisible());
+    EXPECT_TRUE(structures->getStructure(1)->isVisible());
 }
 
 } // namespace optirad::tests

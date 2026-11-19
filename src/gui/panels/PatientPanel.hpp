@@ -11,7 +11,8 @@ namespace optirad {
 
 class PatientPanel : public IPanel {
 public:
-    PatientPanel(GuiAppState& state);
+    PatientPanel(GuiAppState& state, unsigned int eyeOpenTexture = 0,
+                 unsigned int eyeClosedTexture = 0);
     
     void render() override;
     void update() override;  // Declare but don't define inline
@@ -34,6 +35,8 @@ private:
     
     GuiAppState& m_state;
     DicomImporter m_importer;
+    unsigned int m_eyeOpenTexture;
+    unsigned int m_eyeClosedTexture;
     
     // UI state
     bool m_showImportDialog = false;

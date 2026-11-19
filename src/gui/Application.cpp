@@ -143,6 +143,8 @@ bool Application::init() {
     
     // Load theme toggle icon
     loadTexture(OPTIRAD_GUI_IMG_DIR "/day-and-night.png", &m_themeIconTexture);
+    loadTexture(OPTIRAD_GUI_IMG_DIR "/eye_open.png", &m_eyeOpenTexture);
+    loadTexture(OPTIRAD_GUI_IMG_DIR "/eye_closed.png", &m_eyeClosedTexture);
 
     // Create 3D view
     m_view3D = std::make_unique<View3D>();
@@ -150,7 +152,7 @@ bool Application::init() {
     m_view3D->setDarkMode(m_theme == AppTheme::Dark);
     
     // Create panels
-    m_patientPanel = std::make_unique<PatientPanel>(m_appState);
+    m_patientPanel = std::make_unique<PatientPanel>(m_appState, m_eyeOpenTexture, m_eyeClosedTexture);
     m_planningPanel = std::make_unique<PlanningPanel>(m_appState);
     m_stfPanel = std::make_unique<StfPanel>(m_appState);
     m_phaseSpacePanel = std::make_unique<PhaseSpacePanel>(m_appState);
@@ -426,6 +428,14 @@ void Application::shutdown() {
     if (m_themeIconTexture) {
         glDeleteTextures(1, &m_themeIconTexture);
         m_themeIconTexture = 0;
+    }
+    if (m_eyeOpenTexture) {
+        glDeleteTextures(1, &m_eyeOpenTexture);
+        m_eyeOpenTexture = 0;
+    }
+    if (m_eyeClosedTexture) {
+        glDeleteTextures(1, &m_eyeClosedTexture);
+        m_eyeClosedTexture = 0;
     }
     if (m_window) {
         glfwDestroyWindow(m_window);

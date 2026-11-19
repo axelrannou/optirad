@@ -166,7 +166,8 @@ class IPanel {
 - Patient demographics display (name, ID)
 - CT volume information (dimensions, spacing, origin, HU range)
 - Structure list with:
-  - Visibility checkboxes
+  - Eye buttons to show or hide individual structures
+  - An eye button in the header to show/hide all; when visibility is mixed, it shows all structures
   - Color indicators
   - Type labels (TARGET/OAR/EXTERNAL)
   - Contour/voxel counts
