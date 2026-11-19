@@ -1,4 +1,5 @@
 #include "View3D.hpp"
+#include "../DeliveryPlayback.hpp"
 #include "renderers/CubeRenderer.hpp"
 #include "renderers/AxisLabels.hpp"
 #include "renderers/VolumeRenderer.hpp"
@@ -336,6 +337,9 @@ void View3D::render(int width, int height) {
         
         // Render beams / rays / isocenter
         m_impl->beamRenderer->render(view, projection, cameraPos);
+        if (m_delivery && m_delivery->showOverlays && m_delivery->available())
+            m_impl->beamRenderer->renderDelivery(m_delivery->overlay(), view, projection,
+                                                m_delivery->frame().beamOn);
         
         // Render phase-space particles
         m_impl->phaseSpaceRenderer->render(view, projection, cameraPos);

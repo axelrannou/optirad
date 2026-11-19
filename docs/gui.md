@@ -311,6 +311,8 @@ retains its single-dose coverage unless comparison grids are supplied explicitly
 - Structure contour overlay (colored lines)
 - Dose overlay with jet colormap and adjustable opacity
 - Coordinated crosshairs across views
+- Yellow delivery projections shared with the Delivery panel; the view fits the
+  complete trajectory without following the moving aperture
 
 **Orientations:**
 | View | Plane | Axes |
@@ -327,6 +329,8 @@ retains its single-dose coverage unless comparison grids are supplied explicitly
 - Orbit camera (left-drag to rotate, scroll to zoom, middle-drag to pan)
 - Multiple 3D renderers composited in a single viewport
 - PIMPL idiom hides OpenGL implementation
+- Yellow delivery arcs, direction arrows, physical MLC leaf outlines, and
+  divergent aiming lines synchronized with the slice views and BEV
 
 **Uses renderers:**
 - `VolumeRenderer` — CT volume raycasting
@@ -363,6 +367,36 @@ Beam's Eye View for SMLC segments and VMAT control-point playback.
   are disabled so the view always stays aligned with the beam source
 - Disable **3D anatomy** to retain the fluence heatmap / 2D aperture display
 - Refreshes automatically when dose or sequencing selection changes
+- Play/pause, rewind, time, and playback multiplier share the Delivery panel's
+  whole-plan clock; either set of controls updates all views
+
+### Delivery panel
+
+The **Delivery** panel is docked under STF Generation (half of that column) and can be reopened from
+**View > Delivery Panel**. Use **View > Reset Layout** to restore its default dock.
+
+- Play/pause, rewind, and scrub the entire plan, automatically advancing through
+  every arc or SMLC beam; select an individual arc/beam with its slider
+- **Show delivery overlays** hides or shows the yellow geometry in all four
+  patient views without hiding BEV's ordinary aperture/anatomy display
+- Axial displays the projected arc, a tick per VMAT control point, and the direction arrow; coronal and sagittal
+  display projected MLC outlines and aiming lines. These are labeled
+  **Delivery projection**: they are projections, not intersections with the
+  currently selected CT slice
+- 3D displays each arc around the patient and the moving MLC at the physical
+  source-to-collimator distance, with rays aimed through the aperture
+- VMAT uses selected-dose control-point timing. Gantry motion is linear within
+  each angular slice, but speed can change between slices; the current speed
+  is displayed separately from the playback multiplier
+- SMLC timing is estimated from calibrated MU rates, leaf travel, and gantry
+  speed limits, with beam-off transitions. Couch motion is not timed. The status
+  line reads **Beam on: shooting** during segments and **Beam off: repositioning**
+  between them
+- Without MLC results, VMAT previews the field at the gantry speed limit and
+  SMLC uses an explicitly illustrative one-second dwell per beam
+
+This is a planned-delivery visualization, not a reconstruction from treatment
+machine logs. VMAT inter-arc repositioning is not modeled.
 
 ## 3D Renderers
 
@@ -395,7 +429,10 @@ Beam geometry visualization.
 - Source point → ray target lines (one per ray)
 - Isocenter sphere marker
 - Per-beam visibility control
+- STF beams and their isocenter marker are hidden by default; enable individual
+  beams in the STF controls when needed
 - Color coding by beam index
+- Shared yellow delivery overlays use a separate dynamic line buffer
 
 ### PhaseSpaceRenderer
 

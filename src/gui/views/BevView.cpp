@@ -1,4 +1,5 @@
 #include "BevView.hpp"
+#include "../panels/DeliveryPanel.hpp"
 #include "core/Aperture.hpp"
 #include "core/FluenceMap.hpp"
 #include "geometry/MathUtils.hpp"
@@ -57,18 +58,17 @@ void BevView::render() {
     if (!m_visible) return;
 
     ImGui::Begin("BEV", &m_visible);
+    m_state.delivery.synchronize(m_state);
 
     const auto* selected = m_state.doseStore.getSelected();
     const int selectedId = selected ? selected->id : -1;
     if (selectedId != m_selectedDoseId) {
         m_selectedDoseId = selectedId;
         m_segmentIndex = 0;
-        m_arcTime = 0.0f;
-        m_arcPlaying = false;
+        m_lastDeliveryTime = -1.0;
         m_needsUpdate = true;
     }
-    if (selected && m_state.arcCache.count(selected->id) &&
-        m_state.arcCache.at(selected->id).result) {
+    if (m_state.delivery.available() && m_state.delivery.isVmat()) {
         renderArcMotion();
         ImGui::End();
         return;
@@ -88,75 +88,15 @@ void BevView::render() {
 }
 
 void BevView::renderArcMotion() {
-    const auto& result = *m_state.arcCache.at(m_state.doseStore.getSelected()->id).result;
-    const auto& points = result.sequence.controlPoints;
-    if (points.empty()) return;
-    const int arcCount = static_cast<int>(points.back().geometry.arcIndex) + 1;
-    m_arcSelection = std::clamp(m_arcSelection, 0, arcCount - 1);
-    if (ImGui::SliderInt("Arc", &m_arcSelection, 0, arcCount - 1)) {
-        m_arcTime = 0.0f;
-        m_arcPlaying = false;
-    }
-    size_t begin = 0;
-    while (begin < points.size() && points[begin].geometry.arcIndex != static_cast<size_t>(m_arcSelection)) ++begin;
-    if (begin == points.size()) return;
-    size_t end = begin;
-    double duration = 0.0;
-    double extentX = 20.0, extentZ = 20.0;
-    while (end < points.size() && points[end].geometry.arcIndex == static_cast<size_t>(m_arcSelection)) {
-        const auto& cp = points[end++];
-        duration += cp.timeSec;
-        for (double tip : cp.aperture.bankA) extentX = std::max(extentX, std::abs(tip) + 15.0);
-        for (double tip : cp.aperture.bankB) extentX = std::max(extentX, std::abs(tip) + 15.0);
-        for (double boundary : cp.leafPairBoundariesZ) extentZ = std::max(extentZ, std::abs(boundary) + 5.0);
-    }
-    if (ImGui::ArrowButton("##playArc", m_arcPlaying ? ImGuiDir_Down : ImGuiDir_Right)) m_arcPlaying = !m_arcPlaying;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip(m_arcPlaying ? "Pause" : "Play");
-    ImGui::SameLine();
-    if (ImGui::ArrowButton("##rewindArc", ImGuiDir_Left)) { m_arcTime = 0.0f; m_arcPlaying = false; }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rewind");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(130.0f);
-    ImGui::SliderFloat("Playback", &m_arcPlaybackSpeed, 0.1f, 10.0f, "%.1fx");
-    if (m_arcPlaying) m_arcTime += ImGui::GetIO().DeltaTime * m_arcPlaybackSpeed;
-    m_arcTime = std::clamp(m_arcTime, 0.0f, static_cast<float>(duration));
-    if (m_arcTime >= duration) m_arcPlaying = false;
-    ImGui::SliderFloat("Time", &m_arcTime, 0.0f, static_cast<float>(duration), "%.2f s");
-    size_t index = begin;
-    double start = 0.0;
-    while (index + 1 < end && start + points[index].timeSec < m_arcTime) start += points[index++].timeSec;
-    const auto& current = points[index];
-    const auto& previous = points[index > begin ? index - 1 : index];
-    const double fraction = current.timeSec > 0.0 ? std::clamp((m_arcTime - start) / current.timeSec, 0.0, 1.0) : 1.0;
-    auto interpolate = [fraction](double first, double last) { return first + fraction * (last - first); };
-    double angularDifference = std::remainder(current.geometry.gantryAngle - previous.geometry.gantryAngle, 360.0);
-    const double angle = std::fmod(previous.geometry.gantryAngle + fraction * angularDifference + 360.0, 360.0);
-    ImGui::Text("CP %zu | Gantry %.1f | Couch %.1f | %.2f MU/s | %.1f mm/s",
-        index, angle, current.geometry.couchAngle, current.doseRate, current.leafSpeed);
-    ImGui::Text("Gantry speed: %.2f deg/s (delivery)", current.gantrySpeed);
+    auto& delivery = m_state.delivery;
+    DeliveryPanel::renderControls(delivery);
+    const auto& current = delivery.frame();
+    const double extentX = delivery.extentX(), extentZ = delivery.extentZ();
     renderSceneControls();
     if (m_showAnatomy) {
-        const auto* cpBeam = result.controlPointStf ? result.controlPointStf->getBeam(index) : nullptr;
-        if (!cpBeam) {
-            ImGui::TextDisabled("Control point geometry unavailable.");
-            return;
-        }
-        Beam beam;
-        beam.setIsocenter(cpBeam->getIsocenter());
-        beam.setSAD(cpBeam->getSAD());
-        beam.setSCD(cpBeam->getSCD());
-        beam.setGantryAngle(angle);
-        beam.setCouchAngle(current.geometry.couchAngle);
-        Aperture aperture = current.aperture;
-        if (previous.leafPairBoundariesZ == current.leafPairBoundariesZ &&
-            previous.aperture.bankA.size() == aperture.bankA.size() &&
-            previous.aperture.bankB.size() == aperture.bankB.size()) {
-            for (size_t pair = 0; pair < aperture.bankA.size(); ++pair)
-                aperture.bankA[pair] = interpolate(previous.aperture.bankA[pair], aperture.bankA[pair]);
-            for (size_t pair = 0; pair < aperture.bankB.size(); ++pair)
-                aperture.bankB[pair] = interpolate(previous.aperture.bankB[pair], aperture.bankB[pair]);
-        }
-        renderScene(beam, {&aperture}, current.leafPairBoundariesZ, extentX, extentZ);
+        std::vector<const Aperture*> apertures;
+        if (current.hasAperture) apertures.push_back(&current.aperture);
+        renderScene(current.beam, apertures, current.boundaries, extentX, extentZ);
         return;
     }
     const ImVec2 available = ImGui::GetContentRegionAvail();
@@ -174,12 +114,9 @@ void BevView::renderArcMotion() {
     draw->PushClipRect(origin, ImVec2(origin.x + available.x, origin.y + available.y), true);
     draw->AddRectFilled(screen(-extentX, extentZ), screen(extentX, -extentZ), IM_COL32(24, 30, 34, 255));
     for (size_t pair = 0; pair < current.aperture.bankA.size(); ++pair) {
-        const bool matched = pair < previous.aperture.bankA.size() &&
-            pair < previous.aperture.bankB.size() &&
-            previous.leafPairBoundariesZ == current.leafPairBoundariesZ;
-        const double left = matched ? interpolate(previous.aperture.bankA[pair], current.aperture.bankA[pair]) : current.aperture.bankA[pair];
-        const double right = matched ? interpolate(previous.aperture.bankB[pair], current.aperture.bankB[pair]) : current.aperture.bankB[pair];
-        const double bottom = current.leafPairBoundariesZ[pair], top = current.leafPairBoundariesZ[pair + 1];
+        const double left = current.aperture.bankA[pair];
+        const double right = current.aperture.bankB[pair];
+        const double bottom = current.boundaries[pair], top = current.boundaries[pair + 1];
         draw->AddRectFilled(screen(left, top), screen(right, bottom), IM_COL32(45, 178, 150, 210));
         for (const auto& edges : {std::pair<double, double>{-extentX, left}, {right, extentX}}) {
             draw->AddRectFilled(screen(edges.first, top), screen(edges.second, bottom), IM_COL32(100, 114, 126, 255));
@@ -193,6 +130,17 @@ void BevView::renderControls() {
     int numBeams = static_cast<int>(m_state.stf->getCount());
     if (numBeams == 0) return;
 
+    DeliveryPanel::renderControls(m_state.delivery);
+    if (m_state.delivery.available()) {
+        const auto& frame = m_state.delivery.frame();
+        if (m_lastDeliveryTime != m_state.delivery.time() || m_state.delivery.playing) {
+            m_beamIndex = static_cast<int>(frame.beamIndex);
+            m_segmentIndex = frame.segment;
+            m_needsUpdate = true;
+        }
+        m_lastDeliveryTime = m_state.delivery.time();
+    }
+
     // Clamp beam index
     if (m_beamIndex >= numBeams) m_beamIndex = numBeams - 1;
     if (m_beamIndex < 0) m_beamIndex = 0;
@@ -203,7 +151,8 @@ void BevView::renderControls() {
     std::string beamLabel = "Beam " + std::to_string(m_beamIndex) +
         " (GA: " + std::to_string(static_cast<int>(beam->getGantryAngle())) + ")";
 
-    if (ImGui::SliderInt("Beam", &m_beamIndex, 0, numBeams - 1, beamLabel.c_str())) {
+    if (!m_state.delivery.available() &&
+        ImGui::SliderInt("Beam", &m_beamIndex, 0, numBeams - 1, beamLabel.c_str())) {
         changed = true;
         beam = m_state.stf->getBeam(static_cast<size_t>(m_beamIndex));
     }
@@ -234,6 +183,12 @@ void BevView::renderControls() {
             if (ImGui::SliderInt("Segment", &m_segmentIndex, -1, numSegs - 1,
                                  segLabel.c_str())) {
                 changed = true;
+                m_state.delivery.playing = false;
+                if (m_segmentIndex >= 0 && m_state.delivery.available() &&
+                    seq.segments[static_cast<size_t>(m_segmentIndex)].weight > 0.0) {
+                    m_state.delivery.selectSegment(static_cast<size_t>(m_beamIndex), m_segmentIndex);
+                    m_lastDeliveryTime = m_state.delivery.time();
+                }
             }
         }
     } else {
@@ -323,7 +278,14 @@ void BevView::renderBevContent() {
             for (double tip : aperture->bankB) extentX = std::max(extentX, std::abs(tip) + 15.0);
         }
         for (double boundary : boundaries) extentZ = std::max(extentZ, std::abs(boundary) + 5.0);
-        renderScene(*beam, apertures, boundaries, extentX, extentZ);
+        const auto& frame = m_state.delivery.frame();
+        if (m_state.delivery.available() && m_segmentIndex >= 0 && frame.hasAperture &&
+            frame.segment == m_segmentIndex && frame.beamIndex == static_cast<size_t>(m_beamIndex)) {
+            apertures = {&frame.aperture};
+            boundaries = frame.boundaries;
+        }
+        renderScene(m_state.delivery.available() ? frame.beam : *beam,
+                    apertures, boundaries, extentX, extentZ);
         return;
     }
 
@@ -613,7 +575,10 @@ void BevView::renderMlcLeaves(ImDrawList* dl, ImVec2 imgMin, ImVec2 imgMax) {
     }
 
     for (size_t si : segIndicesToDraw) {
-        const auto& seg = seq.segments[si];
+        const auto& frame = m_state.delivery.frame();
+        const auto& seg = m_state.delivery.available() && m_segmentIndex >= 0 && frame.hasAperture &&
+                          frame.segment == m_segmentIndex && frame.beamIndex == static_cast<size_t>(m_beamIndex) ?
+                          frame.aperture : seq.segments[si];
         int nLeafPairs = static_cast<int>(seg.bankA.size());
 
         for (int r = 0; r < nLeafPairs; ++r) {

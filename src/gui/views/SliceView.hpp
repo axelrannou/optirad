@@ -4,11 +4,13 @@
 #include "core/PatientData.hpp"
 #include "dose/DoseMatrix.hpp"
 #include "geometry/Grid.hpp"
+#include <imgui.h>
 #include <memory>
 #include <string>
 
 namespace optirad {
 
+class DeliveryPlayback;
 enum class SliceOrientation {
     Axial,      // X-Y plane (Z slices)
     Sagittal,   // Y-Z plane (X slices)
@@ -30,6 +32,7 @@ public:
 
     /// Set dose overlay data (nullptr to disable)
     void setDoseData(const DoseMatrix* dose, const Grid* doseGrid);
+    void setDelivery(const DeliveryPlayback* delivery) { m_delivery = delivery; }
     
 private:
     void updateTexture();
@@ -37,11 +40,14 @@ private:
     void renderControls();
     void renderSlice();
     void renderContours();
+    void renderDelivery();
+    ImVec2 deliveryUv(const std::array<double, 3>& lps) const;
     
     /// Jet colormap: value in [0,1] → R,G,B
     static void jetColormap(float t, unsigned char& r, unsigned char& g, unsigned char& b);
     
     PatientData* m_patientData = nullptr;
+    const DeliveryPlayback* m_delivery = nullptr;
     SliceOrientation m_orientation;
     
     size_t m_currentSlice = 0;

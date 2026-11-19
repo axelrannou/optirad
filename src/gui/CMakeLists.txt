@@ -33,6 +33,7 @@ target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
 # GUI library
 add_library(optirad_gui
     Application.cpp
+    DeliveryPlayback.cpp
     Theme.cpp
     stb_image_impl.cpp
     Window.cpp
@@ -43,6 +44,7 @@ add_library(optirad_gui
     panels/DVHPanel.cpp
     panels/LogPanel.cpp
     panels/PlanningPanel.cpp
+    panels/DeliveryPanel.cpp
     panels/StfPanel.cpp
     panels/PhaseSpacePanel.cpp
     panels/LeafSequencingPanel.cpp

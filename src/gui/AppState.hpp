@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DeliveryPlayback.hpp"
+
 #include "core/PatientData.hpp"
 #include "core/Plan.hpp"
 #include "core/Stf.hpp"
@@ -43,6 +45,7 @@ struct ArcCacheEntry {
 /// Shared application state for the GUI pipeline.
 /// Mirrors the CLI AppState: load DICOM → create Plan → generate STF → dose calc → optimize.
 struct GuiAppState {
+    DeliveryPlayback delivery;
     std::shared_ptr<PatientData> patientData;
     std::shared_ptr<Plan> plan;
     std::shared_ptr<StfProperties> stfProps;

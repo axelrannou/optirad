@@ -14,6 +14,7 @@ class Stf;
 class BeamRenderer;
 class PhaseSpaceRenderer;
 class PhaseSpaceBeamSource;
+class DeliveryPlayback;
 
 class View3D {
 public:
@@ -34,6 +35,7 @@ public:
     
     void setPatientData(PatientData* data);
     void setStf(const Stf* stf);
+    void setDelivery(const DeliveryPlayback* delivery) { m_delivery = delivery; }
     void setPhaseSpaceSources(const std::vector<const PhaseSpaceBeamSource*>& sources);
     BeamRenderer* getBeamRenderer();
     PhaseSpaceRenderer* getPhaseSpaceRenderer();
@@ -47,6 +49,7 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;
+    const DeliveryPlayback* m_delivery = nullptr;
     
     void initCubeRendering();
     void renderCube();

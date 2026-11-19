@@ -29,10 +29,7 @@ private:
     void handleZoom(float& zoom);
     void renderScene(const Beam& beam, const std::vector<const Aperture*>& apertures,
                      const std::vector<double>& boundaries, double extentX, double extentZ);
-    bool m_arcPlaying = false;
-    float m_arcTime = 0.0f;
-    float m_arcPlaybackSpeed = 1.0f;
-    int m_arcSelection = 0;
+    double m_lastDeliveryTime = -1.0;
     int m_selectedDoseId = -1;
     void renderBevContent();
     void updateFluenceTexture();

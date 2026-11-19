@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 #include "gui/views/BevView.hpp"
 #include "gui/views/renderers/BevRenderer.hpp"
+#include "gui/views/SliceView.hpp"
+#include "gui/views/View3D.hpp"
+#include "gui/views/renderers/BeamRenderer.hpp"
+#include "gui/panels/DeliveryPanel.hpp"
 #include "sequencing/ArcSequencer.hpp"
 #include <GLFW/glfw3.h>
 #include <imgui_internal.h>
@@ -40,6 +44,7 @@ protected:
     }
 
     void TearDown() override {
+        if (ImGui::GetCurrentContext()) ImGui::DestroyContext();
         if (window) {
             glfwDestroyWindow(window);
             glfwTerminate();
@@ -75,6 +80,42 @@ protected:
         structures->addStructure(std::move(target));
         data->setStructureSet(std::move(structures));
         return data;
+    }
+
+    void deliveryState(GuiAppState& state) {
+        state.patientData = patient();
+        Grid grid;
+        grid.setDimensions(64, 64, 64);
+        grid.setSpacing(4.0, 4.0, 4.0);
+        grid.setOrigin({-128.0, -128.0, -128.0});
+        auto ct = std::make_unique<Volume<int16_t>>();
+        ct->setGrid(grid);
+        ct->allocate();
+        state.patientData->setCTVolume(std::move(ct));
+        state.stf = std::make_shared<Stf>();
+        beam.generateRays(5.0, {60.0, 60.0});
+        state.stf->addBeam(beam);
+        auto arc = std::make_shared<ArcPipelineResult>();
+        arc->controlPointStf = state.stf;
+        DeliveredControlPoint cp;
+        cp.geometry.gantryAngle = 180.0;
+        cp.geometry.width = 360.0;
+        cp.timeSec = 1.0;
+        cp.mu = 1.0;
+        cp.gantrySpeed = 360.0;
+        cp.aperture = aperture;
+        cp.leafPairBoundariesZ = boundaries;
+        arc->sequence.controlPoints = {cp};
+        arc->sequence.totalTimeSec = 1.0;
+        const int id = state.doseStore.addDose("Delivery", nullptr, nullptr);
+        state.arcCache[id].result = arc;
+        state.delivery.synchronize(state);
+    }
+
+    static bool yellow(ImU32 color) {
+        return ((color >> IM_COL32_R_SHIFT) & 255) > 240 &&
+               ((color >> IM_COL32_G_SHIFT) & 255) > 200 &&
+               ((color >> IM_COL32_B_SHIFT) & 255) < 100;
     }
 };
 
@@ -267,6 +308,126 @@ TEST_F(BevRendererTest, SceneMouseDragsDoNotChangeProjectionButScrollingZooms) {
         EXPECT_NE(frame(), baseline);
     }
     ImGui::DestroyContext();
+}
+
+TEST_F(BevRendererTest, DeliveryProjectionIsVisibleInEverySliceAndHiddenByOneCheckboxState) {
+    ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(1000, 1000);
+    io.DeltaTime = 1.0f / 60.0f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    GuiAppState state;
+    deliveryState(state);
+    state.delivery.seek(0.125);
+    for (auto orientation : {SliceOrientation::Axial, SliceOrientation::Coronal, SliceOrientation::Sagittal}) {
+        SliceView view(orientation);
+        view.setPatientData(state.patientData.get());
+        view.setDelivery(&state.delivery);
+        auto frame = [&] {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(ImVec2(900, 900));
+            view.render();
+            ImGui::Render();
+            std::vector<std::array<float, 2>> yellowVertices;
+            const auto* data = ImGui::GetDrawData();
+            for (int i = 0; i < data->CmdListsCount; ++i) {
+                for (const auto& vertex : data->CmdLists[i]->VtxBuffer) {
+                    EXPECT_TRUE(std::isfinite(vertex.pos.x));
+                    EXPECT_TRUE(std::isfinite(vertex.pos.y));
+                    if (yellow(vertex.col)) yellowVertices.push_back({vertex.pos.x, vertex.pos.y});
+                }
+            }
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            return yellowVertices;
+        };
+        state.delivery.showOverlays = true;
+        frame();
+        const auto initial = frame();
+        EXPECT_GT(initial.size(), 400u);
+        state.delivery.seek(0.25);
+        EXPECT_NE(frame(), initial);
+        state.delivery.seek(0.125);
+        state.delivery.showOverlays = false;
+        EXPECT_TRUE(frame().empty());
+        EXPECT_DOUBLE_EQ(state.delivery.time(), 0.125);
+    }
+}
+
+TEST_F(BevRendererTest, DeliveryPanelAndBevReadOneClockWithoutAdvancingIt) {
+    ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(1600, 1000);
+    io.DeltaTime = 1.0f / 60.0f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    GuiAppState state;
+    deliveryState(state);
+    DeliveryPanel panel(state);
+    BevView bev(state);
+    state.delivery.togglePlaying();
+    state.delivery.advance(0.25);
+    for (int i = 0; i < 2; ++i) {
+        ImGui::NewFrame();
+        ImGui::LogToBuffer();
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImVec2(600, 900));
+        panel.render();
+        ImGui::SetNextWindowPos(ImVec2(650, 0));
+        ImGui::SetNextWindowSize(ImVec2(900, 900));
+        bev.render();
+        const std::string text = GImGui->LogBuffer.c_str();
+        ImGui::LogFinish();
+        ImGui::Render();
+        const auto first = text.find("Gantry 90.0");
+        ASSERT_NE(first, std::string::npos);
+        EXPECT_NE(text.find("Gantry 90.0", first + 1), std::string::npos);
+        EXPECT_DOUBLE_EQ(state.delivery.time(), 0.25);
+        EXPECT_TRUE(state.delivery.playing);
+        EXPECT_EQ(glGetError(), GL_NO_ERROR);
+    }
+}
+
+TEST_F(BevRendererTest, View3DShowsMovingYellowDeliveryAndStfBeamsStartHidden) {
+    GuiAppState state;
+    deliveryState(state);
+    View3D view;
+    view.init();
+    view.setPatientData(state.patientData.get());
+    view.setStf(state.stf.get());
+    view.setDelivery(&state.delivery);
+    auto image = [&] {
+        view.render(512, 512);
+        std::vector<unsigned char> pixels(512 * 512 * 4);
+        glBindTexture(GL_TEXTURE_2D, view.getTextureID());
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        EXPECT_EQ(glGetError(), GL_NO_ERROR);
+        return pixels;
+    };
+    auto countYellow = [](const std::vector<unsigned char>& pixels) {
+        size_t count = 0;
+        for (size_t i = 0; i < pixels.size(); i += 4)
+            if (pixels[i] > 120 && pixels[i + 1] > 100 && pixels[i + 2] < 100) ++count;
+        return count;
+    };
+    const auto visible = image();
+    EXPECT_EQ(view.getBeamRenderer()->getBeamCount(), 1u);
+    EXPECT_FALSE(view.getBeamRenderer()->isBeamVisible(0));
+    EXPECT_GT(countYellow(visible), 100u);
+    state.delivery.seek(0.25);
+    EXPECT_NE(image(), visible);
+    state.delivery.showOverlays = false;
+    const auto hidden = image();
+    EXPECT_LT(countYellow(hidden), countYellow(visible));
+    view.getBeamRenderer()->setBeamVisible(0, true);
+    EXPECT_TRUE(view.getBeamRenderer()->isBeamVisible(0));
+    EXPECT_NE(image(), hidden);
+    view.cleanup();
 }
 
 } // namespace

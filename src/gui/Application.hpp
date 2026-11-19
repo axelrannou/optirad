@@ -24,6 +24,7 @@ class DVHPanel;
 class SliceView;
 class View3D;
 class BevView;
+class DeliveryPanel;
 
 class Application {
 public:
@@ -73,6 +74,7 @@ private:
     std::unique_ptr<LeafSequencingPanel> m_leafSequencingPanel;
     std::unique_ptr<DoseStatsPanel> m_doseStatsPanel;
     std::unique_ptr<DVHPanel> m_dvhPanel;
+    std::unique_ptr<DeliveryPanel> m_deliveryPanel;
 
     bool focus3DView = false;
 };

@@ -1,4 +1,5 @@
 #include "BeamRenderer.hpp"
+#include "../../DeliveryPlayback.hpp"
 #include "core/Stf.hpp"
 #include "core/Beam.hpp"
 #include "core/Ray.hpp"
@@ -82,6 +83,13 @@ void BeamRenderer::init() {
     )";
 
     m_lineShader = compileShader(lineVert, lineFrag);
+    glGenVertexArrays(1, &m_deliveryVAO);
+    glGenBuffers(1, &m_deliveryVBO);
+    glBindVertexArray(m_deliveryVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_deliveryVBO);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
+    glBindVertexArray(0);
 
     // Build a unit sphere for isocenter / source points
     std::vector<float> sphereVerts;
@@ -185,8 +193,8 @@ void BeamRenderer::rebuildGeometry() {
         m_beamRays.push_back(bd);
     }
 
-    // All beams visible by default
-    m_beamVisible.assign(m_beamRays.size(), true);
+    // Delivery overlays are the default; STF rays can be enabled explicitly.
+    m_beamVisible.assign(m_beamRays.size(), false);
 
     m_needsRebuild = false;
     Logger::info("BeamRenderer: built geometry for " + std::to_string(beams.size()) +
@@ -200,7 +208,8 @@ void BeamRenderer::render(const glm::mat4& view, const glm::mat4& projection,
 
     if (!m_stf || m_stf->isEmpty()) return;
     if (m_needsRebuild) rebuildGeometry();
-    if (m_beamRays.empty()) return;
+    if (m_beamRays.empty() ||
+        std::none_of(m_beamVisible.begin(), m_beamVisible.end(), [](bool visible) { return visible; })) return;
 
     glUseProgram(m_lineShader);
 
@@ -262,8 +271,46 @@ void BeamRenderer::render(const glm::mat4& view, const glm::mat4& projection,
     glLineWidth(1.0f);
 }
 
+void BeamRenderer::renderDelivery(const DeliveryOverlay& overlay, const glm::mat4& view,
+                                  const glm::mat4& projection, bool beamOn) {
+    glUseProgram(m_lineShader);
+    const auto model = glm::rotate(glm::mat4(1.0f), -glm::half_pi<float>(), glm::vec3(1, 0, 0));
+    glUniformMatrix4fv(glGetUniformLocation(m_lineShader, "model"), 1, GL_FALSE, glm::value_ptr(model));
+    glUniformMatrix4fv(glGetUniformLocation(m_lineShader, "view"), 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(m_lineShader, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindVertexArray(m_deliveryVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_deliveryVBO);
+    auto draw = [&](const std::vector<DeliveryLine>& lines, float alpha) {
+        std::vector<glm::vec3> vertices;
+        vertices.reserve(lines.size() * 2);
+        for (const auto& line : lines) {
+            for (const auto& p : {line.from, line.to})
+                vertices.emplace_back(static_cast<float>(p[0]) * kScale,
+                                      static_cast<float>(p[1]) * kScale,
+                                      static_cast<float>(p[2]) * kScale);
+        }
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(glm::vec3), vertices.data(), GL_STREAM_DRAW);
+        glUniform4f(glGetUniformLocation(m_lineShader, "uColor"), 1.0f, 0.88f, 0.12f, alpha);
+        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size()));
+    };
+    glLineWidth(1.5f);
+    draw(overlay.path, 0.85f);
+    draw(overlay.leaves, 1.0f);
+    draw(overlay.aim, beamOn ? 0.65f : 0.2f);
+    glLineWidth(1.0f);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+}
+
 // ─── Cleanup ────────────────────────────────────────────────────────
 void BeamRenderer::cleanup() {
+    if (m_deliveryVAO) { glDeleteVertexArrays(1, &m_deliveryVAO); m_deliveryVAO = 0; }
+    if (m_deliveryVBO) { glDeleteBuffers(1, &m_deliveryVBO); m_deliveryVBO = 0; }
     if (m_isoVAO) { glDeleteVertexArrays(1, &m_isoVAO); m_isoVAO = 0; }
     if (m_isoVBO) { glDeleteBuffers(1, &m_isoVBO); m_isoVBO = 0; }
     if (m_isoEBO) { glDeleteBuffers(1, &m_isoEBO); m_isoEBO = 0; }

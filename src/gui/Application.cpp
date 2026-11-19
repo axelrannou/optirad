@@ -9,6 +9,7 @@
 #include "panels/LeafSequencingPanel.hpp"
 #include "panels/DoseStatsPanel.hpp"
 #include "panels/DVHPanel.hpp"
+#include "panels/DeliveryPanel.hpp"
 #include "views/SliceView.hpp"
 #include "views/View3D.hpp"
 #include "views/BevView.hpp"
@@ -157,6 +158,7 @@ bool Application::init() {
     m_leafSequencingPanel = std::make_unique<LeafSequencingPanel>(m_appState);
     m_doseStatsPanel = std::make_unique<DoseStatsPanel>(m_appState);
     m_dvhPanel = std::make_unique<DVHPanel>(m_appState);
+    m_deliveryPanel = std::make_unique<DeliveryPanel>(m_appState);
     
     // Phase Space panel hidden by default
     m_phaseSpacePanel->setVisible(false);
@@ -166,6 +168,10 @@ bool Application::init() {
     m_sagittalView = std::make_unique<SliceView>(SliceOrientation::Sagittal);
     m_coronalView = std::make_unique<SliceView>(SliceOrientation::Coronal);
     m_bevView = std::make_unique<BevView>(m_appState);
+    m_view3D->setDelivery(&m_appState.delivery);
+    m_axialView->setDelivery(&m_appState.delivery);
+    m_sagittalView->setDelivery(&m_appState.delivery);
+    m_coronalView->setDelivery(&m_appState.delivery);
     
     return true;
 }
@@ -220,12 +226,16 @@ void Application::setupDockLayout() {
     ImGui::DockBuilderDockWindow("Planning", sidebar1Bottom);
     
     // Sidebar 2: STF (top) + Optimization (bottom)
-    ImGui::DockBuilderDockWindow("STF Generation", sidebar2Top);
+    // Delivery sits under STF Generation and takes half of that node's height.
+    ImGuiID stfNode, deliveryNode;
+    ImGui::DockBuilderSplitNode(sidebar2Top, ImGuiDir_Down, 0.5f, &deliveryNode, &stfNode);
+    ImGui::DockBuilderDockWindow("STF Generation", stfNode);
+    ImGui::DockBuilderDockWindow("Delivery", deliveryNode);
     ImGui::DockBuilderDockWindow("Optimization", sidebar2Bottom);
     ImGui::DockBuilderDockWindow("Leaf Sequencing", sidebar2Bottom);
     
     // Phase Space (hidden but docked in sidebar2 STF node as a tab)
-    ImGui::DockBuilderDockWindow("Phase Space", sidebar2Top);
+    ImGui::DockBuilderDockWindow("Phase Space", stfNode);
     
     // Views
     ImGui::DockBuilderDockWindow("Axial", axialNode);
@@ -326,6 +336,11 @@ void Application::run() {
         m_optimizationPanel->render();
         m_leafSequencingPanel->render();
         m_doseStatsPanel->render();
+        m_appState.delivery.synchronize(m_appState);
+        m_appState.delivery.advance(ImGui::GetIO().DeltaTime);
+        m_deliveryPanel->render();
+        // Both sets of controls act before any patient view renders this frame.
+        m_bevView->render();
         
         // Pass dose data to slice views AFTER panels render
         if (m_appState.doseAvailable() && m_appState.doseResult && m_appState.displayGrid) {
@@ -346,7 +361,6 @@ void Application::run() {
         // Render 3D View inside an ImGui window
         render3DViewWindow();
         m_dvhPanel->render();
-        m_bevView->render();
 
         //Auto-switch to 3D View for first render
         if (!focus3DView) {
@@ -473,6 +487,9 @@ void Application::renderMenuBar() {
             if (ImGui::MenuItem("DVH", nullptr, &dvhVis)) {
                 m_dvhPanel->setVisible(dvhVis);
             }
+            bool deliveryVis = m_deliveryPanel->isVisible();
+            if (ImGui::MenuItem("Delivery Panel", nullptr, &deliveryVis))
+                m_deliveryPanel->setVisible(deliveryVis);
             
             ImGui::Separator();
             
@@ -514,6 +531,7 @@ void Application::renderMenuBar() {
                 m_leafSequencingPanel->setVisible(true);
                 m_doseStatsPanel->setVisible(true);
                 m_dvhPanel->setVisible(true);
+                m_deliveryPanel->setVisible(true);
                 m_axialView->setVisible(true);
                 m_sagittalView->setVisible(true);
                 m_coronalView->setVisible(true);

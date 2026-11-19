@@ -1,8 +1,10 @@
 #include "SliceView.hpp"
+#include "../DeliveryPlayback.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
 #include <GL/gl.h>
 #include <algorithm>
+#include <cmath>
 
 namespace optirad {
 
@@ -264,6 +266,17 @@ void SliceView::renderSlice() {
     // Full displayWidth maps to a UV range of (displayWidth / sliceDisplayW)
     float uvRangeX = displayWidth / sliceDisplayW;          // > 1.0 → black padding on sides
     float uvRangeY = 1.0f;                                  // no vertical padding
+    // Fit the complete delivery trajectory once, not the moving aperture, to avoid camera pumping.
+    if (m_delivery && m_delivery->showOverlays && m_delivery->available()) {
+        float fit = 1.0f;
+        for (const auto& p : m_delivery->overlay().fitPoints) {
+            const auto uv = deliveryUv(p);
+            fit = std::max({fit, std::abs(uv.x - 0.5f) * 2.2f / uvRangeX,
+                            std::abs(uv.y - 0.5f) * 2.2f});
+        }
+        uvRangeX *= fit;
+        uvRangeY *= fit;
+    }
 
     // Center the data: uv 0.5 stays in the middle
     float halfU = uvRangeX * 0.5f / m_zoom;
@@ -308,6 +321,7 @@ void SliceView::renderSlice() {
     if (m_showContours && m_patientData && m_patientData->getStructureSet()) {
         renderContours();
     }
+    if (m_delivery && m_delivery->showOverlays && m_delivery->available()) renderDelivery();
     
     // --- Mouse interactions ---
     
@@ -394,6 +408,47 @@ void SliceView::renderSlice() {
         m_windowCenter = 400; m_windowWidth = 1800; m_needsUpdate = true;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bone (W:1800 C:400)");
+}
+
+ImVec2 SliceView::deliveryUv(const Vec3& lps) const {
+    const auto& grid = m_patientData->getCTVolume()->getGrid();
+    const auto dims = grid.getDimensions();
+    const auto voxel = grid.patientToVoxel(lps);
+    // Match the CT texel mapping in updateTexture/updateDoseTexture (i/j are swapped for display).
+    switch (m_orientation) {
+        case SliceOrientation::Axial:
+            return {static_cast<float>((voxel[1] + 0.5) / dims[0]),
+                    static_cast<float>((voxel[0] + 0.5) / dims[1])};
+        case SliceOrientation::Sagittal:
+            return {static_cast<float>((voxel[0] + 0.5) / dims[1]),
+                    static_cast<float>((dims[2] - 0.5 - voxel[2]) / dims[2])};
+        case SliceOrientation::Coronal:
+            return {static_cast<float>((voxel[1] + 0.5) / dims[0]),
+                    static_cast<float>((dims[2] - 0.5 - voxel[2]) / dims[2])};
+    }
+    return {};
+}
+
+void SliceView::renderDelivery() {
+    const ImVec2 min(m_imgScreenMinX, m_imgScreenMinY), max(m_imgScreenMaxX, m_imgScreenMaxY);
+    const ImVec2 uvRange(m_visUvMaxX - m_visUvMinX, m_visUvMaxY - m_visUvMinY);
+    auto screen = [&](const Vec3& lps) {
+        const auto uv = deliveryUv(lps);
+        return ImVec2(min.x + (uv.x - m_visUvMinX) / uvRange.x * (max.x - min.x),
+                      min.y + (uv.y - m_visUvMinY) / uvRange.y * (max.y - min.y));
+    };
+    auto* draw = ImGui::GetWindowDrawList();
+    draw->PushClipRect(min, max, true);
+    const auto& overlay = m_delivery->overlay();
+    auto lines = [&](const std::vector<DeliveryLine>& geometry, ImU32 color, float thickness) {
+        for (const auto& line : geometry) draw->AddLine(screen(line.from), screen(line.to), color, thickness);
+    };
+    lines(overlay.path, IM_COL32(255, 225, 30, 220), 1.5f);
+    lines(overlay.leaves, IM_COL32(255, 235, 60, 255), 1.3f);
+    lines(overlay.aim, IM_COL32(255, 225, 30, m_delivery->frame().beamOn ? 170 : 55), 1.0f);
+    draw->AddText(ImVec2(min.x + 6.0f, min.y + 6.0f), IM_COL32(255, 235, 60, 255),
+                  "Delivery projection");
+    draw->PopClipRect();
 }
 
 void SliceView::renderContours()

@@ -8,6 +8,7 @@
 namespace optirad {
 
 class Stf;
+struct DeliveryOverlay;
 
 /// Renders beams and rays from an Stf in the 3D view.
 /// - Isocenter: yellow sphere
@@ -21,6 +22,8 @@ public:
     void init();
     void render(const glm::mat4& view, const glm::mat4& projection,
                 const glm::vec3& cameraPos);
+    void renderDelivery(const DeliveryOverlay& overlay, const glm::mat4& view,
+                        const glm::mat4& projection, bool beamOn);
     void cleanup();
 
     void setStf(const Stf* stf);
@@ -36,6 +39,7 @@ private:
 
     // Shaders
     GLuint m_lineShader = 0;
+    GLuint m_deliveryVAO = 0, m_deliveryVBO = 0;
 
     // Isocenter sphere
     GLuint m_isoVAO = 0, m_isoVBO = 0, m_isoEBO = 0;
