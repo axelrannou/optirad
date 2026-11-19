@@ -1,5 +1,6 @@
 #include "DVHPanel.hpp"
 #include "../Theme.hpp"
+#include "../Layout.hpp"
 #include <imgui.h>
 #include <algorithm>
 #include <cmath>
@@ -49,7 +50,7 @@ void DVHPanel::recompute() {
 void DVHPanel::render() {
     if (!m_visible) return;
 
-    ImGui::Begin("DVH", &m_visible);
+    ImGui::Begin("DVH", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
 
     if (!m_state.doseAvailable()) {
         ImGui::TextDisabled("No dose data available.");
@@ -87,7 +88,8 @@ void DVHPanel::renderDVH() {
     ImGui::Text("Structures:");
     for (size_t i = 0; i < m_dvhCurves.size(); ++i) {
         int colorIdx = static_cast<int>(i) % kNumColors;
-        ImGui::SameLine();
+        layout::sameLineIfFits(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x +
+                              ImGui::CalcTextSize(m_dvhCurves[i].structureName.c_str(), nullptr, true).x);
         ImGui::PushStyleColor(ImGuiCol_CheckMark,
             ImVec4(kColors[colorIdx][0], kColors[colorIdx][1], kColors[colorIdx][2], 1.0f));
         if (i < m_curveVisible.size()) {

@@ -193,9 +193,9 @@ void Application::setupDockLayout() {
     ImGuiID leftNode, rightNode;
     ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.35f, &leftNode, &rightNode);
     
-    // Split left into two sidebars: sidebar1 (50% of left = 15%) | sidebar2 (50% of left = 15%)
+    // Split left into two sidebars: sidebar1 (40% of left = 14%) | sidebar2 (60% of left = 21%)
     ImGuiID sidebar1Node, sidebar2Node;
-    ImGui::DockBuilderSplitNode(leftNode, ImGuiDir_Left, 0.50f, &sidebar1Node, &sidebar2Node);
+    ImGui::DockBuilderSplitNode(leftNode, ImGuiDir_Left, 0.40f, &sidebar1Node, &sidebar2Node);
     
     // Split right into views (top 75%) and bottom (25% for dose stats/DVH)
     ImGuiID viewsNode, bottomNode;
@@ -389,7 +389,7 @@ void Application::render3DViewWindow() {
         ImGui::PopStyleVar();
         return;
     }
-    ImGui::Begin("3D View", &m_view3DVisible);
+    ImGui::Begin("3D View", &m_view3DVisible, ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::PopStyleVar();
     
     ImVec2 avail = ImGui::GetContentRegionAvail();

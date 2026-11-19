@@ -1,4 +1,5 @@
 #include "DaoOptimizationView.hpp"
+#include "../Layout.hpp"
 #include "Theme.hpp"
 #include "optimization/ObjectiveBuilder.hpp"
 #include "utils/Logger.hpp"
@@ -160,6 +161,9 @@ void DaoOptimizationView::renderProgress() {
     m_progressStage = std::min(m_progressStage, latest.stage);
     const std::string selection = m_progressStage == 0 ? "Latest resolution" :
         "Resolution " + std::to_string(m_progressStage);
+    const std::string lastResolution = "Resolution " + std::to_string(latest.stage);
+    ImGui::SetNextItemWidth(std::max(layout::comboWidth("Latest resolution"),
+                                   layout::comboWidth(lastResolution.c_str())));
     if (ImGui::BeginCombo("History", selection.c_str())) {
         if (ImGui::Selectable("Latest resolution", m_progressStage == 0)) m_progressStage = 0;
         for (int stage = 1; stage <= latest.stage; ++stage) {

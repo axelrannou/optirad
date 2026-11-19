@@ -1,5 +1,6 @@
 #include "LeafSequencingPanel.hpp"
 #include "Theme.hpp"
+#include "../Layout.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
 #include <algorithm>
@@ -34,15 +35,15 @@ void LeafSequencingPanel::renderArc() {
 
         if (ImGui::CollapsingHeader("Control Points")) {
             if (ImGui::BeginTable("CpTable", 6,
-                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit |
+                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | layout::contentTableFlags |
                     ImGuiTableFlags_ScrollY, ImVec2(0, 220))) {
                 ImGui::TableSetupScrollFreeze(0, 1);
-                ImGui::TableSetupColumn("#",        ImGuiTableColumnFlags_None, 35.0f);
-                ImGui::TableSetupColumn("Gantry",   ImGuiTableColumnFlags_None, 60.0f);
-                ImGui::TableSetupColumn("MU",       ImGuiTableColumnFlags_None, 60.0f);
-                ImGui::TableSetupColumn("Time s",   ImGuiTableColumnFlags_None, 60.0f);
-                ImGui::TableSetupColumn("deg/s",    ImGuiTableColumnFlags_None, 55.0f);
-                ImGui::TableSetupColumn("Leaf mm/s", ImGuiTableColumnFlags_None, 70.0f);
+                ImGui::TableSetupColumn("#");
+                ImGui::TableSetupColumn("Gantry");
+                ImGui::TableSetupColumn("MU");
+                ImGui::TableSetupColumn("Time s");
+                ImGui::TableSetupColumn("deg/s");
+                ImGui::TableSetupColumn("Leaf mm/s");
                 ImGui::TableHeadersRow();
                 for (size_t i = 0; i < seq.controlPoints.size(); ++i) {
                     const auto& cp = seq.controlPoints[i];
@@ -63,7 +64,7 @@ void LeafSequencingPanel::renderArc() {
 void LeafSequencingPanel::render() {
     if (!m_visible) return;
 
-    ImGui::Begin("Leaf Sequencing", &m_visible);
+    ImGui::Begin("Leaf Sequencing", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
 
     if (m_state.directDao()) {
         renderArc();
@@ -163,7 +164,7 @@ void LeafSequencingPanel::render() {
             }
         }
     } else {
-        if (ImGui::Button("Run Leaf Sequencing", ImVec2(-1, 30))) {
+        if (ImGui::Button("Run Leaf Sequencing", layout::fullWidthButtonSize("Run Leaf Sequencing", 30))) {
             if (m_thread.joinable()) m_thread.join();
 
             m_state.resetLeafSequence();
@@ -223,11 +224,13 @@ void LeafSequencingPanel::render() {
 
         if (ImGui::CollapsingHeader("Per-Beam Results", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::BeginTable("SeqTable", 4,
-                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
-                ImGui::TableSetupColumn("Beam",     ImGuiTableColumnFlags_None, 50.0f);
-                ImGui::TableSetupColumn("Segments", ImGuiTableColumnFlags_None, 70.0f);
-                ImGui::TableSetupColumn("MU",       ImGuiTableColumnFlags_None, 80.0f);
-                ImGui::TableSetupColumn("Fidelity", ImGuiTableColumnFlags_None, 80.0f);
+                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | layout::contentTableFlags |
+                    ImGuiTableFlags_ScrollY)) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("Beam");
+                ImGui::TableSetupColumn("Segments");
+                ImGui::TableSetupColumn("MU");
+                ImGui::TableSetupColumn("Fidelity");
                 ImGui::TableHeadersRow();
 
                 for (size_t i = 0; i < m_state.leafSequences.size(); ++i) {

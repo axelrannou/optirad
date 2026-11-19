@@ -1,4 +1,5 @@
 #include "StfPanel.hpp"
+#include "../Layout.hpp"
 #include "steering/PhotonIMRTStfGenerator.hpp"
 #include "../views/renderers/BeamRenderer.hpp"
 #include "utils/Logger.hpp"
@@ -12,7 +13,7 @@ StfPanel::StfPanel(GuiAppState& state) : m_state(state) {}
 void StfPanel::render() {
     if (!m_visible) return;
 
-    ImGui::Begin("STF Generation", &m_visible);
+    ImGui::Begin("STF Generation", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
 
     // Gate: need STF data
     if (!m_state.stfGenerated()) {
@@ -62,8 +63,8 @@ void StfPanel::render() {
         // Per-beam details in a scrollable table
         if (ImGui::CollapsingHeader("Beam Details")) {
             if (ImGui::BeginTable("BeamTable", 5,
-                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                    ImGuiTableFlags_ScrollY, ImVec2(0, 0))) {
+                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | layout::contentTableFlags |
+                    ImGuiTableFlags_ScrollY, ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 10))) {
 
                 ImGui::TableSetupColumn("Beam");
                 ImGui::TableSetupColumn("Gantry");
@@ -99,7 +100,7 @@ void StfPanel::render() {
                 if (ImGui::Button("Show All")) {
                     m_beamRenderer->setAllBeamsVisible(true);
                 }
-                ImGui::SameLine();
+                layout::sameLineIfFits(layout::framedTextWidth("Hide All"));
                 if (ImGui::Button("Hide All")) {
                     m_beamRenderer->setAllBeamsVisible(false);
                 }
@@ -108,7 +109,8 @@ void StfPanel::render() {
 
                 // Per-beam checkboxes in a scrollable region (fill remaining space)
                 float remainH = ImGui::GetContentRegionAvail().y;
-                ImGui::BeginChild("BeamVisScroll", ImVec2(-1, remainH > 60.0f ? remainH : 200.0f), true);
+                ImGui::BeginChild("BeamVisScroll", ImVec2(-1, remainH > 60.0f ? remainH : 200.0f),
+                                  true, ImGuiWindowFlags_HorizontalScrollbar);
                 for (size_t i = 0; i < m_beamRenderer->getBeamCount(); ++i) {
                     const auto* beam = m_state.stf->getBeam(i);
                     if (!beam) continue;

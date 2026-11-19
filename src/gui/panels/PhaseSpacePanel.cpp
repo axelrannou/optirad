@@ -1,4 +1,5 @@
 #include "PhaseSpacePanel.hpp"
+#include "../Layout.hpp"
 #include "../views/renderers/PhaseSpaceRenderer.hpp"
 #include "core/workflow/PhaseSpaceBuilder.hpp"
 #include "phsp/PhaseSpaceData.hpp"
@@ -15,7 +16,7 @@ PhaseSpacePanel::PhaseSpacePanel(GuiAppState& state) : m_state(state) {}
 void PhaseSpacePanel::render() {
     if (!m_visible) return;
 
-    ImGui::Begin("Phase Space", &m_visible);
+    ImGui::Begin("Phase Space", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
 
     // Gate: need a phase-space plan
     if (!m_state.planCreated()) {
@@ -126,7 +127,7 @@ void PhaseSpacePanel::renderLoadControls() {
         snprintf(buttonLabel, sizeof(buttonLabel), "Load Phase-Space (%zu beams)",
                  stfProps.gantryAngles.size());
 
-        if (ImGui::Button(buttonLabel, ImVec2(-1, 30))) {
+        if (ImGui::Button(buttonLabel, layout::fullWidthButtonSize(buttonLabel, 30))) {
             m_state.resetPhaseSpace();
             m_isLoading = true;
             m_loadDone = false;
@@ -173,7 +174,7 @@ void PhaseSpacePanel::renderBeamVisibility() {
         if (ImGui::Button("Show All")) {
             m_phaseSpaceRenderer->setAllBeamsVisible(true);
         }
-        ImGui::SameLine();
+        layout::sameLineIfFits(layout::framedTextWidth("Hide All"));
         if (ImGui::Button("Hide All")) {
             m_phaseSpaceRenderer->setAllBeamsVisible(false);
         }
@@ -182,7 +183,8 @@ void PhaseSpacePanel::renderBeamVisibility() {
 
         // Per-beam checkboxes in a scrollable region (fill remaining space)
         float remainH = ImGui::GetContentRegionAvail().y;
-        ImGui::BeginChild("PhspBeamVisScroll", ImVec2(-1, remainH > 60.0f ? remainH : 200.0f), true);
+        ImGui::BeginChild("PhspBeamVisScroll", ImVec2(-1, remainH > 60.0f ? remainH : 200.0f),
+                          true, ImGuiWindowFlags_HorizontalScrollbar);
         for (size_t i = 0; i < m_phaseSpaceRenderer->getBeamCount(); ++i) {
             double gantryAngle = 0.0;
             if (i < m_state.phaseSpaceSources.size()) {
@@ -230,7 +232,7 @@ void PhaseSpacePanel::renderStatistics() {
             items[i + 1] = beamLabelStrs[i].c_str();
         }
         int comboIdx = m_selectedBeam + 1; // -1 → 0, 0 → 1, etc.
-        if (ImGui::Combo("Stats for", &comboIdx, items.data(), static_cast<int>(nBeams + 1))) {
+        if (layout::combo("Stats for", &comboIdx, items.data(), static_cast<int>(nBeams + 1))) {
             m_selectedBeam = comboIdx - 1;
         }
 
@@ -335,7 +337,7 @@ void PhaseSpacePanel::renderVisualizationControls() {
         // Color mode
         static const char* colorModes[] = { "Energy gradient", "Particle type" };
         int currentMode = static_cast<int>(m_phaseSpaceRenderer->getColorMode());
-        if (ImGui::Combo("Color mode", &currentMode, colorModes, IM_ARRAYSIZE(colorModes))) {
+        if (layout::combo("Color mode", &currentMode, colorModes, IM_ARRAYSIZE(colorModes))) {
             m_phaseSpaceRenderer->setColorMode(static_cast<PhaseSpaceColorMode>(currentMode));
         }
 

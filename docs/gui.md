@@ -141,6 +141,12 @@ struct GuiAppState {
 
 ## Panels
 
+Panels and nested lists provide scrolling when their contents exceed the available
+space. DVH structure toggles wrap onto additional rows, so structures remain
+selectable without widening the panel. Tables fit their columns to the full header
+and cell contents (including combo-box previews) and scroll horizontally rather than
+squeezing or truncating text. Column widths update as the displayed data changes.
+
 ### IPanel Interface
 
 ```cpp

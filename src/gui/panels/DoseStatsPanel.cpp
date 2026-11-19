@@ -1,5 +1,6 @@
 #include "DoseStatsPanel.hpp"
 #include "../Theme.hpp"
+#include "../Layout.hpp"
 #include "DoseStatsCsv.hpp"
 #include "utils/Logger.hpp"
 #include <imgui.h>
@@ -42,7 +43,7 @@ void DoseStatsPanel::computeStats() {
 void DoseStatsPanel::render() {
     if (!m_visible) return;
 
-    ImGui::Begin("Dose Statistics", &m_visible);
+    ImGui::Begin("Dose Statistics", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
 
     if (!m_state.doseAvailable()) {
         ImGui::TextDisabled("No dose data available.");
@@ -131,8 +132,11 @@ void DoseStatsPanel::renderCompareSelector() {
     }
 
     ImGui::Text("Compare with:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(200.0f);
+    float selectorWidth = layout::comboWidth("None");
+    for (const auto& entry : dm.getEntries())
+        selectorWidth = std::max(selectorWidth, layout::comboWidth(entry.name.c_str()));
+    layout::sameLineIfFits(selectorWidth);
+    ImGui::SetNextItemWidth(selectorWidth);
     if (ImGui::BeginCombo("##CompareSelect", currentLabel)) {
         // "None" option
         if (ImGui::Selectable("None", cmpIdx < 0)) {
@@ -204,25 +208,26 @@ void DoseStatsPanel::renderStatsTable() {
     constexpr int numCols = 16;
 
     if (ImGui::BeginTable("DoseStatsTable", numCols,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
-            ImGuiTableFlags_ScrollX | ImGuiTableFlags_SizingFixedFit)) {
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | layout::contentTableFlags |
+            ImGuiTableFlags_ScrollY)) {
 
-        ImGui::TableSetupColumn("Structure",    ImGuiTableColumnFlags_None, 120.0f);
-        ImGui::TableSetupColumn("Voxels",       ImGuiTableColumnFlags_None, 80.0f);
-        ImGui::TableSetupColumn("Coverage (%)", ImGuiTableColumnFlags_None, 85.0f);
-        ImGui::TableSetupColumn("Min (Gy)",     ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("Max (Gy)",     ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("Mean (Gy)",    ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("D2% (Gy)",     ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("D5% (Gy)",     ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("D95% (Gy)",    ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("D98% (Gy)",    ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("V20Gy (%)",    ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("V40Gy (%)",    ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("V50Gy (%)",    ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("V60Gy (%)",    ImGuiTableColumnFlags_None, 65.0f);
-        ImGui::TableSetupColumn("CI",           ImGuiTableColumnFlags_None, 45.0f);
-        ImGui::TableSetupColumn("HI",           ImGuiTableColumnFlags_None, 45.0f);
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Structure");
+        ImGui::TableSetupColumn("Voxels");
+        ImGui::TableSetupColumn("Coverage (%)");
+        ImGui::TableSetupColumn("Min (Gy)");
+        ImGui::TableSetupColumn("Max (Gy)");
+        ImGui::TableSetupColumn("Mean (Gy)");
+        ImGui::TableSetupColumn("D2% (Gy)");
+        ImGui::TableSetupColumn("D5% (Gy)");
+        ImGui::TableSetupColumn("D95% (Gy)");
+        ImGui::TableSetupColumn("D98% (Gy)");
+        ImGui::TableSetupColumn("V20Gy (%)");
+        ImGui::TableSetupColumn("V40Gy (%)");
+        ImGui::TableSetupColumn("V50Gy (%)");
+        ImGui::TableSetupColumn("V60Gy (%)");
+        ImGui::TableSetupColumn("CI");
+        ImGui::TableSetupColumn("HI");
         ImGui::TableHeadersRow();
 
         for (size_t i = 0; i < m_stats.size(); ++i) {

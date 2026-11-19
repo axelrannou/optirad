@@ -1,4 +1,5 @@
 #include "OptimizationPanel.hpp"
+#include "../Layout.hpp"
 #include "optimization/objectives/NormalTissueObjective.hpp"
 #include <cstdio>
 #include "Theme.hpp"
@@ -9,6 +10,7 @@
 #include <cmath>
 #include <sstream>
 #include <algorithm>
+#include <cfloat>
 
 namespace optirad {
 
@@ -25,7 +27,7 @@ OptimizationPanel::~OptimizationPanel() {
 void OptimizationPanel::render() {
     if (!m_visible) return;
 
-    ImGui::Begin("Optimization", &m_visible);
+    ImGui::Begin("Optimization", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
 
     const bool dao = m_state.directDao();
     if (dao ? !m_state.patientData : !m_state.dijComputed()) {
@@ -137,14 +139,34 @@ void OptimizationPanel::render() {
     const bool busy = m_isOptimizing || m_dao.running();
     if (busy) ImGui::BeginDisabled();
     if (ImGui::CollapsingHeader("Objectives", ImGuiTreeNodeFlags_DefaultOpen)) {
+        float structureWidth = ImGui::CalcTextSize("Structure").x;
+        if (m_state.patientData && m_state.patientData->getStructureSet()) {
+            const auto* ss = m_state.patientData->getStructureSet();
+            for (size_t i = 0; i < ss->getCount(); ++i)
+                if (const auto* s = ss->getStructure(i))
+                    structureWidth = std::max(structureWidth, layout::comboWidth(s->getName().c_str()));
+        }
+        float typeWidth = 0.0f;
+        for (const char* type : kObjectiveTypes)
+            typeWidth = std::max(typeWidth, layout::comboWidth(type));
+        float doseWidth = ImGui::CalcTextSize("Dose Gy").x;
+        float volumeWidth = ImGui::CalcTextSize("Vol %").x;
+        float weightWidth = ImGui::CalcTextSize("Weight").x;
+        for (const auto& obj : m_objectives) {
+            structureWidth = std::max(structureWidth, layout::comboWidth(obj.structureName.c_str()));
+            doseWidth = std::max(doseWidth, layout::floatInputWidth(obj.doseValue));
+            volumeWidth = std::max(volumeWidth, layout::floatInputWidth(obj.volumePct));
+            weightWidth = std::max(weightWidth, layout::floatInputWidth(obj.weight));
+        }
         if (ImGui::BeginTable("ObjTable", 6,
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
-            ImGui::TableSetupColumn("Structure",  ImGuiTableColumnFlags_None, 140.0f);
-            ImGui::TableSetupColumn("Type",       ImGuiTableColumnFlags_None, 160.0f);
-            ImGui::TableSetupColumn("Dose Gy",  ImGuiTableColumnFlags_None, 80.0f);
-            ImGui::TableSetupColumn("Vol %",    ImGuiTableColumnFlags_None, 70.0f);
-            ImGui::TableSetupColumn("Weight",     ImGuiTableColumnFlags_None, 80.0f);
-            ImGui::TableSetupColumn("##del",      ImGuiTableColumnFlags_None, 25.0f);
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | layout::contentTableFlags,
+                layout::tableSize(m_objectives.size(), ImGui::GetFrameHeight()))) {
+            ImGui::TableSetupColumn("Structure", ImGuiTableColumnFlags_WidthFixed, structureWidth);
+            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, typeWidth);
+            ImGui::TableSetupColumn("Dose Gy", ImGuiTableColumnFlags_WidthFixed, doseWidth);
+            ImGui::TableSetupColumn("Vol %", ImGuiTableColumnFlags_WidthFixed, volumeWidth);
+            ImGui::TableSetupColumn("Weight", ImGuiTableColumnFlags_WidthFixed, weightWidth);
+            ImGui::TableSetupColumn("##del");
             ImGui::TableHeadersRow();
 
             int toRemove = -1;
@@ -154,7 +176,7 @@ void OptimizationPanel::render() {
                 ImGui::PushID(static_cast<int>(i));
 
                 ImGui::TableSetColumnIndex(0);
-                ImGui::SetNextItemWidth(-1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
                 if (m_state.patientData && m_state.patientData->getStructureSet()) {
                     const auto* ss = m_state.patientData->getStructureSet();
                     if (ImGui::BeginCombo("##struct", obj.structureName.c_str())) {
@@ -174,18 +196,18 @@ void OptimizationPanel::render() {
                 }
 
                 ImGui::TableSetColumnIndex(1);
-                ImGui::SetNextItemWidth(-1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::Combo("##type", &obj.typeIdx, kObjectiveTypes, IM_ARRAYSIZE(kObjectiveTypes));
 
                 ImGui::TableSetColumnIndex(2);
-                ImGui::SetNextItemWidth(-1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputFloat("##dose", &obj.doseValue, 0.0f, 0.0f, "%.1f");
 
                 ImGui::TableSetColumnIndex(3);
                 // Volume % only relevant for DVH objectives
                 bool isDVH = (obj.typeIdx == 3 || obj.typeIdx == 4);
                 if (isDVH) {
-                    ImGui::SetNextItemWidth(-1);
+                    ImGui::SetNextItemWidth(-FLT_MIN);
                     ImGui::InputFloat("##vol", &obj.volumePct, 0.0f, 0.0f, "%.1f");
                     obj.volumePct = std::clamp(obj.volumePct, 0.0f, 100.0f);
                     const bool noEffect = (obj.typeIdx == 4 && obj.volumePct >= 100.0f) ||
@@ -206,7 +228,7 @@ void OptimizationPanel::render() {
                 }
 
                 ImGui::TableSetColumnIndex(4);
-                ImGui::SetNextItemWidth(-1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputFloat("##w", &obj.weight, 0.0f, 0.0f, "%.1f");
 
                 ImGui::TableSetColumnIndex(5);
@@ -234,7 +256,6 @@ void OptimizationPanel::render() {
                                   "0 = use the plan prescription (template) / target lower objectives (NTO).");
             const char* rxSource = nullptr;
             const double templateRx = templatePrescription(&rxSource);
-            ImGui::SameLine();
             if (templateRx > 0.0) {
                 ImGui::TextDisabled("template Rx %.1f Gy (%s)", templateRx, rxSource);
             } else {
@@ -253,7 +274,7 @@ void OptimizationPanel::render() {
                                   "OAR protocol objectives and NTO priority 100 (1 mm, 105%% -> 60%%, 0.05/mm).\n"
                                   "Rx = Prescription (Gy) field, else the plan prescription.\n"
                                   "Disabled until one of them is set: no dose is assumed.");
-            ImGui::SameLine();
+            layout::sameLineIfFits(layout::framedTextWidth("+ Add Objective"));
             if (ImGui::Button("+ Add Objective")) {
                 m_objectivesInitialized = true;   // manual objectives: don't add the template later
                 ObjectiveConfig obj;
@@ -404,7 +425,7 @@ void OptimizationPanel::render() {
         if (dao) {
             const bool taskBusy = m_state.taskRunning;
             if (taskBusy) ImGui::BeginDisabled();
-            if (ImGui::Button("Run DAO", ImVec2(-1, 30))) {
+            if (ImGui::Button("Run DAO", layout::fullWidthButtonSize("Run DAO", 30))) {
                 double prescriptionDose = 0.0;
                 auto specs = buildSpecs(prescriptionDose);
                 OptimizationConfig config;
@@ -413,7 +434,7 @@ void OptimizationPanel::render() {
                 m_dao.start(std::move(specs), config);
             }
             if (taskBusy) ImGui::EndDisabled();
-        } else if (ImGui::Button("Run Optimization", ImVec2(-1, 30))) {
+        } else if (ImGui::Button("Run Optimization", layout::fullWidthButtonSize("Run Optimization", 30))) {
             // Join any previous thread before starting a new one
             if (m_optThread.joinable()) m_optThread.join();
 

@@ -302,6 +302,10 @@ endif()
 add_test(NAME VmatTest COMMAND test_vmat)
 
 if(TARGET optirad_gui)
+    add_executable(test_panel_layout gui/test_panel_layout.cpp)
+    target_link_libraries(test_panel_layout PRIVATE optirad_gui GTest::gtest_main)
+    add_test(NAME PanelLayoutTest COMMAND test_panel_layout)
+
     add_executable(test_delivery_playback gui/test_delivery_playback.cpp)
     target_link_libraries(test_delivery_playback PRIVATE optirad_gui GTest::gtest_main)
     add_test(NAME DeliveryPlaybackTest COMMAND test_delivery_playback)

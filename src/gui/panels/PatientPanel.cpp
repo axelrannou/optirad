@@ -1,4 +1,5 @@
 #include "PatientPanel.hpp"
+#include "../Layout.hpp"
 #include "io/DicomExporter.hpp"
 #include "utils/Logger.hpp"
 #include "DoseStatsCsv.hpp"
@@ -32,26 +33,29 @@ void PatientPanel::render() {
 
     m_state.exportDir = m_exportPath;
 
-    ImGui::Begin("Patient Data", &m_visible);
+    ImGui::Begin("Patient Data", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
 
-    // ── Import / Export buttons (50 / 50) ──
+    // Equal-width buttons stack when the labels cannot fit side by side.
     {
         const float spacing = ImGui::GetStyle().ItemSpacing.x;
-        const float btnW    = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
+        const DoseEntry* selEntry = m_state.doseStore.getSelected();
+        const bool hasDose = selEntry && selEntry->dose;
+        const bool hasSeq  = hasDose && m_state.seqCache.count(selEntry->id) > 0;
+        const char* exportLabel = hasSeq ? "Export Dose + RT Plan" : "Export Dose";
+        const float minWidth = std::max(layout::framedTextWidth("Import DICOM"),
+                                        layout::framedTextWidth(exportLabel));
+        const bool sideBySide = ImGui::GetContentRegionAvail().x >= minWidth * 2.0f + spacing;
+        const float btnW = std::max(minWidth, sideBySide ?
+            (ImGui::GetContentRegionAvail().x - spacing) * 0.5f : ImGui::GetContentRegionAvail().x);
 
         ImGui::BeginDisabled(m_state.taskRunning);
         if (ImGui::Button("Import DICOM", ImVec2(btnW, 0)))
             m_showImportDialog = true;
         ImGui::EndDisabled();
 
-        ImGui::SameLine();
-
-        const DoseEntry* selEntry = m_state.doseStore.getSelected();
-        const bool hasDose = selEntry && selEntry->dose;
-        const bool hasSeq  = hasDose && m_state.seqCache.count(selEntry->id) > 0;
+        if (sideBySide) ImGui::SameLine();
 
         if (!hasDose) ImGui::BeginDisabled();
-        const char* exportLabel = hasSeq ? "Export Dose + RT Plan" : "Export Dose";
         if (ImGui::Button(exportLabel, ImVec2(btnW, 0))) {
             const std::string outDir =
                 (m_exportPath[0] != '\0') ? m_exportPath : (OPTIRAD_DATA_DIR "/export");
@@ -108,7 +112,7 @@ void PatientPanel::renderImportDialog() {
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(600, 500), ImGuiCond_Appearing);
     
-    if (ImGui::BeginPopupModal("Import DICOM", &m_showImportDialog)) {
+    if (ImGui::BeginPopupModal("Import DICOM", &m_showImportDialog, ImGuiWindowFlags_HorizontalScrollbar)) {
         ImGui::Text("Select DICOM directory:");
         ImGui::Spacing();
         
@@ -132,7 +136,7 @@ void PatientPanel::renderImportDialog() {
             if (ImGui::Button("Import", ImVec2(120, 0))) {
                 importDicom(m_dicomPath);
             }
-            ImGui::SameLine();
+            layout::sameLineIfFits(120.0f);
             if (ImGui::Button("Cancel", ImVec2(120, 0))) {
                 m_showImportDialog = false;
             }
@@ -168,7 +172,7 @@ void PatientPanel::renderFileBrowser() {
     float reservedH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 3 + 10;
     float browserH = ImGui::GetContentRegionAvail().y - reservedH;
     if (browserH < 100.0f) browserH = 100.0f;
-    ImGui::BeginChild("FileBrowser", ImVec2(-1, browserH), true);
+    ImGui::BeginChild("FileBrowser", ImVec2(-1, browserH), true, ImGuiWindowFlags_HorizontalScrollbar);
     try {
         std::vector<fs::directory_entry> dirs, files;
         for (const auto& entry : fs::directory_iterator(currentPath)) {
@@ -188,7 +192,8 @@ void PatientPanel::renderFileBrowser() {
 
         for (const auto& dir : dirs) {
             std::string label = "[DIR]  " + dir.path().filename().string();
-            if (ImGui::Selectable(label.c_str())) {
+            if (ImGui::Selectable(label.c_str(), false, 0,
+                                  ImVec2(ImGui::CalcTextSize(label.c_str()).x, 0))) {
                 snprintf(m_dicomPath, sizeof(m_dicomPath), "%s",
                          dir.path().string().c_str());
             }
@@ -292,7 +297,9 @@ void PatientPanel::renderStructureList() {
         return clicked;
     };
 
-    if (ImGui::BeginTable("Structures", 3)) {
+    if (ImGui::BeginTable("Structures", 3, layout::contentTableFlags,
+                          layout::tableSize(structures->getCount(), ImGui::GetFrameHeight(),
+                                            ImGui::GetFrameHeight()))) {
         ImGui::TableSetupColumn("Name");
         ImGui::TableSetupColumn("Type");
         ImGui::TableSetupColumn("Contours");
@@ -306,11 +313,11 @@ void PatientPanel::renderStructureList() {
             }
         }
         ImGui::SameLine();
-        ImGui::TextUnformatted("Name");
+        ImGui::TableHeader("Name");
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted("Type");
+        ImGui::TableHeader("Type");
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted("Contours");
+        ImGui::TableHeader("Contours");
         
         for (size_t i = 0; i < structures->getCount(); ++i) {
             auto* s = structures->getStructure(i);
@@ -360,12 +367,13 @@ void PatientPanel::renderDoseList() {
     ImGui::Spacing();
 
     if (ImGui::BeginTable("DoseList", 5,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("##sel", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | layout::contentTableFlags,
+            layout::tableSize(static_cast<size_t>(dm.count()), ImGui::GetFrameHeight()))) {
+        ImGui::TableSetupColumn("##sel", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
         ImGui::TableSetupColumn("Name");
-        ImGui::TableSetupColumn("Performed on", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn("Max (Gy)", ImGuiTableColumnFlags_WidthStretch, 0.5f);
-        ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, 25.0f);
+        ImGui::TableSetupColumn("Performed on");
+        ImGui::TableSetupColumn("Max (Gy)");
+        ImGui::TableSetupColumn("##del");
         ImGui::TableHeadersRow();
 
         bool taskBusy = m_state.taskRunning;
@@ -413,7 +421,7 @@ void PatientPanel::renderDoseList() {
             ImVec2 cellMax = ImGui::GetItemRectMax();
 
             float colMinX = ImGui::GetCursorScreenPos().x;
-            float colMaxX = colMinX + ImGui::GetColumnWidth();
+            float colMaxX = colMinX + ImGui::GetContentRegionAvail().x;
 
             ImVec2 center(
                 (colMinX + colMaxX) * 0.5f,
@@ -429,7 +437,7 @@ void PatientPanel::renderDoseList() {
             // Name (double-click to edit)
             ImGui::TableNextColumn();
             if (m_editingDoseIdx == i) {
-                ImGui::SetNextItemWidth(-1);
+                ImGui::SetNextItemWidth(layout::framedTextWidth(m_editDoseName));
                 ImGui::SetKeyboardFocusHere();
                 bool committed = ImGui::InputText(
                     ("##dname" + std::to_string(i)).c_str(),

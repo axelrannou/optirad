@@ -1,4 +1,5 @@
 #include "PlanningPanel.hpp"
+#include "../Layout.hpp"
 #include "Theme.hpp"
 #include "core/workflow/PlanBuilder.hpp"
 #include "core/workflow/DoseCalculationPipeline.hpp"
@@ -49,7 +50,7 @@ PlanningPanel::~PlanningPanel() {
 void PlanningPanel::render() {
     if (!m_visible) return;
 
-    ImGui::Begin("Planning", &m_visible);
+    ImGui::Begin("Planning", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
 
     // Gate: need DICOM data first
     if (!m_state.dicomLoaded()) {
@@ -61,8 +62,8 @@ void PlanningPanel::render() {
     // ── Radiation Mode ──
     if (ImGui::CollapsingHeader("Radiation Mode", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
-        ImGui::Combo("Mode", &m_radiationModeIdx, kRadiationModes, IM_ARRAYSIZE(kRadiationModes));
-        ImGui::Combo("Machine", &m_machineIdx, kMachines, IM_ARRAYSIZE(kMachines));
+        layout::combo("Mode", &m_radiationModeIdx, kRadiationModes, IM_ARRAYSIZE(kRadiationModes));
+        layout::combo("Machine", &m_machineIdx, kMachines, IM_ARRAYSIZE(kMachines));
         const auto& col = getThemeColors();
         if (kIsPhaseSpace[m_machineIdx]) {
             ImGui::TextColored(col.phaseSpace, "Phase-space (IAEA PSF)");
@@ -76,7 +77,7 @@ void PlanningPanel::render() {
     if (ImGui::CollapsingHeader("Delivery", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent();
         static const char* kDelivery[] = { "SMLC (step-and-shoot IMRT)", "VMAT (arcs)" };
-        ImGui::Combo("Technique", &m_deliveryIdx, kDelivery, IM_ARRAYSIZE(kDelivery));
+        layout::combo("Technique", &m_deliveryIdx, kDelivery, IM_ARRAYSIZE(kDelivery));
         if (m_deliveryIdx == 1) {
             ImGui::TextDisabled("VMAT is optimized with direct aperture optimization (DAO): apertures and MU\n"
                                 "are optimized against the objectives at increasing control point resolution.");
@@ -94,9 +95,8 @@ void PlanningPanel::render() {
                 ImGui::InputFloat("Stop##arc", &arc.stop, 0.0f, 0.0f, "%.1f");
                 ImGui::SameLine();
                 int dir = arc.clockwise ? 0 : 1;
-                ImGui::SetNextItemWidth(60);
                 static const char* kDir[] = { "CW", "CCW" };
-                if (ImGui::Combo("##dir", &dir, kDir, IM_ARRAYSIZE(kDir))) arc.clockwise = (dir == 0);
+                if (layout::combo("##dir", &dir, kDir, IM_ARRAYSIZE(kDir))) arc.clockwise = (dir == 0);
                 ImGui::SetNextItemWidth(80);
                 ImGui::InputFloat("Couch##arc", &arc.couch, 0.0f, 0.0f, "%.1f");
                 ImGui::PopID();
@@ -278,7 +278,7 @@ void PlanningPanel::render() {
     // ── Create Plan button ──
     if (!paramsValid) ImGui::BeginDisabled();
 
-    if (ImGui::Button("Create Plan", ImVec2(-1, 30))) {
+    if (ImGui::Button("Create Plan", layout::fullWidthButtonSize("Create Plan", 30))) {
         // Reset downstream state
         m_state.resetPlan();
 
@@ -411,7 +411,7 @@ void PlanningPanel::render() {
             ImGui::SameLine();
             ImGui::TextUnformatted("mm");
             static const char* kBackends[] = { "CPU", "Auto", "CUDA" };
-            ImGui::Combo("Compute backend", &m_computeBackendIdx, kBackends, IM_ARRAYSIZE(kBackends));
+            layout::combo("Compute backend", &m_computeBackendIdx, kBackends, IM_ARRAYSIZE(kBackends));
             ImGui::SetNextItemWidth(120);
             ImGui::InputInt("GPU budget (MiB, 0=auto)", &m_gpuMemoryBudgetMiB);
             if (m_gpuMemoryBudgetMiB < 0) m_gpuMemoryBudgetMiB = 0;
@@ -453,7 +453,7 @@ void PlanningPanel::render() {
             ImGui::Spacing();
             ImGui::Separator();
             static const char* kEngines[] = { "Stored Dij (sparse matrix)", "Matrix-free (fluence convolution)" };
-            ImGui::Combo("Dose engine", &m_engineIdx, kEngines, IM_ARRAYSIZE(kEngines));
+            layout::combo("Dose engine", &m_engineIdx, kEngines, IM_ARRAYSIZE(kEngines));
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Stored Dij: fastest optimization, memory grows with beams x bixels.\n"
                                   "Matrix-free: nothing proportional to the Dij is stored (about 24 B per voxel\n"
@@ -462,7 +462,7 @@ void PlanningPanel::render() {
             const bool matrixFree = (m_engineIdx == 1);
             if (matrixFree) {
                 static const char* kBackends[] = { "CPU", "Auto", "CUDA" };
-                ImGui::Combo("Compute backend", &m_computeBackendIdx, kBackends, IM_ARRAYSIZE(kBackends));
+                layout::combo("Compute backend", &m_computeBackendIdx, kBackends, IM_ARRAYSIZE(kBackends));
                 ImGui::SetNextItemWidth(120);
                 ImGui::InputInt("GPU budget (MiB, 0=auto)", &m_gpuMemoryBudgetMiB);
                 if (m_gpuMemoryBudgetMiB < 0) m_gpuMemoryBudgetMiB = 0;
@@ -520,7 +520,7 @@ void PlanningPanel::render() {
                 ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(-1, 0));
             }
 
-            if (ImGui::Button("Cancel", ImVec2(-1, 24))) {
+            if (ImGui::Button("Cancel", layout::fullWidthButtonSize("Cancel", 24))) {
                 m_state.cancelFlag = true;
             }
 
@@ -536,7 +536,8 @@ void PlanningPanel::render() {
         } else {
             if (!canCalcDose) ImGui::BeginDisabled();
 
-            if (ImGui::Button(m_engineIdx == 1 ? "Build matrix-free model" : "Calculate Dij", ImVec2(-1, 30))) {
+            const char* calculateLabel = m_engineIdx == 1 ? "Build matrix-free model" : "Calculate Dij";
+            if (ImGui::Button(calculateLabel, layout::fullWidthButtonSize(calculateLabel, 30))) {
                 m_state.resetDij();
                 m_isCalculatingDij = true;
                 m_dijCalcDone = false;

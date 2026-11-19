@@ -91,7 +91,7 @@ void SliceView::render() {
     if (!m_visible) return;
 
     std::string name = getName();
-    ImGui::Begin(name.c_str(), &m_visible);
+    ImGui::Begin(name.c_str(), &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
     
     if (!m_patientData || !m_patientData->getCTVolume()) {
         ImGui::TextDisabled("No CT data loaded");
@@ -114,7 +114,7 @@ void SliceView::render() {
 void SliceView::renderControls() {
     // Line 1: Compact slice selector + position
     int sliceInt = static_cast<int>(m_currentSlice);
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 70);
+    ImGui::SetNextItemWidth(std::max(ImGui::GetContentRegionAvail().x - 70, 70.0f));
     if (ImGui::SliderInt("##Slice", &sliceInt, 0, static_cast<int>(m_maxSlice))) {
         setSliceIndex(static_cast<size_t>(sliceInt));
     }

@@ -57,7 +57,7 @@ ImVec2 BevView::bevToScreen(double bevX, double bevZ,
 void BevView::render() {
     if (!m_visible) return;
 
-    ImGui::Begin("BEV", &m_visible);
+    ImGui::Begin("BEV", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
     m_state.delivery.synchronize(m_state);
 
     const auto* selected = m_state.doseStore.getSelected();

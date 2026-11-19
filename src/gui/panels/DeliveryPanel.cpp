@@ -1,4 +1,5 @@
 #include "DeliveryPanel.hpp"
+#include "../Layout.hpp"
 #include <imgui.h>
 
 namespace optirad {
@@ -22,10 +23,11 @@ void DeliveryPanel::renderControls(DeliveryPlayback& delivery) {
         delivery.togglePlaying();
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip(delivery.playing ? "Pause delivery" : "Play whole plan");
-    ImGui::SameLine();
+    layout::sameLineIfFits(ImGui::GetFrameHeight());
     if (ImGui::ArrowButton("##rewindArc", ImGuiDir_Left)) delivery.rewind();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rewind whole plan");
-    ImGui::SameLine();
+    layout::sameLineIfFits(130.0f + ImGui::GetStyle().ItemInnerSpacing.x +
+                          ImGui::CalcTextSize("Playback").x);
     ImGui::SetNextItemWidth(130.0f);
     ImGui::SliderFloat("Playback", &delivery.playbackSpeed, 0.1f, 10.0f, "%.1fx");
     double time = delivery.time();
@@ -50,7 +52,7 @@ void DeliveryPanel::renderControls(DeliveryPlayback& delivery) {
 
 void DeliveryPanel::render() {
     if (!m_visible) return;
-    ImGui::Begin("Delivery", &m_visible);
+    ImGui::Begin("Delivery", &m_visible, ImGuiWindowFlags_HorizontalScrollbar);
     m_state.delivery.synchronize(m_state);
     ImGui::Checkbox("Show delivery overlays", &m_state.delivery.showOverlays);
     ImGui::TextWrapped("Yellow overlays in 3D and slice views. Playback is shared with BEV.");
