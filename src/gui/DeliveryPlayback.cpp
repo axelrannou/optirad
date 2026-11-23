@@ -19,6 +19,7 @@ Beam geometry(const Beam& source) {
     beam.setIsocenter(source.getIsocenter());
     beam.setGantryAngle(source.getGantryAngle());
     beam.setCouchAngle(source.getCouchAngle());
+    beam.setCollimatorAngle(source.getCollimatorAngle());
     beam.setSAD(source.getSAD());
     beam.setSCD(source.getSCD());
     beam.setFieldSize(source.getFieldSize());
@@ -28,7 +29,7 @@ Beam geometry(const Beam& source) {
 
 Vec3 point(const Beam& beam, double x, double y, double z) {
     return vecAdd(beam.getIsocenter(),
-                  getRotationMatrix(beam.getGantryAngle(), beam.getCouchAngle()) * Vec3{x, y, z});
+                  beam.getBeamRotationMatrix() * Vec3{x, y, z});
 }
 
 bool matches(const Aperture& a, const Aperture& b) {
@@ -229,7 +230,9 @@ void DeliveryPlayback::rebuild(const GuiAppState& state) {
         }
     } else if (m_stf && !m_stf->isEmpty()) {
         const auto cache = state.seqCache.find(m_doseId);
-        const auto* sequences = cache != state.seqCache.end() ? &cache->second.sequences : nullptr;
+        const auto* sequences = cache != state.seqCache.end() ? &cache->second.sequences
+                              : m_plan && m_plan == state.importedPlan && !state.importedSequences.empty()
+                                  ? &state.importedSequences : nullptr;
         m_description = sequences ? "Estimated SMLC timing; transitions are beam-off, couch motion is not modeled."
                                   : "Geometry preview without MLC results: illustrative 1 s dwell per beam.";
         const double muScale = m_plan ? m_plan->machineMuPerWeight() : 1.0;

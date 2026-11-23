@@ -15,7 +15,9 @@
 #include <limits>
 #include <chrono>
 #include <iomanip>
+#include <set>
 #include <sstream>
+#include <utility>
 
 namespace optirad {
 
@@ -791,10 +793,11 @@ std::shared_ptr<Stf> ArcPipeline::buildControlPointStf(const Plan& plan,
     std::array<double, 3> iso = {0.0, 0.0, 0.0};
     if (!props.isoCenters.empty()) iso = props.isoCenters[0];
 
-    std::vector<double> gantry, couch;
+    std::vector<double> gantry, couch, collimator;
     for (const auto& cp : controlPoints) {
         gantry.push_back(cp.gantryAngle);
         couch.push_back(cp.couchAngle);
+        collimator.push_back(cp.collimatorAngle);
     }
 
     PhotonIMRTStfGenerator generator(0.0, 360.0, 360.0, props.bixelWidth, iso);
@@ -802,6 +805,7 @@ std::shared_ptr<Stf> ArcPipeline::buildControlPointStf(const Plan& plan,
     generator.setRadiationMode(plan.getRadiationMode());
     generator.setGantryAngles(gantry);
     generator.setCouchAngles(couch);
+    generator.setCollimatorAngles(collimator);
 
     if (patientData.hasValidCT() && patientData.hasStructures()) {
         const auto& grid = patientData.getCTVolume()->getGrid();
@@ -859,6 +863,25 @@ ArcPipelineResult ArcPipeline::run(const Stf& sectorStf,
     ArcPipelineResult result;
     say("starting progressive DAO, dose voxels=" + std::to_string(doseGrid.getNumVoxels()) +
         ", leaf-motion integration=" + (config.integrateLeafMotion ? "enabled" : "disabled"));
+#ifndef OPTIRAD_HAS_CUDA
+    if (config.computeBackend == DoseComputeBackend::CUDA)
+        throw std::runtime_error("CUDA arc dose requested but CUDA support was not built");
+#endif
+
+    runProgressive(result, sectorStf, plan, patientData, doseGrid, objectives, config, say, progressCallback);
+    computeDeliveredDose(result, plan, patientData, doseGrid, config, config.base.targetDose, stage);
+    return result;
+}
+
+void ArcPipeline::computeDeliveredDose(ArcPipelineResult& result,
+                                       const Plan& plan,
+                                       const PatientData& patientData,
+                                       const Grid& doseGrid,
+                                       const ArcOptimizationConfig& config,
+                                       double prescribedDose,
+                                       std::function<void(const std::string&)> stage) {
+    auto say = [&](const std::string& s) { Logger::info("ArcPipeline: " + s); if (stage) stage(s); };
+    if (!result.controlPointStf) throw std::invalid_argument("ArcPipeline: no control point beams");
     auto engineOptions = config.engineOptions;
     engineOptions.gpuRayTracing = config.computeBackend != DoseComputeBackend::CPU;
     engineOptions.requireGpuRayTracing = config.computeBackend == DoseComputeBackend::CUDA;
@@ -867,7 +890,6 @@ ArcPipelineResult ArcPipeline::run(const Stf& sectorStf,
         throw std::runtime_error("CUDA arc dose requested but CUDA support was not built");
 #endif
 
-    runProgressive(result, sectorStf, plan, patientData, doseGrid, objectives, config, say, progressCallback);
     auto engine = DoseEngineFactory::create("PencilBeam");
     engine->setOptions(engineOptions);
     say("computing delivered dose");
@@ -875,11 +897,107 @@ ArcPipelineResult ArcPipeline::run(const Stf& sectorStf,
                                                      config.integrateLeafMotion);
     result.dose = std::make_shared<DoseMatrix>(
         engine->calculateDoseDirect(plan, *result.controlPointStf, patientData, doseGrid, weights));
-    result.stats = PlanAnalysis::computeStats(*result.dose, patientData, doseGrid, config.base.targetDose);
+    result.stats = PlanAnalysis::computeStats(*result.dose, patientData, doseGrid, prescribedDose);
     say("complete: control points=" + std::to_string(result.sequence.controlPoints.size()) +
         ", MU=" + std::to_string(result.sequence.totalMU) + " (~" +
         std::to_string(result.sequence.totalMU * machineMuPerWeight(plan)) + " machine MU/fraction)" +
         ", delivery time=" + std::to_string(result.sequence.totalTimeSec) + " s");
+}
+
+void ArcPipeline::coverApertures(Stf& cpStf, const ArcSequenceResult& sequence) {
+    if (cpStf.getCount() != sequence.controlPoints.size())
+        throw std::invalid_argument("ArcPipeline::coverApertures: STF and control point counts differ");
+    constexpr double eps = 1e-9;
+    for (size_t j = 0; j < cpStf.getCount(); ++j) {
+        Beam& beam = *cpStf.getBeam(j);
+        const auto& cp = sequence.controlPoints[j];
+        const double w = beam.getBixelWidth();
+        if (!(w > 0.0) || cp.leafPairBoundariesZ.size() != cp.aperture.bankA.size() + 1) continue;
+
+        auto key = [w](const Vec3& p) {
+            return std::make_pair(std::lround(p[0] / w), std::lround(p[2] / w));
+        };
+        std::set<std::pair<long, long>> present;
+        for (const auto& ray : beam.getRays()) present.insert(key(ray.getRayPosBev()));
+
+        std::vector<Vec3> added;
+        // Bixels (centres on multiples of w) overlapping the open part of an aperture with a positive area.
+        auto cover = [&](const Aperture& ap) {
+            for (size_t pair = 0; pair < ap.bankA.size(); ++pair) {
+                const double x0 = ap.bankA[pair], x1 = ap.bankB[pair];
+                const double z0 = cp.leafPairBoundariesZ[pair], z1 = cp.leafPairBoundariesZ[pair + 1];
+                if (x1 - x0 <= eps || z1 - z0 <= eps) continue;
+                for (long i = static_cast<long>(std::floor((x0 - 0.5 * w) / w));
+                     i <= static_cast<long>(std::ceil((x1 + 0.5 * w) / w)); ++i) {
+                    const double x = i * w;
+                    if (x + 0.5 * w <= x0 + eps || x - 0.5 * w >= x1 - eps) continue;
+                    for (long k = static_cast<long>(std::floor((z0 - 0.5 * w) / w));
+                         k <= static_cast<long>(std::ceil((z1 + 0.5 * w) / w)); ++k) {
+                        const double z = k * w;
+                        if (z + 0.5 * w <= z0 + eps || z - 0.5 * w >= z1 - eps) continue;
+                        if (present.insert({i, k}).second) added.push_back({x, 0.0, z});
+                    }
+                }
+            }
+        };
+        // With leaf-motion integration the fluence of a slice also follows the tips into its neighbours.
+        cover(cp.aperture);
+        if (const Aperture* before = neighbour(sequence, j, -1)) cover(*before);
+        if (const Aperture* after = neighbour(sequence, j, 1)) cover(*after);
+        if (added.empty()) continue;
+
+        const double energy = beam.getNumOfRays() > 0 ? beam.getRay(0)->getEnergy() : 6.0;
+        std::vector<Vec3> positions;
+        positions.reserve(beam.getNumOfRays() + added.size());
+        for (const auto& ray : beam.getRays()) positions.push_back(ray.getRayPosBev());
+        positions.insert(positions.end(), added.begin(), added.end());
+        std::sort(positions.begin(), positions.end(), [](const Vec3& a, const Vec3& b) {
+            if (std::abs(a[0] - b[0]) > 1e-10) return a[0] < b[0];
+            return a[2] < b[2] - 1e-10;
+        });
+        beam.initRaysFromPositions(positions);
+        beam.computePhotonRayCorners();
+        beam.setAllRayEnergies(energy);
+    }
+}
+
+ArcPipelineResult ArcPipeline::prepareSequence(ArcSequenceResult sequence,
+                                               const Plan& plan,
+                                               const PatientData& patientData,
+                                               std::function<void(const std::string&)> stage) {
+    auto say = [&](const std::string& s) { Logger::info("ArcPipeline: " + s); if (stage) stage(s); };
+    if (!plan.isVmat()) throw std::invalid_argument("ArcPipeline: the plan is not a VMAT plan");
+    if (sequence.controlPoints.empty()) throw std::invalid_argument("ArcPipeline: the sequence has no control points");
+    for (const auto& cp : sequence.controlPoints) {
+        if (cp.aperture.bankA.size() != cp.aperture.bankB.size() ||
+            cp.leafPairBoundariesZ.size() != cp.aperture.bankA.size() + 1)
+            throw std::invalid_argument("ArcPipeline: control point leaves do not match their leaf boundaries");
+    }
+
+    ArcPipelineResult result;
+    result.fromGivenSequence = true;
+    result.sequence = std::move(sequence);
+    say("building " + std::to_string(result.sequence.controlPoints.size()) + " control point beams");
+    std::vector<ArcControlPoint> geometry;
+    geometry.reserve(result.sequence.controlPoints.size());
+    for (const auto& cp : result.sequence.controlPoints) geometry.push_back(cp.geometry);
+    result.controlPointStf = buildControlPointStf(plan, patientData, geometry);
+    const size_t targetRays = result.controlPointStf->getTotalNumOfRays();
+    coverApertures(*result.controlPointStf, result.sequence);
+    say("rays: " + std::to_string(targetRays) + " over the target, " +
+        std::to_string(result.controlPointStf->getTotalNumOfRays() - targetRays) + " added under the apertures");
+    return result;
+}
+
+ArcPipelineResult ArcPipeline::computeSequenceDose(ArcSequenceResult sequence,
+                                                   const Plan& plan,
+                                                   const PatientData& patientData,
+                                                   const Grid& doseGrid,
+                                                   const ArcOptimizationConfig& config,
+                                                   std::function<void(const std::string&)> stage) {
+    ArcPipelineResult result = prepareSequence(std::move(sequence), plan, patientData, stage);
+    const double rx = config.base.targetDose > 0.0 ? config.base.targetDose : plan.getPrescribedDose();
+    computeDeliveredDose(result, plan, patientData, doseGrid, config, rx, stage);
     return result;
 }
 

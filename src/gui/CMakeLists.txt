@@ -49,6 +49,7 @@ add_library(optirad_gui
     panels/PhaseSpacePanel.cpp
     panels/LeafSequencingPanel.cpp
     panels/DaoOptimizationView.cpp
+    panels/ImportedPlanDoseView.cpp
     views/SliceView.cpp
     views/DVHView.cpp
     views/BevView.cpp

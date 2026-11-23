@@ -158,11 +158,7 @@ void BevView::renderControls() {
     }
 
     // Segment slider (only if viewing a deliverable dose with leaf sequencing data)
-    bool isDeliverableDose = false;
-    {
-        auto* sel = m_state.doseStore.getSelected();
-        if (sel) isDeliverableDose = (m_state.seqCache.find(sel->id) != m_state.seqCache.end());
-    }
+    const bool isDeliverableDose = m_state.deliveredSequences() != nullptr;
     if (isDeliverableDose && m_state.leafSequenceDone() &&
         m_beamIndex < static_cast<int>(m_state.leafSequences.size())) {
         const auto& seq = m_state.leafSequences[static_cast<size_t>(m_beamIndex)];
@@ -201,11 +197,7 @@ void BevView::renderControls() {
 
     // Info line — show different details for optimization vs deliverable dose
     if (beam) {
-        bool viewingDeliverable = false;
-        {
-            auto* sel = m_state.doseStore.getSelected();
-            if (sel) viewingDeliverable = (m_state.seqCache.find(sel->id) != m_state.seqCache.end());
-        }
+        const bool viewingDeliverable = m_state.deliveredSequences() != nullptr;
         const auto& fs = beam->getFieldSize();
         if (viewingDeliverable && m_state.plan) {
             const auto& mlc = m_state.plan->getMachine().getGeometry();
@@ -255,8 +247,7 @@ void BevView::renderBevContent() {
     if (m_showAnatomy) {
         std::vector<const Aperture*> apertures;
         std::vector<double> boundaries;
-        const auto* selected = m_state.doseStore.getSelected();
-        if (selected && m_state.seqCache.count(selected->id) && m_state.leafSequenceDone() &&
+        if (m_state.deliveredSequences() && m_state.leafSequenceDone() &&
             m_beamIndex < static_cast<int>(m_state.leafSequences.size())) {
             const auto& sequence = m_state.leafSequences[static_cast<size_t>(m_beamIndex)];
             for (size_t segment = 0; segment < sequence.segments.size(); ++segment) {
@@ -336,9 +327,7 @@ void BevView::renderBevContent() {
 
         bool useLeafBounds = false;
         {
-            auto* sel = m_state.doseStore.getSelected();
-            if (sel && m_state.seqCache.find(sel->id) != m_state.seqCache.end() &&
-                m_state.leafSequenceDone() &&
+            if (m_state.deliveredSequences() && m_state.leafSequenceDone() &&
                 m_beamIndex < static_cast<int>(m_state.leafSequences.size())) {
                 const auto& seq = m_state.leafSequences[static_cast<size_t>(m_beamIndex)];
                 if (!seq.leafPairBoundariesZ.empty()) {
@@ -371,11 +360,7 @@ void BevView::renderBevContent() {
     dl->AddRect(imgMin, imgMax, IM_COL32(200, 200, 200, 180), 0.0f, 0, 1.5f);
 
     // Draw MLC leaves (only for deliverable doses)
-    bool isDeliverableDose = false;
-    {
-        auto* sel = m_state.doseStore.getSelected();
-        if (sel) isDeliverableDose = (m_state.seqCache.find(sel->id) != m_state.seqCache.end());
-    }
+    const bool isDeliverableDose = m_state.deliveredSequences() != nullptr;
     if (isDeliverableDose && m_state.leafSequenceDone() &&
         m_beamIndex < static_cast<int>(m_state.leafSequences.size())) {
         renderMlcLeaves(dl, imgMin, imgMax);
@@ -397,11 +382,7 @@ void BevView::updateFluenceTexture() {
     }
 
     // Determine if viewing deliverable dose (leaf-pair resolution) or optimization dose (bixel resolution)
-    bool isDeliverable = false;
-    {
-        auto* sel = m_state.doseStore.getSelected();
-        if (sel) isDeliverable = (m_state.seqCache.find(sel->id) != m_state.seqCache.end());
-    }
+    const bool isDeliverable = m_state.deliveredSequences() != nullptr;
 
     // For deliverable dose: use leaf-pair-resolution fluence from the sequencer result
     // For optimization dose: use bixel-resolution fluence from optimizer weights

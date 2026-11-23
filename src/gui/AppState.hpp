@@ -106,6 +106,26 @@ struct GuiAppState {
     double statsPrescribedDose = 0.0;
     int activeOptDoseId = -1; // which optimization dose produced current weights
 
+    // ── Plan of each dose ──
+    // Every dose is delivered by a plan (null: none, e.g. an RTDOSE imported without its RTPLAN). Selecting a
+    // dose makes its plan the current one, so the views, the playback and the leaf panel show that plan.
+    struct PlanContext {
+        std::shared_ptr<Plan> plan;
+        std::shared_ptr<StfProperties> stfProps;
+        std::shared_ptr<Stf> stf;
+        std::vector<std::shared_ptr<PhaseSpaceBeamSource>> phaseSpaceSources;
+        std::vector<ObjectiveSpec> optimizationSpecs;
+        std::shared_ptr<DoseInfluenceMatrix> dij;   // kept for the working plan only
+        std::shared_ptr<IDoseOperator> doseOp;
+        std::shared_ptr<Grid> computeGrid;
+    };
+    std::unordered_map<int, std::shared_ptr<Plan>> dosePlans;     // dose entry ID -> plan that delivers it
+    std::unordered_map<const Plan*, PlanContext> parkedPlans;      // plans that are not the current one
+    std::shared_ptr<Plan> workingPlan;     // last plan created in the Planning panel (or imported)
+    std::shared_ptr<Plan> importedPlan;    // plan built from the imported RTPLAN
+    std::shared_ptr<ArcPipelineResult> importedDelivery;  // its leaves and MU (arc RTPLAN), without dose
+    std::vector<LeafSequenceResult> importedSequences;     // its segments and MU (static-beam RTPLAN)
+
     // ── Workflow naming counters ──
     int optimizationCount = 0;
     int leafSeqCount = 0;
@@ -138,6 +158,16 @@ struct GuiAppState {
     }
     bool optimizationDone() const { return !optimizedWeights.empty() && doseResult != nullptr; }
     bool leafSequenceDone() const { return !leafSequences.empty(); }
+    /// Static-beam leaf sequences to display: the selected dose's sequencing result, or the imported RTPLAN's
+    /// segments while its plan is current (also without an imported dose).
+    const std::vector<LeafSequenceResult>* deliveredSequences() const {
+        if (const auto* sel = doseStore.getSelected()) {
+            const auto it = seqCache.find(sel->id);
+            if (it != seqCache.end()) return &it->second.sequences;
+        }
+        if (plan && plan == importedPlan && !importedSequences.empty()) return &importedSequences;
+        return nullptr;
+    }
     bool doseAvailable() const { return doseStore.count() > 0 && doseStore.getSelected() != nullptr; }
 
     /// Check if the current plan uses a phase-space machine
@@ -195,6 +225,13 @@ struct GuiAppState {
     /// and restore cached optimization / leaf sequencing results.
     void syncSelectedDose() {
         auto* sel = doseStore.getSelected();
+        if (sel) {
+            // A new dose is delivered by the current plan (doses are added right after they are computed).
+            auto linked = dosePlans.try_emplace(sel->id, plan).first->second;
+            switchToPlan(linked ? linked : (workingPlan ? workingPlan : plan));
+        } else if (workingPlan) {
+            switchToPlan(workingPlan);
+        }
         if (sel) {
             doseResult = sel->dose;
             displayGrid = sel->grid;
@@ -273,13 +310,57 @@ struct GuiAppState {
             return;
         }
 
-        // No cached results for this dose — clear pipeline state
-        arcResult.reset();
+        // No cached results for this dose — clear pipeline state (an imported RTPLAN keeps its delivery)
+        const bool importedCurrent = plan && plan == importedPlan;
+        arcResult = importedCurrent ? importedDelivery : nullptr;
         optimizedWeights.clear();
-        leafSequences.clear();
+        if (importedCurrent) leafSequences = importedSequences;
+        else leafSequences.clear();
         deliverableWeights.clear();
         deliverableStats.clear();
         activeOptDoseId = -1;
+    }
+
+    bool planHasDose(const Plan* p) const {
+        for (const auto& [id, linked] : dosePlans)
+            if (linked.get() == p) return true;
+        return false;
+    }
+
+    /// Make `target` the current plan: the current plan is parked (if a dose or the working plan uses it) and
+    /// the target's parked state (beams, objectives, Dij of the working plan) restored.
+    void switchToPlan(const std::shared_ptr<Plan>& target) {
+        if (target == plan) return;
+        if (plan && (plan == workingPlan || plan == importedPlan || planHasDose(plan.get()))) {
+            PlanContext ctx{plan, stfProps, stf, phaseSpaceSources, optimizationSpecs, nullptr, nullptr, nullptr};
+            if (plan == workingPlan) { ctx.dij = dij; ctx.doseOp = doseOp; ctx.computeGrid = computeGrid; }
+            parkedPlans[plan.get()] = std::move(ctx);
+        }
+        PlanContext next;
+        next.plan = target;
+        if (auto it = parkedPlans.find(target.get()); target && it != parkedPlans.end()) {
+            next = std::move(it->second);
+            parkedPlans.erase(it);
+        }
+        plan = next.plan;
+        stfProps = next.stfProps;
+        stf = next.stf;
+        phaseSpaceSources = std::move(next.phaseSpaceSources);
+        optimizationSpecs = std::move(next.optimizationSpecs);
+        dij = next.dij;
+        doseOp = next.doseOp;
+        computeGrid = next.computeGrid;
+        optimizedWeights.clear();
+    }
+
+    /// Clear the current plan before a new one is created: no dose is selected, so the new plan starts without
+    /// dose; the plans of existing doses stay with them.
+    void startNewPlan() {
+        workingPlan.reset();
+        doseStore.clearSelection();
+        switchToPlan(nullptr);
+        resetLeafSequence();
+        syncSelectedDose();
     }
 
     // Reset downstream state when upstream changes.
@@ -314,6 +395,8 @@ struct GuiAppState {
     void resetAllDoses() {
         doseStore.clear(); doseResult.reset(); displayGrid.reset(); computeGrid.reset();
         optWeightsCache.clear(); seqCache.clear(); arcCache.clear(); statsCache.clear(); activeOptDoseId = -1;
+        dosePlans.clear(); parkedPlans.clear(); workingPlan.reset(); importedPlan.reset(); importedDelivery.reset();
+        importedSequences.clear();
         statsDoseIds.clear(); statsPatient = nullptr; statsPrescribedDose = 0.0;
     }
 };

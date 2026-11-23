@@ -214,6 +214,39 @@ TEST_F(DeliveryPlaybackTest, SmlcUsesSelectedCachedSegmentsWithBeamOffTransition
     EXPECT_DOUBLE_EQ(delivery.frame().doseRate, 10.0);
 }
 
+TEST_F(DeliveryPlaybackTest, ImportedStaticRtplanShowsItsSegmentsWithoutAnyDose) {
+    state.doseStore.clear();
+    state.arcCache.clear();
+    state.plan->setDeliveryMode(DeliveryMode::SMLC);
+    state.plan->setNumOfFractions(1);
+    state.stf = std::make_shared<Stf>();
+    Beam beam;
+    state.stf->addBeam(beam);
+    LeafSequenceResult sequence;
+    Aperture segment;
+    segment.bankA = {-20.0}; segment.bankB = {20.0}; segment.weight = 0.1;
+    sequence.segments = {segment};
+    sequence.leafPairBoundariesZ = {-5.0, 5.0};
+    state.importedPlan = state.plan;
+    state.workingPlan = state.plan;
+    state.importedSequences = {sequence};
+    state.syncSelectedDose();
+    ASSERT_NE(state.deliveredSequences(), nullptr);
+    EXPECT_EQ(state.leafSequences.size(), 1u);
+    state.delivery.synchronize(state);
+    ASSERT_TRUE(state.delivery.available());
+    EXPECT_TRUE(state.delivery.frame().hasAperture);
+    EXPECT_NEAR(state.delivery.frame().aperture.bankA[0], -20.0, 1e-12);
+
+    state.plan = std::make_shared<Plan>(*state.plan);   // a plan created by the user: no imported segments
+    state.workingPlan = state.plan;
+    state.syncSelectedDose();
+    EXPECT_EQ(state.deliveredSequences(), nullptr);
+    EXPECT_TRUE(state.leafSequences.empty());
+    state.delivery.synchronize(state);
+    EXPECT_FALSE(state.delivery.frame().hasAperture);
+}
+
 TEST_F(DeliveryPlaybackTest, SourceReplacementResetsPlaybackWithoutResettingVisibilityOrSpeed) {
     auto& delivery = state.delivery;
     delivery.showOverlays = false;

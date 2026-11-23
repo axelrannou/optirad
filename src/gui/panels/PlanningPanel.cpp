@@ -2,6 +2,7 @@
 #include "../Layout.hpp"
 #include "Theme.hpp"
 #include "core/workflow/PlanBuilder.hpp"
+#include "core/workflow/ImportedPlanConverter.hpp"
 #include "core/workflow/DoseCalculationPipeline.hpp"
 #include "dose/FluenceDoseOperator.hpp"
 #include "utils/Logger.hpp"
@@ -42,6 +43,85 @@ PlanningPanel::PlanningPanel(GuiAppState& state) : m_state(state) {
     }
 }
 
+void PlanningPanel::renderImportedPlan() {
+    const ImportedPlan* imported = m_state.patientData->getImportedPlan();
+    if (!imported || imported->beams.empty()) return;
+    if (!ImGui::CollapsingHeader("Imported RTPLAN", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    ImGui::Indent();
+
+    double totalMu = 0.0;
+    size_t arcs = 0;
+    for (const auto& beam : imported->beams) {
+        totalMu += beam.metersetMU;
+        arcs += beam.isArc ? 1 : 0;
+    }
+    ImGui::Text("'%s': %d fraction(s)", imported->label.c_str(), imported->numFractions);
+    if (imported->prescribedDose > 0.0) {
+        ImGui::SameLine();
+        ImGui::Text("| %.2f Gy", imported->prescribedDose);
+    }
+    ImGui::Text("%zu beam(s), %zu arc(s), %.1f MU/fraction", imported->beams.size(), arcs, totalMu);
+    if (m_state.importedPlan && m_state.plan != m_state.importedPlan)
+        ImGui::TextDisabled("Select the imported dose to show the RTPLAN and its delivery.");
+
+    const bool busy = m_state.taskRunning;
+    if (busy) ImGui::BeginDisabled();
+    if (ImGui::Button("Apply RTPLAN settings", layout::fullWidthButtonSize("Apply RTPLAN settings", 30)))
+        applyImportedPlan();
+    if (busy) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Copies the RTPLAN's beams/arcs, fractions and the RTDOSE grid resolution into the\n"
+                          "planning parameters below; then Create Plan. Its isocenter and prescription are\n"
+                          "used by Create Plan while an RTPLAN is imported.");
+
+    m_importedDose.render(m_state.daoDose);
+    ImGui::Unindent();
+    ImGui::Spacing();
+}
+
+void PlanningPanel::applyImportedPlan() {
+    const ImportedPlan* imported = m_state.patientData->getImportedPlan();
+    if (!imported) return;
+    PlanConfig cfg;
+    ImportedPlanConverter::applyToPlanConfig(*imported, cfg);
+
+    auto joined = [](const std::vector<double>& values) {
+        std::ostringstream ss;
+        for (size_t i = 0; i < values.size(); ++i) ss << (i ? " " : "") << values[i];
+        return ss.str();
+    };
+    if (cfg.deliveryMode == DeliveryMode::VMAT) {
+        m_deliveryIdx = 1;
+        m_arcs.clear();
+        for (const auto& arc : cfg.vmat.arcs) {
+            ArcUi ui;
+            ui.start = static_cast<float>(arc.startAngle);
+            ui.stop = static_cast<float>(arc.stopAngle);
+            ui.clockwise = arc.clockwise;
+            ui.couch = static_cast<float>(arc.couchAngle);
+            ui.collimator = static_cast<float>(arc.collimatorAngle);
+            m_arcs.push_back(ui);
+        }
+        m_optSpacing = static_cast<float>(cfg.vmat.optimizationSpacingDeg);
+        m_cpSpacing = static_cast<float>(cfg.vmat.controlPointSpacingDeg);
+    } else {
+        m_deliveryIdx = 0;
+        m_gantryMode = 1;
+        m_gantryListBuf = joined(cfg.gantryAngles);
+        m_couchMode = 1;
+        m_couchListBuf = joined(cfg.couchAngles);
+        m_collimatorListBuf = joined(cfg.collimatorAngles);
+    }
+    m_numFractions = cfg.numFractions;
+    if (const auto& grid = m_state.patientData->getImportedDoseGridResolution())
+        for (int i = 0; i < 3; ++i) m_doseResolution[i] = static_cast<float>((*grid)[i]);
+    if (kIsPhaseSpace[m_machineIdx]) {
+        for (int i = 0; i < IM_ARRAYSIZE(kMachines); ++i)
+            if (std::string(kMachines[i]) == PlanConfig{}.machineName) m_machineIdx = i;
+    }
+    Logger::info("Planning parameters set from RTPLAN '" + imported->label + "'");
+}
+
 PlanningPanel::~PlanningPanel() {
     if (m_stfThread.joinable()) m_stfThread.join();
     if (m_dijThread.joinable()) m_dijThread.join();
@@ -58,6 +138,8 @@ void PlanningPanel::render() {
         ImGui::End();
         return;
     }
+
+    renderImportedPlan();
 
     // ── Radiation Mode ──
     if (ImGui::CollapsingHeader("Radiation Mode", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -99,6 +181,9 @@ void PlanningPanel::render() {
                 if (layout::combo("##dir", &dir, kDir, IM_ARRAYSIZE(kDir))) arc.clockwise = (dir == 0);
                 ImGui::SetNextItemWidth(80);
                 ImGui::InputFloat("Couch##arc", &arc.couch, 0.0f, 0.0f, "%.1f");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                ImGui::InputFloat("Collimator##arc", &arc.collimator, 0.0f, 0.0f, "%.1f");
                 ImGui::PopID();
             }
             if (toRemove >= 0) m_arcs.erase(m_arcs.begin() + toRemove);
@@ -122,6 +207,7 @@ void PlanningPanel::render() {
                     ArcSpec spec;
                     spec.startAngle = arc.start; spec.stopAngle = arc.stop;
                     spec.clockwise = arc.clockwise; spec.couchAngle = arc.couch;
+                    spec.collimatorAngle = arc.collimator;
                     preview.arcs.push_back(spec);
                 }
                 preview.optimizationSpacingDeg = m_optSpacing;
@@ -208,6 +294,16 @@ void PlanningPanel::render() {
         ImGui::Unindent();
     }
 
+    // ── Collimator Angles ──
+    if (ImGui::CollapsingHeader("Collimator Angles")) {
+        ImGui::Indent();
+        InputTextMultilineString("##collimatorList", &m_collimatorListBuf, ImVec2(-1, ImGui::GetTextLineHeight() * 3));
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Space-separated collimator angles in degrees (paired 1:1 with gantry).\n"
+                              "Empty: 0 on every beam.");
+        ImGui::Unindent();
+    }
+
     // ── Beam count ──
     {
         int numGantry = 0;
@@ -279,8 +375,8 @@ void PlanningPanel::render() {
     if (!paramsValid) ImGui::BeginDisabled();
 
     if (ImGui::Button("Create Plan", layout::fullWidthButtonSize("Create Plan", 30))) {
-        // Reset downstream state
-        m_state.resetPlan();
+        // A new plan starts without dose; existing doses keep their own plan
+        m_state.startNewPlan();
 
         // Build config from UI values
         PlanConfig config;
@@ -296,6 +392,7 @@ void PlanningPanel::render() {
                 ArcSpec spec;
                 spec.startAngle = arc.start; spec.stopAngle = arc.stop;
                 spec.clockwise = arc.clockwise; spec.couchAngle = arc.couch;
+                spec.collimatorAngle = arc.collimator;
                 config.vmat.arcs.push_back(spec);
             }
             config.vmat.optimizationSpacingDeg = m_optSpacing;
@@ -318,6 +415,11 @@ void PlanningPanel::render() {
             std::istringstream ss(m_couchListBuf);
             double v;
             while (ss >> v) config.couchAngles.push_back(v);
+        }
+        if (!isVmat) {
+            std::istringstream ss(m_collimatorListBuf);
+            double v;
+            while (ss >> v) config.collimatorAngles.push_back(v);
         }
 
         m_isGeneratingStf = true;
@@ -360,12 +462,16 @@ void PlanningPanel::render() {
             m_isGeneratingStf = false;
             m_stfGenerationDone = false;
             m_state.taskRunning = false;
+            m_state.workingPlan = m_state.plan;
         }
     }
 
     // Show plan status
     if (m_state.planCreated()) {
         ImGui::Spacing();
+        if (m_state.plan == m_state.importedPlan)
+            ImGui::TextColored(getThemeColors().phaseSpace, "Current plan: imported RTPLAN '%s'",
+                               m_state.patientData->getImportedPlan()->label.c_str());
         if (m_state.isPhaseSpaceMachine()) {
             ImGui::TextColored(getThemeColors().passText, "Plan created.");
             ImGui::TextColored(getThemeColors().phaseSpace,
@@ -401,13 +507,13 @@ void PlanningPanel::render() {
         if (ImGui::CollapsingHeader("Dose Settings (DAO)", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Text("Dose Grid Resolution:");
             ImGui::SetNextItemWidth(95.0f);
-            ImGui::InputFloat("##daoRes0", &m_doseResolution[0], 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("##daoRes0", &m_doseResolution[0], 0.0f, 0.0f, "%.2f");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(95.0f);
-            ImGui::InputFloat("##daoRes1", &m_doseResolution[1], 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("##daoRes1", &m_doseResolution[1], 0.0f, 0.0f, "%.2f");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(95.0f);
-            ImGui::InputFloat("##daoRes2", &m_doseResolution[2], 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("##daoRes2", &m_doseResolution[2], 0.0f, 0.0f, "%.2f");
             ImGui::SameLine();
             ImGui::TextUnformatted("mm");
             static const char* kBackends[] = { "CPU", "Auto", "CUDA" };
@@ -440,13 +546,13 @@ void PlanningPanel::render() {
         if (canCalcDose && !m_isCalculatingDij) {
             ImGui::Text("Dose Grid Resolution:");
             ImGui::SetNextItemWidth(95.0f);
-            ImGui::InputFloat("##doseRes0", &m_doseResolution[0], 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("##doseRes0", &m_doseResolution[0], 0.0f, 0.0f, "%.2f");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(95.0f);
-            ImGui::InputFloat("##doseRes1", &m_doseResolution[1], 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("##doseRes1", &m_doseResolution[1], 0.0f, 0.0f, "%.2f");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(95.0f);
-            ImGui::InputFloat("##doseRes2", &m_doseResolution[2], 0.0f, 0.0f, "%.1f");
+            ImGui::InputFloat("##doseRes2", &m_doseResolution[2], 0.0f, 0.0f, "%.2f");
             ImGui::SameLine();
             ImGui::TextUnformatted("mm");
 

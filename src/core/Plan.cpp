@@ -136,7 +136,8 @@ void Plan::printSummary() const {
         for (size_t a = 0; a < m_vmat.arcs.size(); ++a) {
             const auto& arc = m_vmat.arcs[a];
             std::cout << "    Arc " << a + 1 << ": " << arc.startAngle << " -> " << arc.stopAngle
-                      << (arc.clockwise ? " CW" : " CCW") << ", couch " << arc.couchAngle << "\n";
+                      << (arc.clockwise ? " CW" : " CCW") << ", couch " << arc.couchAngle
+                      << ", collimator " << arc.collimatorAngle << "\n";
         }
     } else {
         std::cout << "  Delivery:        SMLC (step-and-shoot)\n";

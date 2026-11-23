@@ -22,8 +22,12 @@ public:
     // --- Angular parameters ---
     void setGantryAngle(double angle);
     void setCouchAngle(double angle);
+    void setCollimatorAngle(double angle);
     double getGantryAngle() const;
     double getCouchAngle() const;
+    double getCollimatorAngle() const;
+    /// BEAM LIMITING DEVICE coordinates to patient LPS, including gantry, couch, and collimator rotation.
+    Mat3 getBeamRotationMatrix() const;
 
     // --- Isocenter ---
     void setIsocenter(double x, double y, double z);
@@ -110,6 +114,7 @@ private:
     // Angular parameters
     double m_gantryAngle = 0.0;
     double m_couchAngle = 0.0;
+    double m_collimatorAngle = 0.0;
 
     // Geometry
     Vec3 m_isocenter = {0.0, 0.0, 0.0};

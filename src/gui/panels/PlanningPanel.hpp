@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IPanel.hpp"
+#include "ImportedPlanDoseView.hpp"
 #include "../AppState.hpp"
 #include "core/workflow/DoseCalculationPipeline.hpp"
 #include "core/workflow/PlanBuilder.hpp"
@@ -42,6 +43,7 @@ private:
         float stop = static_cast<float>(ArcSpec{}.stopAngle);
         bool clockwise = ArcSpec{}.clockwise;
         float couch = static_cast<float>(ArcSpec{}.couchAngle);
+        float collimator = static_cast<float>(ArcSpec{}.collimatorAngle);
     };
     std::vector<ArcUi> m_arcs{ArcUi{}};
     float m_optSpacing = static_cast<float>(VmatSettings{}.optimizationSpacingDeg);   // degrees per arc sector
@@ -63,6 +65,9 @@ private:
     float m_couchStep = 0.0f;
     float m_couchStop = 0.0f;
     std::string m_couchListBuf = "0 0 0 0";
+
+    // Collimator angles of static beams (paired 1:1 with gantry; empty = 0)
+    std::string m_collimatorListBuf;
 
     // Bixel width
     float m_bixelWidth = static_cast<float>(PlanConfig{}.bixelWidth);
@@ -96,6 +101,14 @@ private:
     bool  m_excludeExternal = DoseCalcPipelineOptions{}.excludeExternal;
     float m_absoluteThreshold = static_cast<float>(DoseCalcPipelineOptions{}.absoluteThreshold);
     int m_numThreads = 0;
+
+    /// Imported RTPLAN section: summary, "Apply RTPLAN settings" and the dose of its leaves.
+    void renderImportedPlan();
+    /// Fills the planning parameters from the imported RTPLAN and RTDOSE (Create Plan is left to the user).
+    void applyImportedPlan();
+
+    // Dose of the imported RTPLAN's leaves
+    ImportedPlanDoseView m_importedDose{m_state};
 };
 
 } // namespace optirad

@@ -42,6 +42,11 @@ public:
         m_couchAnglesList = angles;
     }
 
+    /// Set collimator angles from an explicit list paired with the generated beams.
+    void setCollimatorAngles(const std::vector<double>& angles) {
+        m_collimatorAnglesList = angles;
+    }
+
     /// Set gantry angles from an explicit list.
     /// Takes precedence over start/step/stop if non-empty.
     void setGantryAngles(const std::vector<double>& angles) {
@@ -79,6 +84,7 @@ public:
         } else {
             props->setGantryAngles(m_start, m_step, m_stop);
         }
+        props->setCollimatorAngles(m_collimatorAnglesList);
 
         // Apply couch angles: explicit list takes precedence
         if (!m_couchAnglesList.empty()) {
@@ -157,6 +163,22 @@ public:
             couchAngles.assign(gantryBase.size(), m_couchStart);
         }
 
+        std::vector<double> collimatorAngles(angles.size(), 0.0);
+        if (!m_collimatorAnglesList.empty()) {
+            if (m_collimatorAnglesList.size() == angles.size()) {
+                collimatorAngles = m_collimatorAnglesList;
+            } else if (!gantryBase.empty() && m_collimatorAnglesList.size() == gantryBase.size() &&
+                       angles.size() % gantryBase.size() == 0) {
+                for (size_t i = 0; i < angles.size(); ++i)
+                    collimatorAngles[i] = m_collimatorAnglesList[i % gantryBase.size()];
+            } else {
+                std::fill(collimatorAngles.begin(), collimatorAngles.end(), m_collimatorAnglesList.back());
+                std::copy_n(m_collimatorAnglesList.begin(),
+                            std::min(m_collimatorAnglesList.size(), collimatorAngles.size()),
+                            collimatorAngles.begin());
+            }
+        }
+
         // Generate beams in parallel
         std::vector<Beam> beams(angles.size());
 
@@ -173,6 +195,7 @@ public:
             
             beam.setGantryAngle(angle);
             beam.setCouchAngle(couchAngles[i]);
+            beam.setCollimatorAngle(collimatorAngles[i]);
             beam.setIsocenter(m_iso);
             beam.setBixelWidth(m_bixelWidth);
             beam.setRadiationMode(m_radiationMode);
@@ -287,6 +310,7 @@ private:
     double m_couchStop = 0.0;
     std::vector<double> m_couchAnglesList;  // explicit list, takes precedence if non-empty
     std::vector<double> m_gantryAnglesList;  // explicit list, takes precedence if non-empty
+    std::vector<double> m_collimatorAnglesList;
 };
 
 } // namespace optirad

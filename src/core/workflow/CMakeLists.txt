@@ -1,5 +1,6 @@
 add_library(optirad_workflow
     PlanBuilder.cpp
+    ImportedPlanConverter.cpp
     DoseCalculationPipeline.cpp
     PhaseSpaceBuilder.cpp
     OptimizationPipeline.cpp

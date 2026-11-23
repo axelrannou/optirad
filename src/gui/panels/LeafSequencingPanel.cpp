@@ -15,7 +15,9 @@ LeafSequencingPanel::~LeafSequencingPanel() {
 }
 
 void LeafSequencingPanel::renderArc() {
-    ImGui::TextUnformatted("VMAT: apertures from direct aperture optimization");
+    const bool imported = m_state.arcResult && m_state.arcResult->fromGivenSequence;
+    ImGui::TextUnformatted(imported ? "VMAT: leaf positions and MU of the imported RTPLAN (no DAO)"
+                                    : "VMAT: apertures from direct aperture optimization");
     if (!m_state.arcResult) {
         ImGui::TextDisabled("Select a VMAT DAO dose, or run DAO from the Optimization panel.");
         return;
@@ -27,9 +29,10 @@ void LeafSequencingPanel::renderArc() {
             "%zu control points | %.0f MU/fraction (weight %.0f) | %.0f s | %d slowed | %.1f mm leaf travel/cp",
             seq.controlPoints.size(), seq.totalMU * (m_state.plan ? m_state.plan->machineMuPerWeight() : 1.0),
             seq.totalMU, seq.totalTimeSec, seq.slowedControlPoints, seq.meanLeafTravel);
-        ImGui::Text("DAO: %d accepted steps | objective %.3e -> %.3e",
-            m_state.arcResult->leafIterations, m_state.arcResult->initialLeafObjective,
-            m_state.arcResult->finalLeafObjective);
+        if (!imported)
+            ImGui::Text("DAO: %d accepted steps | objective %.3e -> %.3e",
+                m_state.arcResult->leafIterations, m_state.arcResult->initialLeafObjective,
+                m_state.arcResult->finalLeafObjective);
         ImGui::Text("Slowest gantry speed: %.2f deg/s | max leaf speed: %.1f mm/s",
                     seq.minGantrySpeed, seq.maxLeafSpeed);
 
@@ -61,6 +64,39 @@ void LeafSequencingPanel::renderArc() {
     }
 }
 
+void LeafSequencingPanel::renderImportedSegments() {
+    ImGui::TextUnformatted("Step-and-shoot: segments and MU of the imported RTPLAN (no sequencing)");
+    const auto& seqs = m_state.importedSequences;
+    const double muScale = m_state.plan->machineMuPerWeight();
+    double total = 0.0;
+    size_t segments = 0;
+    for (const auto& seq : seqs) {
+        total += seq.totalMU;
+        segments += seq.segments.size();
+    }
+    ImGui::TextColored(getThemeColors().passText, "%zu beams | %zu segments | %.1f MU/fraction (weight %.2f)",
+                       seqs.size(), segments, total * muScale, total);
+    if (ImGui::BeginTable("ImportedSeqTable", 4,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | layout::contentTableFlags | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Beam");
+        ImGui::TableSetupColumn("Gantry");
+        ImGui::TableSetupColumn("Segments");
+        ImGui::TableSetupColumn("MU/fx");
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < seqs.size(); ++i) {
+            const Beam* beam = m_state.stf ? m_state.stf->getBeam(seqs[i].beamIndex) : nullptr;
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::Text("%zu", i);
+            ImGui::TableSetColumnIndex(1);
+            if (beam) ImGui::Text("%.1f", beam->getGantryAngle()); else ImGui::TextUnformatted("-");
+            ImGui::TableSetColumnIndex(2); ImGui::Text("%zu", seqs[i].segments.size());
+            ImGui::TableSetColumnIndex(3); ImGui::Text("%.1f", seqs[i].totalMU * muScale);
+        }
+        ImGui::EndTable();
+    }
+}
+
 void LeafSequencingPanel::render() {
     if (!m_visible) return;
 
@@ -68,6 +104,11 @@ void LeafSequencingPanel::render() {
 
     if (m_state.directDao()) {
         renderArc();
+        ImGui::End();
+        return;
+    }
+    if (m_state.plan && m_state.plan == m_state.importedPlan && !m_state.importedSequences.empty()) {
+        renderImportedSegments();
         ImGui::End();
         return;
     }

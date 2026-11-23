@@ -84,7 +84,7 @@ PencilBeamEngine::BeamData PencilBeamEngine::initBeam(
     size_t nx = dims[0], ny = dims[1];
 
     // Get rotation matrix: LPS → BEV
-    Mat3 rotMat = getRotationMatrix(beam.getGantryAngle(), beam.getCouchAngle());
+    Mat3 rotMat = beam.getBeamRotationMatrix();
     Mat3 rotMatInv = transpose(rotMat); // BEV → LPS (rotation matrices are orthogonal)
 
     Vec3 iso = beam.getIsocenter();

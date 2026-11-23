@@ -27,6 +27,7 @@ public:
 private:
     /// VMAT plans: apertures and control points of the selected DAO result (DAO runs in the Optimization panel).
     void renderArc();
+    void renderImportedSegments();
 
     GuiAppState& m_state;
 

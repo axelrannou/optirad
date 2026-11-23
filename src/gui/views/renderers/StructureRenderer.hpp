@@ -1,6 +1,7 @@
 #pragma once
 #include <GL/glew.h>
 #include <glm/glm.hpp>
+#include <memory>
 #include <vector>
 #include <mutex>
 
@@ -61,10 +62,16 @@ private:
     
     PatientData* m_patientData = nullptr;
     bool m_needsRebuild = false;
-    
-    // Thread safety for mesh vector accessed from multiple threads
-    mutable std::mutex m_meshMutex;
-    std::vector<StructureMesh> m_meshes;
+
+    /// Structure meshes shared by every renderer (3D view, BEV): all views use the one GL context,
+    /// so each patient's structures are tessellated and uploaded once.
+    struct MeshStore {
+        std::mutex mutex;
+        const PatientData* source = nullptr;
+        std::vector<StructureMesh> meshes;
+    };
+    static std::shared_ptr<MeshStore> sharedStore();
+    std::shared_ptr<MeshStore> m_store;
     GLuint m_shaderProgram = 0;
 };
 

@@ -43,6 +43,22 @@ TEST_F(BeamTest, LargeGantryAngleAccepted) {
     EXPECT_DOUBLE_EQ(beam.getGantryAngle(), 450.0);
 }
 
+TEST_F(BeamTest, CollimatorAngleRotatesBeamCoordinatesAroundTheCentralAxis) {
+    beam.setCollimatorAngle(90.0);
+    const Mat3 rotation = beam.getBeamRotationMatrix();
+    const Vec3 leafXInLps = rotation * Vec3{10.0, 0.0, 0.0};
+    EXPECT_NEAR(leafXInLps[0], 0.0, 1e-10);
+    EXPECT_NEAR(leafXInLps[1], 0.0, 1e-10);
+    // IEC: a 90 degree collimator turns X_b onto the gantry-frame Y axis (superior for HFS at gantry 0).
+    EXPECT_NEAR(leafXInLps[2], 10.0, 1e-10);
+
+    beam.setSAD(1000.0);
+    beam.computeSourcePoints();
+    EXPECT_NEAR(beam.getSourcePoint()[0], 0.0, 1e-10);
+    EXPECT_NEAR(beam.getSourcePoint()[1], -1000.0, 1e-10);
+    EXPECT_NEAR(beam.getSourcePoint()[2], 0.0, 1e-10);
+}
+
 TEST_F(BeamTest, SetIsocenterXYZ) {
     beam.setIsocenter(100.0, 200.0, 300.0);
     const auto& iso = beam.getIsocenter();

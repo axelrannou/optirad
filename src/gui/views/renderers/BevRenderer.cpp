@@ -152,7 +152,7 @@ GLuint BevRenderer::render(PatientData* patient, const Beam& beam,
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // StructureRenderer uses metres and a -90 degree rotation around LPS X.
-    const auto rotation = getRotationMatrix(beam.getGantryAngle(), beam.getCouchAngle());
+    const auto rotation = beam.getBeamRotationMatrix();
     auto world = [&](const Vec3& local) {
         const auto lps = vecAdd(beam.getIsocenter(), rotation * local);
         return glm::vec3(lps[0], lps[2], -lps[1]) * 0.001f;

@@ -53,6 +53,10 @@ target_include_directories(test_plan_analysis PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_plan_analysis PRIVATE optirad_workflow GTest::gtest_main)
 add_test(NAME PlanAnalysisTest COMMAND test_plan_analysis)
 
+add_executable(test_imported_plan_converter core/test_imported_plan_converter.cpp)
+target_link_libraries(test_imported_plan_converter PRIVATE optirad_workflow GTest::gtest_main)
+add_test(NAME ImportedPlanConverterTest COMMAND test_imported_plan_converter)
+
 add_executable(test_plan
     core/test_plan.cpp
 )
@@ -168,6 +172,12 @@ if(DCMTK_FOUND)
     target_include_directories(test_dicom_exporter PRIVATE ${CMAKE_SOURCE_DIR}/src ${DCMTK_INCLUDE_DIRS})
     target_link_libraries(test_dicom_exporter PRIVATE optirad_io ${DCMTK_LIBRARIES} GTest::gtest_main)
     add_test(NAME DicomExporterTest COMMAND test_dicom_exporter)
+
+    add_executable(test_rtplan_import io/test_rtplan_import.cpp)
+    target_include_directories(test_rtplan_import PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_rtplan_import PRIVATE optirad_workflow GTest::gtest_main)
+    target_compile_definitions(test_rtplan_import PRIVATE OPTIRAD_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+    add_test(NAME RTPlanImportTest COMMAND test_rtplan_import)
 endif()
 
 # ============================================================================

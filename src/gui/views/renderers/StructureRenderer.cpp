@@ -11,7 +11,17 @@
 
 namespace optirad {
 
-StructureRenderer::StructureRenderer() = default;
+std::shared_ptr<StructureRenderer::MeshStore> StructureRenderer::sharedStore() {
+    static std::weak_ptr<MeshStore> instance;
+    auto store = instance.lock();
+    if (!store) {
+        store = std::make_shared<MeshStore>();
+        instance = store;
+    }
+    return store;
+}
+
+StructureRenderer::StructureRenderer() : m_store(sharedStore()) {}
 StructureRenderer::~StructureRenderer() = default;
 
 void StructureRenderer::init() {
@@ -312,7 +322,7 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
         emptyMesh.indexCount = 0;
         emptyMesh.center = glm::vec3(0.0f);
         emptyMesh.vao = emptyMesh.vbo = emptyMesh.ebo = 0;
-        m_meshes.push_back(emptyMesh);
+        m_store->meshes.push_back(emptyMesh);
         return;
     }
 
@@ -326,7 +336,7 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
         mesh.indexCount = 0;
         mesh.center = glm::vec3(0.0f);
         mesh.vao = mesh.vbo = mesh.ebo = 0;
-        m_meshes.push_back(mesh);
+        m_store->meshes.push_back(mesh);
         Logger::info("    -> Skipped (need ≥2 contours for 3D mesh)");
         return;
     }
@@ -577,7 +587,7 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
         mesh.visible=structure->isVisible();
         mesh.indexCount=0; mesh.center=glm::vec3(0.f);
         mesh.vao=mesh.vbo=mesh.ebo=0;
-        m_meshes.push_back(mesh);
+        m_store->meshes.push_back(mesh);
         Logger::info("    -> Skipped (marching cubes produced no geometry)");
         return;
     }
@@ -635,25 +645,34 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    m_meshes.push_back(mesh);
+    m_store->meshes.push_back(mesh);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 
 void StructureRenderer::buildMeshes() {
-    std::lock_guard<std::mutex> lock(m_meshMutex);
+    std::lock_guard<std::mutex> lock(m_store->mutex);
     buildMeshes_unlocked();
 }
 
 void StructureRenderer::buildMeshes_unlocked() {
-    for (auto& mesh : m_meshes) {
+    const auto* structureSet = m_patientData ? m_patientData->getStructureSet() : nullptr;
+    if (structureSet && m_store->source == m_patientData &&
+        m_store->meshes.size() == structureSet->getCount()) {
+        m_needsRebuild = false;   // another view already built this patient's meshes
+        return;
+    }
+
+    for (auto& mesh : m_store->meshes) {
         if (mesh.vao) glDeleteVertexArrays(1,&mesh.vao);
         if (mesh.vbo) glDeleteBuffers(1,&mesh.vbo);
         if (mesh.ebo) glDeleteBuffers(1,&mesh.ebo);
     }
-    m_meshes.clear();
+    m_store->meshes.clear();
+    m_store->source = nullptr;
 
-    if (!m_patientData||!m_patientData->getStructureSet()) return;
+    if (!structureSet) return;
+    m_store->source = m_patientData;
 
     auto* structures=m_patientData->getStructureSet();
     size_t structureCount=structures->getCount();
@@ -666,10 +685,10 @@ void StructureRenderer::buildMeshes_unlocked() {
                          " ("+std::to_string(structure->getContourCount())+" contours)");
         tessellateStructure(i);
     }
-    Logger::info("Built "+std::to_string(m_meshes.size())+" meshes");
+    Logger::info("Built "+std::to_string(m_store->meshes.size())+" meshes");
 
-    if (m_meshes.size()!=structureCount)
-        Logger::error("MISMATCH: "+std::to_string(m_meshes.size())+" meshes vs "+
+    if (m_store->meshes.size()!=structureCount)
+        Logger::error("MISMATCH: "+std::to_string(m_store->meshes.size())+" meshes vs "+
                       std::to_string(structureCount)+" structures!");
 
     m_needsRebuild=false;
@@ -690,19 +709,19 @@ void StructureRenderer::buildMeshes_unlocked() {
 // ──────────────────────────────────────────────────────────────────────────────
 
 void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projection) {
-    std::lock_guard<std::mutex> lock(m_meshMutex);
+    std::lock_guard<std::mutex> lock(m_store->mutex);
 
     if (!m_patientData||!m_patientData->getStructureSet()) return;
     if (m_needsRebuild) buildMeshes_unlocked();
-    if (m_meshes.empty()) return;
+    if (m_store->meshes.empty()) return;
 
     auto* structures=m_patientData->getStructureSet();
     size_t structureCount=structures->getCount();
 
-    if (m_meshes.size()!=structureCount) {
+    if (m_store->meshes.size()!=structureCount) {
         Logger::warn("Mesh/structure count mismatch during render, rebuilding...");
         buildMeshes_unlocked();
-        if (m_meshes.size()!=structureCount) {
+        if (m_store->meshes.size()!=structureCount) {
             Logger::error("Failed to fix mesh/structure alignment!");
             return;
         }
@@ -771,8 +790,8 @@ void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projectio
     glUniform3fv      (m_uLightDir2,    1, glm::value_ptr(lightDir2));
 
     // Draw all visible meshes — no sorting needed with WBOIT
-    for (size_t i = 0; i < m_meshes.size(); ++i) {
-        const auto& mesh = m_meshes[i];
+    for (size_t i = 0; i < m_store->meshes.size(); ++i) {
+        const auto& mesh = m_store->meshes[i];
         if (mesh.indexCount == 0) continue;
         const auto* structure = structures->getStructure(i);
         float opacity = 0.03f;
@@ -832,12 +851,16 @@ void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projectio
 // ──────────────────────────────────────────────────────────────────────────────
 
 void StructureRenderer::cleanup() {
-    for (auto& mesh : m_meshes) {
-        if (mesh.vao) glDeleteVertexArrays(1,&mesh.vao);
-        if (mesh.vbo) glDeleteBuffers(1,&mesh.vbo);
-        if (mesh.ebo) glDeleteBuffers(1,&mesh.ebo);
+    if (m_store.use_count() == 1) {   // last renderer using the shared meshes
+        std::lock_guard<std::mutex> lock(m_store->mutex);
+        for (auto& mesh : m_store->meshes) {
+            if (mesh.vao) glDeleteVertexArrays(1,&mesh.vao);
+            if (mesh.vbo) glDeleteBuffers(1,&mesh.vbo);
+            if (mesh.ebo) glDeleteBuffers(1,&mesh.ebo);
+        }
+        m_store->meshes.clear();
+        m_store->source = nullptr;
     }
-    m_meshes.clear();
 
     destroyWboitFBO();
 

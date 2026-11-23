@@ -6,6 +6,28 @@
 
 namespace optirad {
 
+std::array<double, 3> PlanBuilder::resolveIsocenter(const PlanConfig& config, const Plan& plan,
+                                                    const PatientData* patientData) {
+    auto describe = [](const std::array<double, 3>& p) {
+        return "(" + std::to_string(p[0]) + ", " + std::to_string(p[1]) + ", " + std::to_string(p[2]) + ")";
+    };
+    if (config.isocenter) {
+        Logger::info("Isocenter from plan configuration: " + describe(*config.isocenter));
+        return *config.isocenter;
+    }
+    if (patientData && patientData->hasImportedPlan()) {
+        const ImportedPlan& imported = *patientData->getImportedPlan();
+        if (imported.hasMultipleIsocenters())
+            Logger::warn("Imported RTPLAN has several isocenters; using the first beam's");
+        const auto iso = *imported.isocenter();
+        Logger::info("Isocenter from imported RTPLAN: " + describe(iso));
+        return iso;
+    }
+    const auto iso = plan.computeIsoCenter();
+    Logger::info("Isocenter computed from target structures: " + describe(iso));
+    return iso;
+}
+
 PlanBuilder::Result PlanBuilder::build(const PlanConfig& config,
                                        std::shared_ptr<PatientData> patientData) {
     Result result;
@@ -26,13 +48,15 @@ PlanBuilder::Result PlanBuilder::build(const PlanConfig& config,
     StfProperties stfProps;
     if (config.deliveryMode == DeliveryMode::VMAT) {
         if (config.vmat.arcs.empty()) throw std::runtime_error("VMAT plan needs at least one arc");
-        std::vector<double> gantry, couch;
+        std::vector<double> gantry, couch, collimator;
         for (const auto& s : ArcGeometry::sectors(config.vmat)) {
             gantry.push_back(s.centerAngle);
             couch.push_back(s.couchAngle);
+            collimator.push_back(s.collimatorAngle);
         }
         stfProps.setGantryAngles(gantry);
         stfProps.setCouchAngles(couch);
+        stfProps.setCollimatorAngles(collimator);
     } else if (!config.gantryAngles.empty()) {
         stfProps.setGantryAngles(config.gantryAngles);
     } else {
@@ -48,13 +72,20 @@ PlanBuilder::Result PlanBuilder::build(const PlanConfig& config,
     } else {
         stfProps.setUniformCouchAngle(config.couchStart);
     }
+    if (config.deliveryMode != DeliveryMode::VMAT)
+        stfProps.setCollimatorAngles(config.collimatorAngles);
 
     stfProps.ensureConsistentAngles();
     stfProps.bixelWidth = config.bixelWidth;
 
-    // Compute isocenter from target structures
-    auto iso = plan->computeIsoCenter();
-    stfProps.setUniformIsoCenter(iso);
+    stfProps.setUniformIsoCenter(resolveIsocenter(config, *plan, patientData.get()));
+
+    if (config.doseGridResolution) {
+        plan->setDoseGridResolution(*config.doseGridResolution);
+    } else if (patientData && patientData->getImportedDoseGridResolution()) {
+        plan->setDoseGridResolution(*patientData->getImportedDoseGridResolution());
+    }
+    if (config.prescribedDose && *config.prescribedDose > 0.0) plan->setPrescribedDose(*config.prescribedDose);
 
     plan->setStfProperties(stfProps);
     result.plan = plan;
@@ -72,6 +103,7 @@ PlanBuilder::Result PlanBuilder::build(const PlanConfig& config,
         generator.setRadiationMode(plan->getRadiationMode());
         generator.setGantryAngles(stfP.gantryAngles);
         generator.setCouchAngles(stfP.couchAngles);
+        generator.setCollimatorAngles(stfP.collimatorAngles);
 
         if (patientData && patientData->hasValidCT() && patientData->hasStructures()) {
             const auto* ct = patientData->getCTVolume();

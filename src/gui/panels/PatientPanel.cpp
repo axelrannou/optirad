@@ -3,6 +3,7 @@
 #include "io/DicomExporter.hpp"
 #include "utils/Logger.hpp"
 #include "DoseStatsCsv.hpp"
+#include "ImportedPlanDoseView.hpp"
 #include <imgui.h>
 #include <filesystem>
 #include <algorithm>
@@ -535,8 +536,11 @@ void PatientPanel::importDicom(const std::string& path) {
 
         // Add imported RT Dose to DoseStore if present
         auto [doseMatrix, doseGrid] = m_importer.takeImportedDose();
-        if (doseMatrix) {
-            m_state.doseStore.addDose("Imported (DICOM)", doseMatrix, doseGrid);
+        const int importedDoseId = doseMatrix ? m_state.doseStore.addDose("Imported (DICOM)", doseMatrix, doseGrid) : -1;
+        if (m_state.patientData->hasImportedPlan()) {
+            // The imported RTPLAN becomes the current plan, linked to the imported RTDOSE it delivers
+            ImportedPlanDoseView::installImported(m_state, importedDoseId);
+        } else {
             m_state.syncSelectedDose();
         }
     } else {

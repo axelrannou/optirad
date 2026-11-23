@@ -62,6 +62,22 @@ TEST_F(PhotonIMRTStfGeneratorTest, BeamsHaveZeroCouchAngle) {
     }
 }
 
+TEST_F(PhotonIMRTStfGeneratorTest, CollimatorAnglesReachGeneratedBeamsAndProperties) {
+    PhotonIMRTStfGenerator gen(0.0, 360.0, 360.0, 7.0, {0.0, 0.0, 0.0});
+    gen.setMachine(machine);
+    gen.setGantryAngles({0.0, 90.0});
+    gen.setCouchAngles({0.0, 0.0});
+    gen.setCollimatorAngles({45.0, 90.0});
+
+    const Stf stf = gen.generateStf();
+    ASSERT_EQ(stf.getCount(), 2u);
+    EXPECT_DOUBLE_EQ(stf.getBeam(0)->getCollimatorAngle(), 45.0);
+    EXPECT_DOUBLE_EQ(stf.getBeam(1)->getCollimatorAngle(), 90.0);
+
+    const auto properties = gen.generate();
+    EXPECT_EQ(properties->collimatorAngles, (std::vector<double>{45.0, 90.0}));
+}
+
 // ============================================================================
 // Beam properties from machine
 // ============================================================================

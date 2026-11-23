@@ -4,6 +4,7 @@
 #include "DicomContext.hpp"
 #include "dose/DoseMatrix.hpp"
 #include "geometry/Grid.hpp"
+#include "core/ImportedPlan.hpp"
 #include <vector>
 #include <filesystem>
 #include <memory>
@@ -38,6 +39,10 @@ public:
 
     // Import RT Dose (returns dose matrix + its grid, or nullptr if not available)
     std::pair<std::shared_ptr<DoseMatrix>, std::shared_ptr<Grid>> importRTDose();
+
+    /// Parse an RTPLAN file (the one found by loadDirectory() when `filePath` is empty).
+    /// Setup beams are skipped. Returns nullptr when there is no plan or it cannot be read.
+    std::shared_ptr<ImportedPlan> importRTPlan(const std::string& filePath = "");
 
     /// Take the imported RT Dose cached during importAll() (moves out, clears internal cache).
     std::pair<std::shared_ptr<DoseMatrix>, std::shared_ptr<Grid>> takeImportedDose() {

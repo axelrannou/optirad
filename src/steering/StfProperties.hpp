@@ -10,6 +10,7 @@ namespace optirad {
 struct StfProperties {
     std::vector<double> gantryAngles;
     std::vector<double> couchAngles;
+    std::vector<double> collimatorAngles;
     size_t numOfBeams = 0;
     double bixelWidth = 7.0; // mm
     std::vector<std::array<double, 3>> isoCenters; // one per beam
@@ -28,6 +29,7 @@ struct StfProperties {
         if (couchAngles.empty()) {
             couchAngles.assign(numOfBeams, 0.0);
         }
+        if (collimatorAngles.empty()) collimatorAngles.assign(numOfBeams, 0.0);
     }
 
     /// Set gantry angles from an explicit list (like matRad).
@@ -38,6 +40,7 @@ struct StfProperties {
         if (couchAngles.empty()) {
             couchAngles.assign(numOfBeams, 0.0);
         }
+        if (collimatorAngles.empty()) collimatorAngles.assign(numOfBeams, 0.0);
     }
 
     // ── Couch angles ──
@@ -64,13 +67,17 @@ struct StfProperties {
             } else {
                 // Cartesian product: for each couch angle, replicate all gantry angles
                 std::vector<double> origGantry = gantryAngles;
+                std::vector<double> origCollimator = collimatorAngles;
                 gantryAngles.clear();
                 couchAngles.clear();
+                collimatorAngles.clear();
 
                 for (double c : couchRange) {
-                    for (double g : origGantry) {
+                    for (size_t i = 0; i < origGantry.size(); ++i) {
+                        double g = origGantry[i];
                         gantryAngles.push_back(g);
                         couchAngles.push_back(c);
+                        collimatorAngles.push_back(i < origCollimator.size() ? origCollimator[i] : 0.0);
                     }
                 }
                 numOfBeams = gantryAngles.size();
@@ -82,6 +89,11 @@ struct StfProperties {
     /// Does NOT change numOfBeams or gantryAngles.
     void setCouchAngles(const std::vector<double>& angles) {
         couchAngles = angles;
+    }
+
+    /// Set collimator angles from an explicit list paired with gantry angles.
+    void setCollimatorAngles(const std::vector<double>& angles) {
+        collimatorAngles = angles;
     }
 
     /// Set a single couch angle for all beams (convenience).
@@ -98,12 +110,18 @@ struct StfProperties {
 
     // ── Validation ──
 
-    /// Ensure gantry and couch angle lists are consistently sized.
-    /// Resizes couchAngles (pad with last value or 0) if needed.
+    /// Ensure gantry, couch, and collimator angle lists are consistently sized.
+    /// Resizes the angle lists (pad with last value or 0) if needed.
     void ensureConsistentAngles() {
         if (couchAngles.size() != gantryAngles.size()) {
             double lastCouch = couchAngles.empty() ? 0.0 : couchAngles.back();
             couchAngles.resize(gantryAngles.size(), lastCouch);
+        }
+        if (collimatorAngles.size() != gantryAngles.size()) {
+            if (collimatorAngles.empty()) collimatorAngles.assign(gantryAngles.size(), 0.0);
+            else {
+                collimatorAngles.resize(gantryAngles.size(), collimatorAngles.back());
+            }
         }
         numOfBeams = gantryAngles.size();
     }
@@ -112,6 +130,7 @@ struct StfProperties {
     bool isValid() const {
         return !gantryAngles.empty() &&
                gantryAngles.size() == couchAngles.size() &&
+               gantryAngles.size() == collimatorAngles.size() &&
                numOfBeams == gantryAngles.size();
     }
 };

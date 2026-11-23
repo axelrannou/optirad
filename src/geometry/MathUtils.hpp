@@ -114,6 +114,22 @@ inline Mat3 getRotationMatrix(double gantryAngleDeg, double couchAngleDeg) {
     return matMul(Rc, Rg);
 }
 
+/// Compute the BEAM LIMITING DEVICE to LPS rotation by adding collimator roll in beam coordinates.
+/// IEC 61217 collimator angles increase counter-clockwise when viewed from the source: a positive
+/// angle turns the leaf-travel axis (BEV x = IEC X_b) toward the leaf-pair axis (BEV z = IEC Y_b).
+inline Mat3 getBeamRotationMatrix(double gantryAngleDeg, double couchAngleDeg, double collimatorAngleDeg) {
+    constexpr double deg2rad = M_PI / 180.0;
+    const double angle = collimatorAngleDeg * deg2rad;
+    const double c = std::cos(angle);
+    const double s = std::sin(angle);
+    const Mat3 collimator(
+         c, 0.0, -s,
+        0.0, 1.0, 0.0,
+         s, 0.0, c
+    );
+    return matMul(getRotationMatrix(gantryAngleDeg, couchAngleDeg), collimator);
+}
+
 // Vector addition/subtraction
 inline Vec3 vecAdd(const Vec3& a, const Vec3& b) {
     return {a[0]+b[0], a[1]+b[1], a[2]+b[2]};

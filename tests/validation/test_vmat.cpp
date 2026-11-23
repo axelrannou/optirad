@@ -669,6 +669,57 @@ TEST(ArcPipelineTest, DaoAddsTheNormalTissueObjectiveToTheCostBreakdown) {
     EXPECT_GT(r.sequence.totalMU, 0.0);
 }
 
+TEST(ArcPipelineTest, CoverAperturesAddsRaysWhereAnApertureOpensOutsideTheTarget) {
+    ArcFixture f;
+    const auto& plan = *f.built.plan;
+    auto seq = ArcSequencer::conformalSeed(*f.built.stf, plan.getVmatSettings(), plan.getMachine());
+    std::vector<ArcControlPoint> geometry;
+    for (const auto& cp : seq.controlPoints) geometry.push_back(cp.geometry);
+    auto cpStf = ArcPipeline::buildControlPointStf(plan, *f.patient, geometry);
+    ArcPipeline::coverApertures(*cpStf, seq);
+    const size_t covered = cpStf->getTotalNumOfRays();
+    const size_t beam0Rays = cpStf->getBeam(0)->getNumOfRays();
+
+    auto& aperture = seq.controlPoints[4].aperture;
+    for (size_t p = 0; p < aperture.bankA.size(); ++p)
+        if (aperture.bankB[p] > aperture.bankA[p]) {
+            aperture.bankA[p] = -60.0;
+            aperture.bankB[p] = 60.0;
+        }
+    ArcPipeline::coverApertures(*cpStf, seq);
+    const size_t widened = cpStf->getTotalNumOfRays();
+    EXPECT_GT(widened, covered);
+    EXPECT_EQ(cpStf->getBeam(0)->getNumOfRays(), beam0Rays);
+    EXPECT_GT(cpStf->getBeam(4)->getNumOfRays(), beam0Rays);
+    EXPECT_GT(cpStf->getBeam(3)->getNumOfRays(), beam0Rays);   // leaf-motion neighbour
+    ArcPipeline::coverApertures(*cpStf, seq);
+    EXPECT_EQ(cpStf->getTotalNumOfRays(), widened);
+}
+
+TEST(ArcPipelineTest, SequenceDoseDeliversAGivenSequenceWithoutOptimization) {
+    ArcFixture f;
+    const auto& plan = *f.built.plan;
+    const Grid grid = Grid::createDoseGrid(f.patient->getGrid(), {5.0, 5.0, 5.0});
+    const auto seq = ArcSequencer::conformalSeed(*f.built.stf, plan.getVmatSettings(), plan.getMachine());
+    ArcOptimizationConfig config;
+    config.computeBackend = DoseComputeBackend::CPU;
+    config.base.targetDose = 60.0;
+    testing::internal::CaptureStdout();
+    const auto r = ArcPipeline::computeSequenceDose(seq, plan, *f.patient, grid, config);
+    testing::internal::GetCapturedStdout();
+    ASSERT_NE(r.dose, nullptr);
+    ASSERT_NE(r.controlPointStf, nullptr);
+    EXPECT_EQ(r.controlPointStf->getCount(), seq.controlPoints.size());
+    EXPECT_EQ(r.sequence.controlPoints.size(), seq.controlPoints.size());
+    EXPECT_DOUBLE_EQ(r.sequence.totalMU, seq.totalMU);
+    EXPECT_TRUE(r.progressHistory.empty());
+    EXPECT_TRUE(r.fromGivenSequence);
+    EXPECT_GT(ptvMeanDose(r), 0.0);
+
+    ArcSequenceResult empty;
+    EXPECT_THROW(ArcPipeline::computeSequenceDose(empty, plan, *f.patient, grid, config), std::exception);
+}
+
 TEST(ArcPipelineTest, DeliveredDoseHonorsTheBackend) {
     ArcFixture f;
     const Grid grid = Grid::createDoseGrid(f.patient->getGrid(), {5.0, 5.0, 5.0});

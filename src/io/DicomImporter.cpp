@@ -10,6 +10,10 @@
 #include "segmentation/BodyContourGenerator.hpp"
 #include "utils/Logger.hpp"
 #include <algorithm>
+#include <cmath>
+#include <map>
+#include <optional>
+#include <sstream>
 
 #ifdef OPTIRAD_HAS_DCMTK
 #include <dcmtk/dcmdata/dctk.h>
@@ -115,6 +119,19 @@ std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath
         m_importedDoseMatrix = doseMatrix;
         m_importedDoseGrid   = doseGrid;
         Logger::info("RT Dose imported: max=" + std::to_string(doseMatrix->getMax()) + " Gy");
+        // Grid spacing is stored as (row, column, slice) = (y, x, z)
+        const auto sp = doseGrid->getSpacing();
+        patientData->setImportedDoseGridResolution({sp[1], sp[0], sp[2]});
+    }
+
+    // Import RT Plan if available. A plan that cannot be read never blocks the rest of the import.
+    if (!m_rtPlanFile.empty()) {
+        if (auto rtPlan = importRTPlan()) {
+            for (const auto& w : rtPlan->warnings) Logger::warn("RTPLAN: " + w);
+            Logger::info("RT Plan imported: '" + rtPlan->label + "', " + std::to_string(rtPlan->beams.size()) +
+                         " treatment beam(s), " + std::to_string(rtPlan->numFractions) + " fraction(s)");
+            patientData->setImportedPlan(std::move(rtPlan));
+        }
     }
     
     return patientData;
@@ -491,6 +508,217 @@ bool DicomImporter::loadRTPlan(const std::string& filePath) {
 bool DicomImporter::loadRTDose(const std::string& filePath) {
     m_rtDoseFile = filePath;
     return std::filesystem::exists(filePath);
+}
+
+namespace {
+
+double wrap360(double a) {
+    a = std::fmod(a, 360.0);
+    return a < 0.0 ? a + 360.0 : a;
+}
+
+#ifdef OPTIRAD_HAS_DCMTK
+std::vector<double> readDoubles(DcmItem* item, const DcmTagKey& tag) {
+    std::vector<double> out;
+    OFString str;
+    if (!item || item->findAndGetOFStringArray(tag, str).bad()) return out;
+    std::stringstream ss(str.c_str());
+    std::string tok;
+    while (std::getline(ss, tok, '\\')) {
+        try { out.push_back(std::stod(tok)); } catch (...) {}
+    }
+    return out;
+}
+
+std::optional<double> readDouble(DcmItem* item, const DcmTagKey& tag) {
+    const auto v = readDoubles(item, tag);
+    if (v.empty()) return std::nullopt;
+    return v.front();
+}
+
+std::string readString(DcmItem* item, const DcmTagKey& tag) {
+    OFString s;
+    if (!item || item->findAndGetOFString(tag, s).bad()) return {};
+    std::string out = s.c_str();
+    const auto first = out.find_first_not_of(' ');
+    const auto last = out.find_last_not_of(' ');
+    return first == std::string::npos ? std::string() : out.substr(first, last - first + 1);
+}
+
+std::vector<DcmItem*> sequenceItems(DcmItem* parent, const DcmTagKey& tag) {
+    std::vector<DcmItem*> out;
+    DcmSequenceOfItems* seq = nullptr;
+    if (parent && parent->findAndGetSequence(tag, seq).good() && seq) {
+        for (unsigned long i = 0; i < seq->card(); ++i) out.push_back(seq->getItem(i));
+    }
+    return out;
+}
+#endif
+
+} // namespace
+
+std::shared_ptr<ImportedPlan> DicomImporter::importRTPlan(const std::string& filePath) {
+#ifdef OPTIRAD_HAS_DCMTK
+    const std::filesystem::path path = filePath.empty() ? m_rtPlanFile : std::filesystem::path(filePath);
+    if (path.empty()) return nullptr;
+
+    DcmFileFormat fileFormat;
+    if (!fileFormat.loadFile(path.c_str()).good()) {
+        Logger::error("Failed to load RT Plan file: " + path.string());
+        return nullptr;
+    }
+    DcmDataset* ds = fileFormat.getDataset();
+    if (!ds) return nullptr;
+
+    auto plan = std::make_shared<ImportedPlan>();
+    plan->label = readString(ds, DCM_RTPlanLabel);
+    plan->name = readString(ds, DCM_RTPlanName);
+    plan->sopInstanceUID = readString(ds, DCM_SOPInstanceUID);
+
+    const auto setups = sequenceItems(ds, DCM_PatientSetupSequence);
+    if (!setups.empty()) {
+        const std::string pos = readString(setups.front(), DCM_PatientPosition);
+        if (!pos.empty()) plan->patientPosition = pos;
+    }
+
+    // Fraction group: number of fractions and the MU per fraction of each beam
+    std::map<int, double> metersetByBeam;
+    const auto fractionGroups = sequenceItems(ds, DCM_FractionGroupSequence);
+    if (fractionGroups.size() > 1)
+        plan->warnings.push_back("plan has " + std::to_string(fractionGroups.size()) +
+                                 " fraction groups; only the first one is used");
+    if (!fractionGroups.empty()) {
+        plan->numFractions = static_cast<int>(readDouble(fractionGroups.front(), DCM_NumberOfFractionsPlanned).value_or(0.0));
+        for (DcmItem* ref : sequenceItems(fractionGroups.front(), DCM_ReferencedBeamSequence)) {
+            const auto num = readDouble(ref, DCM_ReferencedBeamNumber);
+            const auto mu = readDouble(ref, DCM_BeamMeterset);
+            if (num && mu) metersetByBeam[static_cast<int>(*num)] = *mu;
+        }
+    }
+
+    // Prescription: first TARGET dose reference with a prescription dose, else any dose reference with one
+    for (DcmItem* ref : sequenceItems(ds, DCM_DoseReferenceSequence)) {
+        const auto dose = readDouble(ref, DCM_TargetPrescriptionDose);
+        if (!dose || *dose <= 0.0) continue;
+        const bool target = readString(ref, DCM_DoseReferenceType) == "TARGET";
+        if (plan->prescribedDose <= 0.0 || target) plan->prescribedDose = *dose;
+        if (target) break;
+    }
+
+    int skipped = 0;
+    for (DcmItem* beamItem : sequenceItems(ds, DCM_BeamSequence)) {
+        ImportedBeam beam;
+        beam.number = static_cast<int>(readDouble(beamItem, DCM_BeamNumber).value_or(0.0));
+        beam.name = readString(beamItem, DCM_BeamName);
+        const std::string deliveryType = readString(beamItem, DCM_TreatmentDeliveryType);
+        if (!deliveryType.empty() && deliveryType != "TREATMENT") { ++skipped; continue; }
+
+        const auto meterset = metersetByBeam.find(beam.number);
+        if (meterset == metersetByBeam.end() || meterset->second <= 0.0) {
+            plan->warnings.push_back("beam '" + beam.name + "' has no beam meterset and is skipped");
+            continue;
+        }
+        beam.metersetMU = meterset->second;
+        beam.machineName = readString(beamItem, DCM_TreatmentMachineName);
+        beam.radiationType = readString(beamItem, DCM_RadiationType);
+        beam.sad = readDouble(beamItem, DCM_SourceAxisDistance).value_or(1000.0);
+
+        for (DcmItem* dev : sequenceItems(beamItem, DCM_BeamLimitingDeviceSequence)) {
+            const std::string type = readString(dev, DCM_RTBeamLimitingDeviceType);
+            if (type == "MLCX") beam.leafBoundaries = readDoubles(dev, DCM_LeafPositionBoundaries);
+            else if (type == "MLCY")
+                plan->warnings.push_back("beam '" + beam.name + "' uses an MLCY collimator, which is not supported");
+        }
+
+        const auto fluence = sequenceItems(beamItem, DCM_PrimaryFluenceModeSequence);
+        if (!fluence.empty() && readString(fluence.front(), DCM_FluenceMode) == "NON_STANDARD") {
+            beam.fff = true;
+            const std::string id = readString(fluence.front(), DCM_FluenceModeID);
+            plan->warnings.push_back("beam '" + beam.name + "' uses a non-standard fluence mode" +
+                                     (id.empty() ? std::string() : " (" + id + ")"));
+        }
+
+        // Control points: absent attributes keep the value of the previous control point
+        ImportedControlPoint state;
+        std::string direction;
+        double collimator = 0.0, couch = 0.0;
+        std::optional<double> initialCollimator, initialCouch;
+        bool dynamicCollimatorOrCouch = false;
+        const auto cpItems = sequenceItems(beamItem, DCM_ControlPointSequence);
+        for (size_t k = 0; k < cpItems.size(); ++k) {
+            DcmItem* cp = cpItems[k];
+            if (auto g = readDouble(cp, DCM_GantryAngle)) state.gantryAngle = wrap360(*g);
+            if (auto w = readDouble(cp, DCM_CumulativeMetersetWeight)) state.cumulativeWeight = *w;
+            if (auto c = readDouble(cp, DCM_BeamLimitingDeviceAngle)) {
+                if (k > 0 && std::abs(*c - collimator) > 1e-6) dynamicCollimatorOrCouch = true;
+                if (!initialCollimator) initialCollimator = *c;
+                collimator = *c;
+            }
+            if (auto c = readDouble(cp, DCM_PatientSupportAngle)) {
+                if (k > 0 && std::abs(*c - couch) > 1e-6) dynamicCollimatorOrCouch = true;
+                if (!initialCouch) initialCouch = *c;
+                couch = *c;
+            }
+            if (k == 0) {
+                direction = readString(cp, DCM_GantryRotationDirection);
+                beam.nominalEnergy = readDouble(cp, DCM_NominalBeamEnergy).value_or(0.0);
+                beam.doseRateMUPerMin = readDouble(cp, DCM_DoseRateSet).value_or(0.0);
+                const auto iso = readDoubles(cp, DCM_IsocenterPosition);
+                if (iso.size() == 3) beam.isocenter = {iso[0], iso[1], iso[2]};
+                else plan->warnings.push_back("beam '" + beam.name + "' has no isocenter position");
+            }
+            for (DcmItem* dev : sequenceItems(cp, DCM_BeamLimitingDevicePositionSequence)) {
+                const std::string type = readString(dev, DCM_RTBeamLimitingDeviceType);
+                const auto pos = readDoubles(dev, DCM_LeafJawPositions);
+                if ((type == "X" || type == "ASYMX") && pos.size() == 2) state.jawX = {pos[0], pos[1]};
+                else if ((type == "Y" || type == "ASYMY") && pos.size() == 2) state.jawY = {pos[0], pos[1]};
+                else if (type == "MLCX" && pos.size() >= 2 && pos.size() % 2 == 0) {
+                    const size_t n = pos.size() / 2;
+                    state.bankA.assign(pos.begin(), pos.begin() + static_cast<long>(n));
+                    state.bankB.assign(pos.begin() + static_cast<long>(n), pos.end());
+                }
+            }
+            beam.controlPoints.push_back(state);
+        }
+        beam.collimatorAngle = initialCollimator.value_or(collimator);
+        couch = wrap360(initialCouch.value_or(couch));
+        beam.couchAngle = couch > 180.0 ? couch - 360.0 : couch;
+        if (dynamicCollimatorOrCouch)
+            plan->warnings.push_back("beam '" + beam.name + "' rotates the collimator or couch during delivery; "
+                                     "only the first control point's angles are used");
+
+        if (beam.controlPoints.empty()) {
+            plan->warnings.push_back("beam '" + beam.name + "' has no control points and is skipped");
+            continue;
+        }
+        const double finalWeight = readDouble(beamItem, DCM_FinalCumulativeMetersetWeight)
+                                       .value_or(beam.controlPoints.back().cumulativeWeight);
+        if (finalWeight <= 0.0) {
+            plan->warnings.push_back("beam '" + beam.name + "' has a zero final meterset weight and is skipped");
+            continue;
+        }
+        for (auto& cp : beam.controlPoints) cp.cumulativeWeight /= finalWeight;
+
+        beam.isArc = (direction == "CW" || direction == "CC") && beam.controlPoints.size() >= 2;
+        beam.clockwise = (direction != "CC");
+        if (!beam.controlPoints.front().bankA.empty() && beam.leafBoundaries.size() != beam.controlPoints.front().bankA.size() + 1)
+            plan->warnings.push_back("beam '" + beam.name + "' has leaf positions that do not match its leaf boundaries");
+
+        plan->beams.push_back(std::move(beam));
+    }
+
+    if (skipped > 0)
+        Logger::info("RTPLAN: skipped " + std::to_string(skipped) + " setup/non-treatment beam(s)");
+    if (plan->beams.empty()) {
+        Logger::warn("RT Plan has no treatment beams: " + path.string());
+        return nullptr;
+    }
+    return plan;
+#else
+    (void)filePath;
+    Logger::warn("DCMTK not available: RT Plan import disabled");
+    return nullptr;
+#endif
 }
 
 std::pair<std::shared_ptr<DoseMatrix>, std::shared_ptr<Grid>> DicomImporter::importRTDose() {

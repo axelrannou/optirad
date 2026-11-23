@@ -5,6 +5,7 @@
 #include "core/Stf.hpp"
 #include "core/workflow/WorkflowState.hpp"
 #include "core/workflow/PlanBuilder.hpp"
+#include "core/workflow/ImportedPlanConverter.hpp"
 #include "core/workflow/DoseCalculationPipeline.hpp"
 #include "core/workflow/PhaseSpaceBuilder.hpp"
 #include "core/workflow/OptimizationPipeline.hpp"
@@ -71,7 +72,9 @@ void printUsage(const char* progName) {
               << "  --opt-spacing <deg>              VMAT: arc sector width (one ray-traced beam per sector) (default: "
               << planDefaults.vmat.optimizationSpacingDeg << ")\n"
               << "  --cp-spacing <deg>               VMAT: angular width of one delivered control point (default: "
-              << planDefaults.vmat.controlPointSpacingDeg << ")\n\n"
+              << planDefaults.vmat.controlPointSpacingDeg << ")\n"
+              << "  --from-rtplan                    Take fractions, arcs/beams, isocenter and prescription from the imported\n"
+              << "                                   RTPLAN (later options override them)\n\n"
               << "Dose calc options:\n"
               << "  --engine <matrix-free|dij>       Dose representation (default: matrix-free)\n"
               << "  --backend <auto|cpu|cuda>        Matrix-free compute backend (default: auto)\n"
@@ -104,7 +107,9 @@ void printUsage(const char* progName) {
               << "  --mu-smooth <f>                  Relative penalty on MU differences between neighbouring control points (default: " << arcDefaults.muSmoothing << ")\n"
               << "  --no-icm                         Dose of a control point from its static aperture (no leaf motion)\n"
               << "  --fluence-pixel <mm>             Matrix-free fluence pixel size (default: " << arcDefaults.fluencePixelMm << ")\n"
-              << "  --target-dose <Gy>               Prescribed dose (required unless the plan has a prescription)\n\n"
+              << "  --target-dose <Gy>               Prescribed dose (required unless the plan has a prescription)\n"
+              << "  --from-rtplan                    No DAO: dose of the imported RTPLAN's leaves and MU (plan made with\n"
+              << "                                   'plan --from-rtplan'; dose grid defaults to the RTDOSE spacing)\n\n"
               << "Export RT Plan options:\n"
               << "  --output <dir>                   Output directory for RT Plan file (default: ./rtplan_export)\n\n"
               << "Phase-space options:\n"
@@ -218,6 +223,23 @@ int loadDicom(const std::string& path, WorkflowState& state) {
         }
     }
 
+    if (const ImportedPlan* rtPlan = state.patientData->getImportedPlan()) {
+        std::cout << "\nRT Plan: '" << rtPlan->label << "', " << rtPlan->numFractions << " fraction(s)";
+        if (rtPlan->prescribedDose > 0.0) std::cout << ", " << rtPlan->prescribedDose << " Gy";
+        std::cout << "\n";
+        for (const auto& b : rtPlan->beams) {
+            std::cout << "  - " << b.name << ": " << (b.isArc ? (b.clockwise ? "arc CW " : "arc CC ") : "static ")
+                      << b.controlPoints.front().gantryAngle << " -> " << b.controlPoints.back().gantryAngle
+                      << " deg, " << b.controlPoints.size() << " CPs, " << b.metersetMU << " MU/fx, collimator "
+                      << b.collimatorAngle << ", couch " << b.couchAngle << "\n";
+        }
+        const auto iso = *rtPlan->isocenter();
+        std::cout << "  Isocenter: (" << iso[0] << ", " << iso[1] << ", " << iso[2] << ") mm\n";
+    }
+    if (const auto& res = state.patientData->getImportedDoseGridResolution()) {
+        std::cout << "RT Dose grid spacing: " << (*res)[0] << " x " << (*res)[1] << " x " << (*res)[2] << " mm\n";
+    }
+
     // Store DICOM context for later export
     state.dicomContext = importer.getContext();
     if (state.dicomContext.isValid()) {
@@ -238,8 +260,20 @@ int createPlan(const std::vector<std::string>& args, WorkflowState& state) {
     PlanConfig config;
     bool arcsGiven = false;
 
+    const ImportedPlan* imported = state.patientData->getImportedPlan();
+    const bool fromRtPlan = std::find(args.begin(), args.end(), "--from-rtplan") != args.end();
+    if (fromRtPlan) {
+        if (!state.patientData->hasImportedPlan()) {
+            std::cerr << "Error: --from-rtplan needs a patient loaded with an RTPLAN\n";
+            return 1;
+        }
+        ImportedPlanConverter::applyToPlanConfig(*imported, config);
+    }
+
     for (size_t i = 0; i < args.size(); ++i) {
-        if (args[i] == "--mode" && i + 1 < args.size()) {
+        if (args[i] == "--from-rtplan") {
+            continue;
+        } else if (args[i] == "--mode" && i + 1 < args.size()) {
             config.radiationMode = args[++i];
         } else if (args[i] == "--machine" && i + 1 < args.size()) {
             config.machineName = args[++i];
@@ -295,6 +329,10 @@ int createPlan(const std::vector<std::string>& args, WorkflowState& state) {
         state.resetDij();
 
         state.plan->printSummary();
+        if (fromRtPlan) {
+            for (const auto& w : ImportedPlanConverter::validate(*imported, state.plan->getMachine()))
+                std::cout << "  RTPLAN warning: " << w << "\n";
+        }
         if (state.stf) {
             state.stf->printSummary();
         } else {
@@ -622,11 +660,14 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
     cfg.base.targetDose = state.plan->getPrescribedDose();
     std::string rxSource = "plan prescription";
     double doseResolution = DoseCalcPipelineOptions{}.resolution[0];
+    bool resolutionGiven = false;
+    bool fromRtPlan = false;
     int numThreads = 0;
     bool excludeExternal = DoseCalcPipelineOptions{}.excludeExternal;
     for (size_t i = 0; i < args.size(); ++i) {
         if (parseNtoArg(args, i, cfg.base.nto)) continue;
-        if (args[i] == "--target-dose" && i + 1 < args.size()) {
+        if (args[i] == "--from-rtplan") fromRtPlan = true;
+        else if (args[i] == "--target-dose" && i + 1 < args.size()) {
             cfg.base.targetDose = std::stod(args[++i]);
             rxSource = "--target-dose";
         }
@@ -636,7 +677,10 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
         else if (args[i] == "--mu-smooth" && i + 1 < args.size()) cfg.muSmoothing = std::stod(args[++i]);
         else if (args[i] == "--no-icm") cfg.integrateLeafMotion = false;
         else if (args[i] == "--fluence-pixel" && i + 1 < args.size()) cfg.fluencePixelMm = std::stod(args[++i]);
-        else if (args[i] == "--dose-resolution" && i + 1 < args.size()) doseResolution = std::stod(args[++i]);
+        else if (args[i] == "--dose-resolution" && i + 1 < args.size()) {
+            doseResolution = std::stod(args[++i]);
+            resolutionGiven = true;
+        }
         else if (args[i] == "--threads" && i + 1 < args.size()) numThreads = std::stoi(args[++i]);
         else if (args[i] == "--full-body") excludeExternal = false;
         else if (args[i] == "--backend" && i + 1 < args.size()) {
@@ -647,6 +691,51 @@ int arcSeq(const std::vector<std::string>& args, WorkflowState& state) {
             else { std::cerr << "Error: --backend must be auto, cpu or cuda\n"; return 1; }
         }
         else if (args[i] == "--gpu-memory-mb" && i + 1 < args.size()) cfg.gpuMemoryBudgetMiB = std::stoull(args[++i]);
+    }
+    if (fromRtPlan) {
+        const ImportedPlan* imported = state.patientData ? state.patientData->getImportedPlan() : nullptr;
+        if (!imported || !imported->hasArcs()) {
+            std::cerr << "Error: --from-rtplan needs a patient loaded with an arc (VMAT) RTPLAN\n";
+            return 1;
+        }
+        const auto mismatches = ImportedPlanConverter::arcPlanMismatches(*imported, *state.plan);
+        if (!mismatches.empty()) {
+            std::cerr << "Error: the plan does not match the RTPLAN (create it with 'plan --from-rtplan'):\n";
+            for (const auto& m : mismatches) std::cerr << "  - " << m << "\n";
+            return 1;
+        }
+        // The plan's dose grid resolution is the RTDOSE spacing when the patient has one.
+        const auto resolution = resolutionGiven ?
+            std::array<double, 3>{doseResolution, doseResolution, doseResolution} :
+            state.plan->getDoseGridResolution();
+        if (!state.displayGrid || resolutionGiven) {
+            state.displayGrid = std::make_shared<Grid>(Grid::createDoseGrid(state.patientData->getGrid(), resolution));
+            state.computeGrid = state.displayGrid;
+        }
+        if (!state.doseOp) {
+            cfg.engineOptions.numThreads = numThreads;
+            cfg.engineOptions.excludeExternal = excludeExternal;
+        }
+        std::cout << "\n=== VMAT Dose From RTPLAN Leaves ===\n";
+        try {
+            auto result = std::make_shared<ArcPipelineResult>(ArcPipeline::computeSequenceDose(
+                ImportedPlanConverter::toArcSequence(*imported, *state.plan), *state.plan, *state.patientData,
+                *state.displayGrid, cfg, [](const std::string& stage) { std::cout << "  " << stage << "...\n"; }));
+            const auto& seq = result->sequence;
+            std::cout << "\nControl points: " << seq.controlPoints.size()
+                      << " | MU: " << std::fixed << std::setprecision(1) << seq.totalMU << " ("
+                      << seq.totalMU * state.plan->machineMuPerWeight() << " machine MU/fraction)"
+                      << " | delivery time: " << seq.totalTimeSec << " s\n";
+            std::cout << "\n--- Arc Dose Statistics ---\n";
+            PlanAnalysis::print(result->stats);
+            state.doseResult = result->dose;
+            state.arcResult = result;
+        } catch (const std::exception& e) {
+            std::cerr << "\nError: " << e.what() << "\n";
+            return 1;
+        }
+        std::cout << "=== Done ===\n";
+        return 0;
     }
     if (!(cfg.base.targetDose > 0.0) || !std::isfinite(cfg.base.targetDose)) {
         std::cerr << "Error: no prescription. Pass --target-dose <Gy> (the plan has none).\n";

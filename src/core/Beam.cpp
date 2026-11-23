@@ -6,6 +6,7 @@ namespace optirad {
 
 void Beam::setGantryAngle(double angle) { m_gantryAngle = angle; }
 void Beam::setCouchAngle(double angle) { m_couchAngle = angle; }
+void Beam::setCollimatorAngle(double angle) { m_collimatorAngle = angle; }
 
 void Beam::setIsocenter(double x, double y, double z) {
     m_isocenter = {x, y, z};
@@ -17,6 +18,10 @@ void Beam::setIsocenter(const Vec3& iso) {
 
 double Beam::getGantryAngle() const { return m_gantryAngle; }
 double Beam::getCouchAngle() const { return m_couchAngle; }
+double Beam::getCollimatorAngle() const { return m_collimatorAngle; }
+Mat3 Beam::getBeamRotationMatrix() const {
+    return optirad::getBeamRotationMatrix(m_gantryAngle, m_couchAngle, m_collimatorAngle);
+}
 
 void Beam::addRay(const Ray& ray) {
     m_rays.push_back(ray);
@@ -58,7 +63,7 @@ void Beam::computeSourcePoints() {
     m_sourcePointBev = {0.0, -m_SAD, 0.0};
 
     // Get the rotation matrix and its transpose for row-vector multiplication
-    Mat3 rotMat = getRotationMatrix(m_gantryAngle, m_couchAngle);
+    Mat3 rotMat = getBeamRotationMatrix();
     Mat3 rotMatT = transpose(rotMat);
 
     // Source point in LPS: sourcePoint_bev * rotMat^T + isocenter
@@ -75,7 +80,7 @@ void Beam::initRaysFromPositions(const std::vector<Vec3>& rayPositionsBev) {
     computeSourcePoints();
 
     // Get rotation matrix for BEV->LPS transformation
-    Mat3 rotMat = getRotationMatrix(m_gantryAngle, m_couchAngle);
+    Mat3 rotMat = getBeamRotationMatrix();
 
     for (const auto& posBev : rayPositionsBev) {
         Ray ray;
@@ -101,7 +106,7 @@ void Beam::initRaysFromPositions(const std::vector<Vec3>& rayPositionsBev) {
 }
 
 void Beam::computePhotonRayCorners() {
-    Mat3 rotMat = getRotationMatrix(m_gantryAngle, m_couchAngle);
+    Mat3 rotMat = getBeamRotationMatrix();
     double halfBW = m_bixelWidth / 2.0;
     double scdRatio = m_SCD / m_SAD;
 
@@ -173,7 +178,7 @@ void Beam::generateRaysFromTarget(const std::vector<Vec3>& targetWorldCoords,
 
     // Get the rotation matrix for BEV transformation
     // R performs BEV→LPS (active rotation). For LPS→BEV we need R^T.
-    Mat3 rotMat = getRotationMatrix(m_gantryAngle, m_couchAngle);
+    Mat3 rotMat = getBeamRotationMatrix();
     Mat3 rotMatInv = transpose(rotMat);
 
     // Step 1: Subtract isocenter from target world coordinates, rotate into BEV,

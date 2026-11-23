@@ -14,6 +14,7 @@ struct ArcSpec {
     double stopAngle  = 360.0;
     bool   clockwise  = true;   // clockwise = gantry angle increases
     double couchAngle = 0.0;
+    double collimatorAngle = 0.0;
 
     /// Angular extent travelled from start to stop (0 < span <= 360).
     double span() const {
@@ -43,6 +44,7 @@ struct ArcSector {
     double width = 0.0;         // degrees
     double centerAngle = 0.0;   // gantry angle at the sector centre
     double couchAngle = 0.0;
+    double collimatorAngle = 0.0;
 };
 
 /// A delivered control point: a short angular slice of an arc with a static aperture.
@@ -53,6 +55,7 @@ struct ArcControlPoint {
     double width = 0.0;         // degrees
     double gantryAngle = 0.0;
     double couchAngle = 0.0;
+    double collimatorAngle = 0.0;
 };
 
 /// Splits arcs into optimization sectors and delivery control points.
@@ -73,6 +76,7 @@ public:
                 sec.width = w;
                 sec.centerAngle = arc.angleAt((i + 0.5) * w);
                 sec.couchAngle = arc.couchAngle;
+                sec.collimatorAngle = arc.collimatorAngle;
                 out.push_back(sec);
             }
         }
@@ -101,6 +105,7 @@ public:
                 cp.width = w;
                 cp.gantryAngle = arc.angleAt(cp.offset);
                 cp.couchAngle = arc.couchAngle;
+                cp.collimatorAngle = arc.collimatorAngle;
                 size_t local = 0;
                 while (local + 1 < sectorsInArc &&
                        cp.offset >= secs[firstSector + local].startOffset + secs[firstSector + local].width)

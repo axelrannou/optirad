@@ -73,6 +73,7 @@ struct ArcPipelineResult {
     std::shared_ptr<DoseMatrix> dose;           // dose of the delivered arc, whole phantom/patient
     std::vector<StructureDoseStats> stats;
 
+    bool fromGivenSequence = false;             // sequence given (e.g. an imported RTPLAN), not optimized
     int leafIterations = 0;                     // accepted DAO steps over all resolutions
     double initialLeafObjective = 0.0;
     double finalLeafObjective = 0.0;
@@ -111,6 +112,36 @@ public:
                                  const ArcOptimizationConfig& config,
                                  std::function<void(const std::string&)> stageCallback = nullptr,
                                  ArcProgressCallback progressCallback = nullptr);
+
+    /// Final dose step of `run`: the delivered dose of `result.sequence` on `result.controlPointStf` (engine,
+    /// backend and leaf-motion settings of `config`) and its statistics against `prescribedDose` (Gy, whole course).
+    static void computeDeliveredDose(ArcPipelineResult& result,
+                                     const Plan& plan,
+                                     const PatientData& patientData,
+                                     const Grid& doseGrid,
+                                     const ArcOptimizationConfig& config,
+                                     double prescribedDose,
+                                     std::function<void(const std::string&)> stageCallback = nullptr);
+
+    /// A given sequence (e.g. the leaves and MU of an imported RTPLAN) ready for `computeDeliveredDose`, without
+    /// dose: one beam per control point, plus the rays its apertures open (`coverApertures`).
+    static ArcPipelineResult prepareSequence(ArcSequenceResult sequence,
+                                             const Plan& plan,
+                                             const PatientData& patientData,
+                                             std::function<void(const std::string&)> stageCallback = nullptr);
+
+    /// Delivered dose of a given sequence without optimization: `prepareSequence`, then
+    /// `computeDeliveredDose`. The statistics use `config.base.targetDose`, or the plan prescription when it is 0.
+    static ArcPipelineResult computeSequenceDose(ArcSequenceResult sequence,
+                                                 const Plan& plan,
+                                                 const PatientData& patientData,
+                                                 const Grid& doseGrid,
+                                                 const ArcOptimizationConfig& config,
+                                                 std::function<void(const std::string&)> stageCallback = nullptr);
+
+    /// Adds to every control point beam the bixel-grid rays that its aperture (or the leaf motion from its
+    /// neighbours) opens outside the target projection, so no delivered fluence is lost. Rays stay sorted by x, z.
+    static void coverApertures(Stf& cpStf, const ArcSequenceResult& sequence);
 };
 
 } // namespace optirad

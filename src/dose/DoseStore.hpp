@@ -84,6 +84,12 @@ public:
         }
     }
 
+    /// Select no dose.
+    void clearSelection() {
+        m_selectedIdx = -1;
+        ++m_version;
+    }
+
     void setCompare(int idx) {
         if (idx >= -1 && idx < static_cast<int>(m_entries.size())) {
             m_compareIdx = idx;
