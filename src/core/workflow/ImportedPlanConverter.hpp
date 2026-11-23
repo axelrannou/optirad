@@ -23,8 +23,12 @@ public:
     /// optimization spacing is the multiple of it closest to 10 degrees.
     static VmatSettings toVmatSettings(const ImportedPlan& imported);
 
-    /// Fills fractions, delivery mode, arcs or static beam angles, isocenter and prescription from the plan.
-    /// Machine, bixel width and dose-grid resolution are left to the caller.
+    /// optirad machine matching the beam mode of the plan's photon beams (6 MV flattened -> TrueBeamSTx_6X,
+    /// 6 MV FFF -> TrueBeamSTx_6FFF); empty when the beams disagree or no model matches.
+    static std::string suggestMachine(const ImportedPlan& imported);
+
+    /// Fills fractions, delivery mode, arcs or static beam angles, isocenter, prescription and, when one matches
+    /// (see `suggestMachine`), the machine. Bixel width and dose-grid resolution are left to the caller.
     static void applyToPlanConfig(const ImportedPlan& imported, PlanConfig& config);
 
     /// Delivered VMAT sequence of the plan's arc beams. Slice j of a beam lies between DICOM control points j

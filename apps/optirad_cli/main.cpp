@@ -395,7 +395,7 @@ int runInteractive(WorkflowState& state) {
                       << "Usage: plan [options]\n\n"
                       << "Options:\n"
                       << "  --mode <photons|protons>      Radiation mode (default: photons)\n"
-                      << "  --machine <name>              Machine name (default: Generic)\n"
+                      << "  --machine <name>              Machine name (default: " << PlanConfig{}.machineName << ")\n"
                       << "  --fractions <n>               Number of fractions (default: 30)\n"
                       << "  --gantry-start <deg>          Gantry start angle (default: 0)\n"
                       << "  --gantry-step <deg>           Gantry angle step (default: 4)\n"

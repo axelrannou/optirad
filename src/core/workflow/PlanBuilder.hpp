@@ -16,7 +16,7 @@ namespace optirad {
 /// Configuration for creating a treatment plan.
 struct PlanConfig {
     std::string radiationMode = "photons";
-    std::string machineName = "HD120";
+    std::string machineName = "TrueBeamSTx_6X";
     int numFractions = 30;
     double bixelWidth = 3.0;
 

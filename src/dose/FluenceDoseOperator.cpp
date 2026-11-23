@@ -14,13 +14,39 @@ FluenceDoseOperator::FluenceDoseOperator(std::shared_ptr<const FluenceDoseModel>
     m_offsets.assign(m_stf->getCount() + 1, 0);
     for (size_t b = 0; b < m_stf->getCount(); ++b)
         m_offsets[b + 1] = m_offsets[b] + m_stf->getBeam(b)->getTotalNumOfBixels();
+    if (m_model->hasPrimaryFluence()) {
+        m_bixelScale.reserve(m_offsets.back());
+        for (size_t b = 0; b < m_stf->getCount(); ++b) {
+            const Beam& beam = *m_stf->getBeam(b);
+            for (size_t ri = 0; ri < beam.getNumOfRays(); ++ri) {
+                const auto* ray = beam.getRay(ri);
+                if (!ray) continue;
+                const auto p = ray->getRayPosBev();
+                m_bixelScale.insert(m_bixelScale.end(), ray->getNumOfBixels(),
+                                    m_model->relativeFluence(std::hypot(p[0], p[2])));
+            }
+        }
+        if (m_bixelScale.size() != m_offsets.back()) m_bixelScale.clear();
+    }
 #ifdef OPTIRAD_HAS_CUDA
     if (m_model->m_cuda) m_cudaBixels = m_model->m_cuda->createBixelLayout(*m_stf, m_model->m_pixel, m_model->m_boxMm);
 #endif
 }
 
-std::vector<double> FluenceDoseOperator::computeDose(const std::vector<double>& weights) const {
-    if (weights.size() != getNumBixels()) throw std::invalid_argument("FluenceDoseOperator: bad weight count");
+std::vector<double> FluenceDoseOperator::scaled(const std::vector<double>& weights) const {
+    std::vector<double> out(weights);
+    for (size_t i = 0; i < out.size() && i < m_bixelScale.size(); ++i) out[i] *= m_bixelScale[i];
+    return out;
+}
+
+void FluenceDoseOperator::scaleGradient(std::vector<double>& grad, size_t begin) const {
+    for (size_t i = begin; i < grad.size() && i < m_bixelScale.size(); ++i) grad[i] *= m_bixelScale[i];
+}
+
+std::vector<double> FluenceDoseOperator::computeDose(const std::vector<double>& rawWeights) const {
+    if (rawWeights.size() != getNumBixels()) throw std::invalid_argument("FluenceDoseOperator: bad weight count");
+    const std::vector<double> scaledWeights = m_bixelScale.empty() ? std::vector<double>{} : scaled(rawWeights);
+    const std::vector<double>& weights = m_bixelScale.empty() ? rawWeights : scaledWeights;
 #ifdef OPTIRAD_HAS_CUDA
     if (m_cudaBixels) return m_model->m_cuda->computeBixelDose(*m_cudaBixels, weights);
 #endif
@@ -41,18 +67,24 @@ void FluenceDoseOperator::accumulateTransposeProduct(const std::vector<double>& 
                                                      std::vector<double>& grad) const {
     if (grad.size() != getNumBixels()) throw std::invalid_argument("FluenceDoseOperator: bad gradient size");
     if (voxelGrad.size() != getNumVoxels()) throw std::invalid_argument("FluenceDoseOperator: bad voxel gradient size");
+    // d(dose)/d(weight) carries the bixel's fluence factor: gather into a zeroed buffer, scale, then add.
+    std::vector<double> local;
+    std::vector<double>& target = m_bixelScale.empty() ? grad : (local.assign(grad.size(), 0.0), local);
 #ifdef OPTIRAD_HAS_CUDA
     if (m_cudaBixels) {
-        m_model->m_cuda->accumulateBixelGradient(*m_cudaBixels, voxelGrad, grad);
-        return;
-    }
+        m_model->m_cuda->accumulateBixelGradient(*m_cudaBixels, voxelGrad, target);
+    } else
 #endif
-    const auto images = m_model->computeGradient(voxelGrad);
+    {
+        const auto images = m_model->computeGradient(voxelGrad);
 #pragma omp parallel for schedule(dynamic, 1)
-    for (long b = 0; b < static_cast<long>(images.size()); ++b) {
-        const size_t bi = static_cast<size_t>(b);
-        m_model->gatherBixels(*m_stf->getBeam(bi), images[bi], grad.data() + m_offsets[bi]);
+        for (long b = 0; b < static_cast<long>(images.size()); ++b) {
+            const size_t bi = static_cast<size_t>(b);
+            m_model->gatherBixels(*m_stf->getBeam(bi), images[bi], target.data() + m_offsets[bi]);
+        }
     }
+    if (!m_bixelScale.empty())
+        for (size_t i = 0; i < grad.size(); ++i) grad[i] += local[i] * m_bixelScale[i];
 }
 
 double FluenceDoseOperator::getMaxValue() const {
@@ -73,11 +105,12 @@ double FluenceDoseOperator::getMaxValue() const {
                 if (r < bestR) { bestR = r; best = bixel; }
                 bixel += beam.getRay(ri)->getNumOfBixels();
             }
-            w[best] = 1.0;
+            const double probeWeight = m_bixelScale.empty() ? 1.0 : m_bixelScale[m_offsets[b] + best];
+            w[best] = probeWeight;
 #ifdef OPTIRAD_HAS_CUDA
             if (m_cudaBixels) {
                 std::vector<double> probe(getNumBixels(), 0.0);
-                probe[m_offsets[b] + best] = 1.0;
+                probe[m_offsets[b] + best] = 1.0;  // computeDose applies the fluence factor itself
                 const auto values = computeDose(probe);
                 m_maxValue = std::max(m_maxValue, *std::max_element(values.begin(), values.end()));
                 continue;
@@ -104,8 +137,14 @@ bool FluenceDoseOperator::evaluateObjectives(const std::vector<double>& weights,
     const std::vector<DoseObjectiveSpec>& objectives, double& value, std::vector<double>& gradient,
     bool needGradient) const {
 #ifdef OPTIRAD_HAS_CUDA
-    if (m_cudaBixels) return m_model->m_cuda->evaluateObjectives(*m_cudaBixels, weights, objectives, value, gradient,
-        needGradient);
+    if (m_cudaBixels) {
+        if (m_bixelScale.empty())
+            return m_model->m_cuda->evaluateObjectives(*m_cudaBixels, weights, objectives, value, gradient, needGradient);
+        const bool ok = m_model->m_cuda->evaluateObjectives(*m_cudaBixels, scaled(weights), objectives, value,
+            gradient, needGradient);
+        if (ok && needGradient) scaleGradient(gradient, 0);
+        return ok;
+    }
 #else
     (void)weights; (void)objectives; (void)value; (void)gradient; (void)needGradient;
 #endif

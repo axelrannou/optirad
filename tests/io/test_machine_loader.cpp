@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "io/MachineLoader.hpp"
 #include "core/Machine.hpp"
+#include <cmath>
 #include <stdexcept>
 
 #ifndef OPTIRAD_DATA_DIR
@@ -100,12 +101,36 @@ TEST_F(MachineLoaderTest, ConstraintsCorrect) {
     EXPECT_DOUBLE_EQ(c.monitorUnitRate[1], 10.0);
 }
 
-TEST_F(MachineLoaderTest, HD120LeafSpeedIs25MillimetersPerSecond) {
-    const Machine machine = MachineLoader::load("photons", "HD120", OPTIRAD_DATA_DIR);
-    EXPECT_EQ(machine.getName(), "HD120");
+TEST_F(MachineLoaderTest, TrueBeamSTx6XLeafSpeedIs25MillimetersPerSecond) {
+    const Machine machine = MachineLoader::load("photons", "TrueBeamSTx_6X", OPTIRAD_DATA_DIR);
+    EXPECT_EQ(machine.getName(), "TrueBeamSTx_6X");
+    EXPECT_FALSE(machine.getMeta().isFFF());
     EXPECT_EQ(machine.getGeometry().numLeaves, 120);
     EXPECT_DOUBLE_EQ(machine.getConstraints().leafSpeed[0], 0.0);
     EXPECT_DOUBLE_EQ(machine.getConstraints().leafSpeed[1], 25.0);
+    EXPECT_DOUBLE_EQ(machine.getGeometry().doseRateMUPerMin, 600.0);
+    EXPECT_DOUBLE_EQ(machine.getData().relativeFluence(150.0), 1.0);
+    EXPECT_DOUBLE_EQ(machine.getData().depthDoseCorrection(200.0), 1.0);
+}
+
+TEST_F(MachineLoaderTest, TrueBeamSTx6FFFInheritsKernelsAndOverridesBeamMode) {
+    const Machine base = MachineLoader::load("photons", "TrueBeamSTx_6X", OPTIRAD_DATA_DIR);
+    const Machine fff = MachineLoader::load("photons", "TrueBeamSTx_6FFF", OPTIRAD_DATA_DIR);
+    EXPECT_EQ(fff.getName(), "TrueBeamSTx_6FFF");
+    EXPECT_TRUE(fff.getMeta().isFFF());
+    EXPECT_EQ(fff.getData().kernel.size(), base.getData().kernel.size());
+    EXPECT_EQ(fff.getData().betas, base.getData().betas);
+    EXPECT_EQ(fff.getGeometry().numLeaves, 120);
+    EXPECT_EQ(fff.getGeometry().leafWidths.size(), base.getGeometry().leafWidths.size());
+    EXPECT_DOUBLE_EQ(fff.getConstraints().leafSpeed[1], 25.0);
+    EXPECT_NEAR(fff.getGeometry().doseRateMUPerMin, 1400.0, 1e-3);
+
+    const auto& data = fff.getData();
+    EXPECT_DOUBLE_EQ(data.relativeFluence(0.0), 1.0);
+    EXPECT_GT(data.relativeFluence(50.0), data.relativeFluence(100.0));
+    EXPECT_NEAR(data.relativeFluence(100.0), std::pow(2.0, -0.34), 1e-3);
+    EXPECT_DOUBLE_EQ(data.depthDoseCorrection(data.extraAttenuationRefDepth), 1.0);
+    EXPECT_LT(data.depthDoseCorrection(100.0), data.depthDoseCorrection(50.0));
 }
 
 // ============================================================================

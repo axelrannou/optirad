@@ -100,7 +100,7 @@ TEST(RTPlanImportTest, ClinicalVmatLungPlan) {
     EXPECT_NE(vmat.arcs[0].clockwise, vmat.arcs[1].clockwise);
 
     Plan plan;
-    plan.setMachine(MachineLoader::load("photons", "HD120"));
+    plan.setMachine(MachineLoader::load("photons", "TrueBeamSTx_6X"));
     plan.setNumOfFractions(imported->numFractions);
     const ArcSequenceResult seq = ImportedPlanConverter::toArcSequence(*imported, plan);
     ASSERT_FALSE(seq.controlPoints.empty());
@@ -115,6 +115,38 @@ TEST(RTPlanImportTest, ClinicalVmatLungPlan) {
         EXPECT_EQ(w.find("SAD"), std::string::npos) << w;
         EXPECT_EQ(w.find("collimator"), std::string::npos) << w;
     }
+}
+
+TEST(RTPlanImportTest, SuggestsMachineFromBeamMode) {
+    auto planWith = [](std::vector<std::pair<double, bool>> beams) {
+        ImportedPlan plan;
+        for (const auto& [energy, fff] : beams) {
+            ImportedBeam b;
+            b.radiationType = "PHOTON";
+            b.nominalEnergy = energy;
+            b.fff = fff;
+            b.controlPoints.resize(2);
+            plan.beams.push_back(b);
+        }
+        return plan;
+    };
+    EXPECT_EQ(ImportedPlanConverter::suggestMachine(planWith({{6.0, false}, {6.0, false}})), "TrueBeamSTx_6X");
+    EXPECT_EQ(ImportedPlanConverter::suggestMachine(planWith({{6.0, true}, {6.0, true}})), "TrueBeamSTx_6FFF");
+    EXPECT_EQ(ImportedPlanConverter::suggestMachine(planWith({{6.0, true}, {6.0, false}})), "");
+    EXPECT_EQ(ImportedPlanConverter::suggestMachine(planWith({{10.0, true}})), "");
+
+    const ImportedPlan fffPlan = planWith({{6.0, true}});
+    PlanConfig config;
+    ImportedPlanConverter::applyToPlanConfig(fffPlan, config);
+    EXPECT_EQ(config.machineName, "TrueBeamSTx_6FFF");
+
+    const Machine fffMachine = MachineLoader::load("photons", "TrueBeamSTx_6FFF");
+    for (const auto& w : ImportedPlanConverter::validate(fffPlan, fffMachine))
+        EXPECT_EQ(w.find("flatten"), std::string::npos) << w;
+    const Machine flatMachine = MachineLoader::load("photons", "TrueBeamSTx_6X");
+    bool warned = false;
+    for (const auto& w : ImportedPlanConverter::validate(fffPlan, flatMachine)) warned |= w.find("flatten") != std::string::npos;
+    EXPECT_TRUE(warned);
 }
 
 } // namespace optirad::tests

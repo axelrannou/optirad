@@ -82,7 +82,20 @@ VmatSettings ImportedPlanConverter::toVmatSettings(const ImportedPlan& imported)
     return s;
 }
 
+std::string ImportedPlanConverter::suggestMachine(const ImportedPlan& imported) {
+    std::string suggestion;
+    for (const auto& b : imported.beams) {
+        if (!b.radiationType.empty() && b.radiationType != "PHOTON") return {};
+        if (std::abs(b.nominalEnergy - 6.0) > 0.5) return {};
+        const std::string machine = b.fff ? "TrueBeamSTx_6FFF" : "TrueBeamSTx_6X";
+        if (!suggestion.empty() && suggestion != machine) return {};
+        suggestion = machine;
+    }
+    return suggestion;
+}
+
 void ImportedPlanConverter::applyToPlanConfig(const ImportedPlan& imported, PlanConfig& config) {
+    if (const std::string machine = suggestMachine(imported); !machine.empty()) config.machineName = machine;
     if (imported.numFractions > 0) config.numFractions = imported.numFractions;
     config.isocenter = imported.isocenter();
     if (imported.prescribedDose > 0.0) config.prescribedDose = imported.prescribedDose;
@@ -252,8 +265,13 @@ std::vector<std::string> ImportedPlanConverter::validate(const ImportedPlan& imp
         const std::string tag = "beam '" + b.name + "': ";
         if (!b.radiationType.empty() && b.radiationType != "PHOTON")
             w.push_back(tag + b.radiationType + " beams are not supported");
-        if (b.fff)
-            w.push_back(tag + "flattening-filter-free beam, the machine model is flattened");
+        if (b.fff != machine.getMeta().isFFF())
+            w.push_back(tag + (b.fff ? "flattening-filter-free beam, the machine model is flattened"
+                                     : "flattened beam, the machine model is flattening-filter free"));
+        if (b.nominalEnergy > 0.0 && machine.getData().energy > 0.0 &&
+            std::abs(b.nominalEnergy - machine.getData().energy) > 0.5)
+            w.push_back(tag + std::to_string(b.nominalEnergy) + " MV beam, the machine model is " +
+                        std::to_string(machine.getData().energy) + " MV");
         double normalizedCollimator = std::fmod(b.collimatorAngle, 360.0);
         if (normalizedCollimator > 180.0) normalizedCollimator -= 360.0;
         if (normalizedCollimator < -180.0) normalizedCollimator += 360.0;
@@ -266,7 +284,7 @@ std::vector<std::string> ImportedPlanConverter::validate(const ImportedPlan& imp
         if (machine.getSAD() > 0.0 && std::abs(b.sad - machine.getSAD()) > 0.5)
             w.push_back(tag + "SAD " + std::to_string(b.sad) + " mm differs from the machine's " +
                         std::to_string(machine.getSAD()) + " mm");
-        if (geo.doseRateMUPerMin > 0.0 && b.doseRateMUPerMin > geo.doseRateMUPerMin + 1e-6)
+        if (geo.doseRateMUPerMin > 0.0 && b.doseRateMUPerMin > geo.doseRateMUPerMin + 0.5)
             w.push_back(tag + "dose rate " + std::to_string(b.doseRateMUPerMin) + " MU/min exceeds the machine's " +
                         std::to_string(geo.doseRateMUPerMin) + " MU/min");
         if (!b.machineName.empty() && b.machineName != machine.getName())

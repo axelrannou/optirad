@@ -102,7 +102,7 @@ cd build
 
 ```
 --mode <photons|protons>     Radiation mode (default: photons)
---machine <name>             Machine name (default: HD120; also Generic, Varian_TrueBeam6MV)
+--machine <name>             Machine name (default: TrueBeamSTx_6X; also TrueBeamSTx_6FFF, Generic, Varian_TrueBeam6MV)
 --fractions <n>              Number of fractions (default: 30)
 --gantry-start <deg>         Gantry start angle (default: 0)
 --gantry-step <deg>          Gantry angle step (default: 4)
@@ -217,7 +217,12 @@ PatientData
 
 Two machine types are supported:
 
-- **Generic** — Pencil beam machine defined by a single JSON file (`data/machines/machine_photons_Generic.json`): SAD, SCD, energy, beta parameters, kernel data, fluence profile
+- **Pencil beam** — machine defined by a single JSON file `data/machines/machine_photons_<name>.json`: SAD, SCD, energy, beta parameters, kernel data, fluence profile, MLC and delivery constraints. Files are named after the linac and its beam mode:
+  - `Generic` — matRad's generic 6 MV machine (Millennium 120 MLC), the validation reference
+  - `TrueBeamSTx_6X` — Varian TrueBeam STx (TrueBeam with the HD120 MLC), 6 MV flattened beam, 600 MU/min (default)
+  - `TrueBeamSTx_6FFF` — the same linac in 6 MV flattening-filter-free mode, 1400 MU/min. **Approximate, not commissioned**: it inherits the 6X kernels (`"inherits": "TrueBeamSTx_6X"`) and adds an FFF off-axis fluence profile (`useCustomPrimaryFluence`, `primaryFluence`) and a softer depth dose (`extraAttenuation`, normalised at `extraAttenuationRefDepth`)
+
+  An imported RTPLAN selects `TrueBeamSTx_6X` or `TrueBeamSTx_6FFF` from its beams' energy and fluence mode (DICOM Primary Fluence Mode STANDARD / NON_STANDARD FFF).
 - **Varian TrueBeam 6MV** — Phase-space machine defined by a folder (`data/machines/Varian_TrueBeam6MV/`): JSON config + multiple IAEA phase-space file pairs (`.IAEAheader` + `.IAEAphsp`)
 
 ### Dij Cache
@@ -235,6 +240,8 @@ data/
 ├── dij_cache/              # Cached Dij matrices (.dij binary)
 ├── machines/
 │   ├── machine_photons_Generic.json
+│   ├── machine_photons_TrueBeamSTx_6X.json
+│   ├── machine_photons_TrueBeamSTx_6FFF.json
 │   └── Varian_TrueBeam6MV/ # IAEA phase-space files
 └── nrrd/                   # NRRD format data
 ```

@@ -23,6 +23,10 @@ struct MachineMeta {
     double SAD = 1000.0;  // Source-Axis Distance (mm)
     double SCD = 500.0;   // Source-Collimator Distance (mm)
     MachineType machineType = MachineType::Generic;
+    /// DICOM Primary Fluence Mode of the beam model: "STANDARD" (flattened) or "FFF" (flattening-filter free).
+    std::string fluenceMode = "STANDARD";
+
+    bool isFFF() const { return fluenceMode == "FFF"; }
 };
 
 struct KernelEntry {
@@ -40,6 +44,19 @@ struct MachineData {
     std::vector<KernelEntry> kernel;
     std::vector<double> kernelPos;
     double penumbraFWHMatIso = 5.0;  // mm
+
+    /// Apply `primaryFluence` (radius in the isocenter plane in mm, relative fluence) to every bixel, like matRad's
+    /// useCustomPrimaryPhotonFluence. Off by default: the kernels then model a flat beam.
+    bool useCustomPrimaryFluence = false;
+    /// Depth-dose correction for a spectrum softer than the kernel fit: dose x exp(-extraAttenuation (d - refDepth)),
+    /// d the radiological depth (mm). 1 at the reference depth, so the MU calibration is unchanged.
+    double extraAttenuation = 0.0;          // 1/mm
+    double extraAttenuationRefDepth = 15.0; // mm
+
+    /// Relative primary fluence of a bixel centred `radiusMm` from the beam axis in the isocenter plane.
+    double relativeFluence(double radiusMm) const;
+    /// Depth-dose correction factor at radiological depth `radDepthMm`.
+    double depthDoseCorrection(double radDepthMm) const;
 };
 
 struct MachineConstraints {

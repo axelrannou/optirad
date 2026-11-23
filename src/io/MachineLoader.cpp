@@ -57,6 +57,26 @@ Machine MachineLoader::loadFromFile(const std::string& filePath) {
 
     Machine machine;
 
+    // A derived beam model ("inherits": base name) starts from the base machine file in the same folder, then
+    // overrides only the keys it defines.
+    if (j.contains("inherits")) {
+        static thread_local int depth = 0;
+        if (depth >= 4) throw std::runtime_error("MachineLoader: 'inherits' chain too deep in " + filePath);
+        std::string mode = "photons";
+        if (j.contains("meta") && j["meta"].contains("radiationMode"))
+            mode = j["meta"]["radiationMode"].get<std::string>();
+        const std::string basePath = (fs::path(filePath).parent_path() /
+            ("machine_" + mode + "_" + j["inherits"].get<std::string>() + ".json")).string();
+        ++depth;
+        try {
+            machine = loadFromFile(basePath);
+        } catch (...) {
+            --depth;
+            throw;
+        }
+        --depth;
+    }
+
     // Auto-detect schema: "machine" key = phase-space, "meta" key = generic
     if (j.contains("machine")) {
         // Get the directory containing the JSON file for IAEA file discovery
@@ -80,7 +100,7 @@ void MachineLoader::loadGenericMachine(const json& j, Machine& machine) {
     // ── Meta ──────────────────────────────────────────────────────────────
     if (j.contains("meta")) {
         const auto& jm = j["meta"];
-        MachineMeta meta;
+        MachineMeta meta = machine.getMeta();
         meta.machineType = MachineType::Generic;
         if (jm.contains("radiationMode")) meta.radiationMode = jm["radiationMode"].get<std::string>();
         if (jm.contains("dataType"))      meta.dataType      = jm["dataType"].get<std::string>();
@@ -90,17 +110,23 @@ void MachineLoader::loadGenericMachine(const json& j, Machine& machine) {
         if (jm.contains("name"))          meta.name           = jm["name"].get<std::string>();
         if (jm.contains("SAD"))           meta.SAD            = jm["SAD"].get<double>();
         if (jm.contains("SCD"))           meta.SCD            = jm["SCD"].get<double>();
+        if (jm.contains("fluenceMode"))   meta.fluenceMode    = jm["fluenceMode"].get<std::string>();
         machine.setMeta(meta);
     }
 
     // ── Data ─────────────────────────────────────────────────────────────
     if (j.contains("data")) {
         const auto& jd = j["data"];
-        MachineData data;
+        MachineData data = machine.getData();
 
         if (jd.contains("energy"))           data.energy           = jd["energy"].get<double>();
         if (jd.contains("m"))                data.m                = jd["m"].get<double>();
         if (jd.contains("penumbraFWHMatIso")) data.penumbraFWHMatIso = jd["penumbraFWHMatIso"].get<double>();
+        if (jd.contains("useCustomPrimaryFluence"))
+            data.useCustomPrimaryFluence = jd["useCustomPrimaryFluence"].get<bool>();
+        if (jd.contains("extraAttenuation")) data.extraAttenuation = jd["extraAttenuation"].get<double>();
+        if (jd.contains("extraAttenuationRefDepth"))
+            data.extraAttenuationRefDepth = jd["extraAttenuationRefDepth"].get<double>();
 
         if (jd.contains("betas") && jd["betas"].is_array()) {
             const auto& jb = jd["betas"];
@@ -110,6 +136,7 @@ void MachineLoader::loadGenericMachine(const json& j, Machine& machine) {
         }
 
         if (jd.contains("primaryFluence") && jd["primaryFluence"].is_array()) {
+            data.primaryFluence.clear();
             data.primaryFluence.reserve(jd["primaryFluence"].size());
             for (const auto& entry : jd["primaryFluence"]) {
                 if (entry.is_array() && entry.size() >= 2) {
@@ -119,6 +146,7 @@ void MachineLoader::loadGenericMachine(const json& j, Machine& machine) {
         }
 
         if (jd.contains("kernelPos") && jd["kernelPos"].is_array()) {
+            data.kernelPos.clear();
             data.kernelPos.reserve(jd["kernelPos"].size());
             for (const auto& v : jd["kernelPos"]) {
                 data.kernelPos.push_back(v.get<double>());
@@ -126,6 +154,7 @@ void MachineLoader::loadGenericMachine(const json& j, Machine& machine) {
         }
 
         if (jd.contains("kernel") && jd["kernel"].is_array()) {
+            data.kernel.clear();
             data.kernel.reserve(jd["kernel"].size());
             for (const auto& jk : jd["kernel"]) {
                 KernelEntry entry;
@@ -159,7 +188,7 @@ void MachineLoader::loadGenericMachine(const json& j, Machine& machine) {
     // ── Constraints ──────────────────────────────────────────────────────
     if (j.contains("constraints")) {
         const auto& jc = j["constraints"];
-        MachineConstraints constraints;
+        MachineConstraints constraints = machine.getConstraints();
 
         if (jc.contains("gantryRotationSpeed") && jc["gantryRotationSpeed"].is_array()) {
             const auto& v = jc["gantryRotationSpeed"];
@@ -175,6 +204,11 @@ void MachineLoader::loadGenericMachine(const json& j, Machine& machine) {
         }
 
         machine.setConstraints(constraints);
+
+        // Pencil-beam machines state their maximum dose rate only as a constraint.
+        MachineGeometry geom = machine.getGeometry();
+        geom.doseRateMUPerMin = constraints.monitorUnitRate[1] * 60.0;
+        machine.setGeometry(geom);
     }
 
     // ── MLC (optional for generic machines) ───────────────────────────────────
@@ -188,6 +222,7 @@ void MachineLoader::loadGenericMachine(const json& j, Machine& machine) {
         if (jmlc.contains("interdigitation")) geom.interdigitation = jmlc["interdigitation"].get<bool>();
         if (jmlc.contains("num_inner_pairs")) geom.numInnerPairs = jmlc["num_inner_pairs"].get<int>();
         if (jmlc.contains("leaf_width_mm") && jmlc["leaf_width_mm"].is_array()) {
+            geom.leafWidths.clear();
             for (const auto& w : jmlc["leaf_width_mm"]) {
                 geom.leafWidths.push_back(w.get<double>());
             }

@@ -13,8 +13,8 @@
 namespace optirad {
 
 static const char* kRadiationModes[] = { "photons" };
-static const char* kMachines[] = { "Generic", "HD120", "Varian_TrueBeam6MV" };
-static const bool kIsPhaseSpace[] = { false, false, true };
+static const char* kMachines[] = { "Generic", "TrueBeamSTx_6X", "TrueBeamSTx_6FFF", "Varian_TrueBeam6MV" };
+static const bool kIsPhaseSpace[] = { false, false, false, true };
 
 // Helper callback for ImGui InputText with std::string
 static int InputTextCallback(ImGuiInputTextCallbackData* data) {
@@ -115,10 +115,12 @@ void PlanningPanel::applyImportedPlan() {
     m_numFractions = cfg.numFractions;
     if (const auto& grid = m_state.patientData->getImportedDoseGridResolution())
         for (int i = 0; i < 3; ++i) m_doseResolution[i] = static_cast<float>((*grid)[i]);
-    if (kIsPhaseSpace[m_machineIdx]) {
-        for (int i = 0; i < IM_ARRAYSIZE(kMachines); ++i)
-            if (std::string(kMachines[i]) == PlanConfig{}.machineName) m_machineIdx = i;
-    }
+    // The RTPLAN's beam mode picks the machine when one matches; a phase-space machine is never kept, since the
+    // imported leaves are recomputed with the pencil-beam engine.
+    const std::string machine = !ImportedPlanConverter::suggestMachine(*imported).empty() || kIsPhaseSpace[m_machineIdx]
+        ? cfg.machineName : std::string(kMachines[m_machineIdx]);
+    for (int i = 0; i < IM_ARRAYSIZE(kMachines); ++i)
+        if (machine == kMachines[i]) m_machineIdx = i;
     Logger::info("Planning parameters set from RTPLAN '" + imported->label + "'");
 }
 

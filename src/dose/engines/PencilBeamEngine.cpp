@@ -41,6 +41,11 @@ void PencilBeamEngine::initDoseCalc(const Plan& plan, const Grid& doseGrid) {
     m_penumbraFWHM = data.penumbraFWHMatIso;
     m_kernelPos = data.kernelPos;
     m_kernelEntries = data.kernel;
+    m_beamModel = MachineData{};
+    m_beamModel.useCustomPrimaryFluence = data.useCustomPrimaryFluence;
+    m_beamModel.primaryFluence = data.primaryFluence;
+    m_beamModel.extraAttenuation = data.extraAttenuation;
+    m_beamModel.extraAttenuationRefDepth = data.extraAttenuationRefDepth;
 
     // Store full kernel extent (for convolution grid)
     if (!m_kernelPos.empty()) {
@@ -368,6 +373,7 @@ PencilBeamEngine::RayVoxelData PencilBeamEngine::initRay(
 
     // Ray target in BEV
     Vec3 rayPosBev = ray.getRayPosBev();
+    rd.fluenceScale = m_beamModel.relativeFluence(std::hypot(rayPosBev[0], rayPosBev[2]));
 
     // For each voxel, check if within lateral cutoff from this ray
     for (size_t i = 0; i < beamData.bevCoords.size(); ++i) {
@@ -448,7 +454,7 @@ std::vector<double> PencilBeamEngine::calcBixelDose(
 
         // Inverse square correction
         double invSq = (SAD * SAD) / (geoDist * geoDist);
-        totalDose *= invSq;
+        totalDose *= invSq * rayData.fluenceScale * m_beamModel.depthDoseCorrection(radDepth);
 
         // Clamp negative (can arise from FFT ringing)
         if (totalDose < 0.0) totalDose = 0.0;
@@ -830,11 +836,15 @@ DoseMatrix PencilBeamEngine::calculateDoseDirect(
             std::vector<double> beamWeights(numRays, 0.0);
             for (size_t ray = 0; ray < numRays; ++ray) {
                 const size_t column = thisBeamStart + rayBixelOff[ray];
-                if (column < weights.size()) beamWeights[ray] = weights[column];
+                if (column < weights.size()) {
+                    const Vec3 pos = beam->getRay(ray)->getRayPosBev();
+                    beamWeights[ray] = weights[column] * m_beamModel.relativeFluence(std::hypot(pos[0], pos[2]));
+                }
             }
             gpuDose->accumulate(*beam, beamData.voxelIndices, beamData.bevCoords, beamData.radDepths,
                 beamData.geoDistances, beamData.kernelInterps, beamWeights, m_betas, m_mu, m_SAD,
-                m_lateralCutOff, m_options.divergentBixels);
+                m_lateralCutOff, m_options.divergentBixels, m_beamModel.extraAttenuation,
+                m_beamModel.extraAttenuationRefDepth);
             continue;
         }
 #endif
@@ -1170,13 +1180,14 @@ FluenceDoseModel PencilBeamEngine::buildFluenceModel(
                 rec.fx = static_cast<float>(fx);
                 rec.fz = static_cast<float>(fz);
                 const double invSq = (m_SAD * m_SAD) / (geoDist * geoDist);
+                const double depthCorr = m_beamModel.depthDoseCorrection(radDepth);
                 for (int k = 0; k < 3; ++k) {
                     const double beta = m_betas[static_cast<size_t>(k)];
                     const double denom = beta - m_mu;
                     const double depthDose = std::abs(denom) > 1e-12
                         ? (beta / denom) * (std::exp(-m_mu * radDepth) - std::exp(-beta * radDepth))
                         : m_mu * radDepth * std::exp(-m_mu * radDepth);
-                    rec.d[k] = static_cast<float>(depthDose * invSq);
+                    rec.d[k] = static_cast<float>(depthDose * invSq * depthCorr);
                 }
                 records.push_back(rec);
             }
@@ -1188,6 +1199,7 @@ FluenceDoseModel PencilBeamEngine::buildFluenceModel(
         model.addBeam(kernelIdx, std::move(records));
     }
 
+    model.setPrimaryFluence(m_beamModel.useCustomPrimaryFluence, m_beamModel.primaryFluence);
     if (m_progressCallback)
         m_progressCallback(static_cast<int>(numBeams), static_cast<int>(numBeams), "Done");
     Logger::info("PencilBeamEngine: fluence model " + std::to_string(numBeams) + " beams, image " +

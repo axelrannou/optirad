@@ -19,7 +19,7 @@ template<class Value> struct Buffer {
 struct Voxel { size_t index; double lateral, longitudinal, depthAxis, depth, distance; };
 struct RayWeight { double lateral, longitudinal, weight; };
 struct Kernel { double minX, minZ, dx, dz; size_t nx, nz, offset; };
-struct Physics { double beta[3], mu, sad, cutoff; bool divergent; };
+struct Physics { double beta[3], mu, sad, cutoff; bool divergent; double extraAttenuation, refDepth; };
 
 __device__ double interpolate(const double* data, Kernel kernel, double lateral, double longitudinal) {
     const double horizontal = (lateral - kernel.minX) / kernel.dx;
@@ -47,7 +47,9 @@ __global__ void deposit(const Voxel* voxels, size_t count, const RayWeight* rays
             (exp(-physics.mu * voxel.depth) - exp(-beta * voxel.depth)) :
             physics.mu * voxel.depth * exp(-physics.mu * voxel.depth);
     }
-    const double inverseSquare = physics.sad * physics.sad / (voxel.distance * voxel.distance);
+    double inverseSquare = physics.sad * physics.sad / (voxel.distance * voxel.distance);
+    if (physics.extraAttenuation != 0.0)
+        inverseSquare *= exp(-physics.extraAttenuation * (voxel.depth - physics.refDepth));
     double sum = 0.0;
     for (size_t ray = 0; ray < numRays; ++ray) {
         if (rays[ray].weight <= 0.0) continue;
@@ -84,7 +86,7 @@ CudaDirectDose::~CudaDirectDose() = default;
 void CudaDirectDose::accumulate(const Beam& beam, const std::vector<size_t>& indices,
     const std::vector<Vec3>& coordinates, const std::vector<double>& depths, const std::vector<double>& distances,
     const GridInterpolant2D* kernels, const std::vector<double>& weights, const std::array<double, 3>& betas,
-    double mu, double sad, double cutoff, bool divergent) {
+    double mu, double sad, double cutoff, bool divergent, double extraAttenuation, double refDepth) {
     check(cudaSetDevice(m_impl->device));
     if (indices.empty()) return;
     std::vector<Voxel> voxels;
@@ -114,7 +116,7 @@ void CudaDirectDose::accumulate(const Beam& beam, const std::vector<size_t>& ind
     check(cudaMemcpy(deviceRays.data, rays.data(), rays.size() * sizeof(RayWeight), cudaMemcpyHostToDevice));
     check(cudaMemcpy(deviceTables.data, tables.data(), tables.size() * sizeof(double), cudaMemcpyHostToDevice));
     check(cudaMemcpy(deviceKernels.data, descriptions, sizeof(descriptions), cudaMemcpyHostToDevice));
-    Physics physics{{betas[0], betas[1], betas[2]}, mu, sad, cutoff, divergent};
+    Physics physics{{betas[0], betas[1], betas[2]}, mu, sad, cutoff, divergent, extraAttenuation, refDepth};
     deposit<<<static_cast<unsigned>((voxels.size() + 127) / 128), 128>>>(deviceVoxels.data, voxels.size(),
         deviceRays.data, rays.size(), deviceTables.data, deviceKernels.data, physics, m_impl->dose.data);
     check(cudaGetLastError());

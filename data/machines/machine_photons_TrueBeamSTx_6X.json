@@ -4,8 +4,9 @@
     "dataType": "-",
     "created_on": "09-Jun-2026",
     "created_by": "optirad",
-    "description": "photon pencil beam kernels for a 6MV machine with Varian HD120 MLC",
-    "name": "HD120",
+    "description": "Varian TrueBeam STx (HD120 MLC), 6X flattened beam: matRad generic 6 MV pencil-beam kernels, 600 MU/min",
+    "fluenceMode": "STANDARD",
+    "name": "TrueBeamSTx_6X",
     "SAD": 1000,
     "SCD": 500
   },

@@ -181,7 +181,7 @@ class IPanel {
 ### PlanningPanel
 
 - Radiation mode selector (photons)
-- Machine selector (Generic, HD120, Varian_TrueBeam6MV; default HD120)
+- Machine selector (Generic, TrueBeamSTx_6X, TrueBeamSTx_6FFF, Varian_TrueBeam6MV; default TrueBeamSTx_6X). "Apply RTPLAN settings" selects TrueBeamSTx_6X or TrueBeamSTx_6FFF from the plan's beam mode
 - Delivery defaults to VMAT with a clockwise 0 to 360 degree arc, 10 degree sectors,
   2 degree control point spacing, and 3 mm bixels (also the CLI planning defaults)
 - SMLC uses the configured gantry range (start, step, stop-exclusive) or explicit

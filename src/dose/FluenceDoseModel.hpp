@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Beam.hpp"
+#include "core/Machine.hpp"
 
 #include <array>
 #include <cstdint>
@@ -67,6 +68,14 @@ public:
     /// beam's first bixel.
     void gatherBixels(const Beam& beam, const std::vector<float>& image, double* out) const;
 
+    /// Off-axis primary fluence of the machine (FFF); bixel weights are scaled by it before rasterization.
+    void setPrimaryFluence(bool enabled, std::vector<std::array<double, 2>> profile) {
+        m_profile.useCustomPrimaryFluence = enabled;
+        m_profile.primaryFluence = std::move(profile);
+    }
+    double relativeFluence(double radiusMm) const { return m_profile.relativeFluence(radiusMm); }
+    bool hasPrimaryFluence() const { return m_profile.useCustomPrimaryFluence && !m_profile.primaryFluence.empty(); }
+
     /// Voxels (rows) the model covers; empty = all.
     void setComputedRows(std::vector<uint8_t> mask) { m_rowMask = std::move(mask); }
     const std::vector<uint8_t>& computedRows() const { return m_rowMask; }
@@ -98,6 +107,7 @@ private:
     struct BeamRecords { size_t kernelSlot; std::vector<VoxelRecord> records; };
     std::vector<BeamRecords> m_beams;
     std::vector<uint8_t> m_rowMask;
+    MachineData m_profile;
 };
 
 } // namespace optirad

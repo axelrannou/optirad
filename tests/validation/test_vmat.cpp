@@ -26,7 +26,7 @@ namespace optirad::tests {
 
 TEST(ArcGeometryTest, PlanningDefaultsCoverAFullArcWithRequestedResolution) {
     const PlanConfig config;
-    EXPECT_EQ(config.machineName, "HD120");
+    EXPECT_EQ(config.machineName, "TrueBeamSTx_6X");
     EXPECT_EQ(config.deliveryMode, DeliveryMode::VMAT);
     EXPECT_DOUBLE_EQ(config.bixelWidth, 3.0);
     const auto& settings = config.vmat;

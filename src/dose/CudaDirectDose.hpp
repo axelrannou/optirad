@@ -14,7 +14,7 @@ public:
     void accumulate(const Beam& beam, const std::vector<size_t>& indices, const std::vector<Vec3>& coordinates,
         const std::vector<double>& depths, const std::vector<double>& distances, const GridInterpolant2D* kernels,
         const std::vector<double>& weights, const std::array<double, 3>& betas, double mu, double sad,
-        double cutoff, bool divergent);
+        double cutoff, bool divergent, double extraAttenuation = 0.0, double refDepth = 0.0);
     std::vector<double> result();
 private:
     struct Impl;

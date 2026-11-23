@@ -29,9 +29,9 @@ struct ModelFixture {
     std::vector<double> weights;
     std::vector<size_t> offsets;
 
-    ModelFixture() {
+    explicit ModelFixture(const std::string& machine = "Generic") {
         PlanConfig pc;
-        pc.machineName = "Generic";
+        pc.machineName = machine;
         pc.deliveryMode = DeliveryMode::SMLC;
         pc.bixelWidth = 5.0;
         pc.gantryStart = 0.0;
@@ -149,6 +149,65 @@ TEST(FluenceDoseOperatorTest, TransposeIsTheAdjointOfTheBixelDose) {
     EXPECT_NEAR(lhs, rhs, 1e-4 * std::max(1.0, std::abs(lhs)));
     EXPECT_GT(op.getMaxValue(), 0.0);
     EXPECT_TRUE(op.engineOptions().divergentBixels);
+}
+
+// The FFF machine's off-axis fluence and depth correction must be applied identically by the Dij, the direct
+// dose and the matrix-free operator, and must change the dose relative to the flattened beam.
+TEST(FluenceDoseOperatorTest, FffBeamModelIsConsistentAcrossDosePaths) {
+    ModelFixture f("TrueBeamSTx_6FFF");
+    ModelFixture flat("TrueBeamSTx_6X");
+    const auto ref = f.engine.calculateDij(*f.built.plan, *f.built.stf, *f.patient, *f.grid).computeDose(f.weights);
+    const auto flatRef =
+        flat.engine.calculateDij(*flat.built.plan, *flat.built.stf, *flat.patient, *flat.grid).computeDose(flat.weights);
+    const double maxRef = *std::max_element(ref.begin(), ref.end());
+    ASSERT_GT(maxRef, 0.0);
+    ASSERT_EQ(flatRef.size(), ref.size());
+
+    double maxRatio = 0.0, minRatio = 1e9;
+    for (size_t v = 0; v < ref.size(); ++v)
+        if (flatRef[v] > 0.2 * maxRef) {
+            maxRatio = std::max(maxRatio, ref[v] / flatRef[v]);
+            minRatio = std::min(minRatio, ref[v] / flatRef[v]);
+        }
+    EXPECT_LT(minRatio, 0.97);
+    EXPECT_LT(maxRatio, 1.06);
+
+    const auto direct = f.engine.calculateDoseDirect(*f.built.plan, *f.built.stf, *f.patient, *f.grid, f.weights);
+    ASSERT_EQ(direct.size(), ref.size());
+    double directErr = 0.0;
+    for (size_t v = 0; v < ref.size(); ++v) directErr = std::max(directErr, std::abs(direct.data()[v] - ref[v]));
+    EXPECT_LT(directErr / maxRef, 1e-3);
+#ifdef OPTIRAD_HAS_CUDA
+    {
+        PencilBeamEngine gpu;
+        DoseCalcOptions o = f.engine.getOptions();
+        o.gpuRayTracing = true;
+        gpu.setOptions(o);
+        const auto gpuDirect = gpu.calculateDoseDirect(*f.built.plan, *f.built.stf, *f.patient, *f.grid, f.weights);
+        double gpuErr = 0.0;
+        for (size_t v = 0; v < ref.size(); ++v) gpuErr = std::max(gpuErr, std::abs(gpuDirect.data()[v] - ref[v]));
+        EXPECT_LT(gpuErr / maxRef, 1e-3);
+    }
+#endif
+
+    FluenceModelOptions fo;
+    fo.pixelMm = 0.5;
+    auto model = std::make_shared<FluenceDoseModel>(
+        f.engine.buildFluenceModel(*f.built.plan, *f.built.stf, *f.patient, *f.grid, fo));
+    FluenceDoseOperator op(model, std::make_shared<Stf>(*f.built.stf));
+    const auto dose = op.computeDose(f.weights);
+    double opErr = 0.0;
+    for (size_t v = 0; v < ref.size(); ++v) opErr = std::max(opErr, std::abs(dose[v] - ref[v]));
+    EXPECT_LT(opErr / maxRef, 0.01);
+
+    std::vector<double> g(op.getNumVoxels());
+    for (size_t v = 0; v < g.size(); ++v) g[v] = std::cos(0.013 * static_cast<double>(v));
+    std::vector<double> grad(op.getNumBixels(), 0.5);
+    op.accumulateTransposeProduct(g, grad);
+    double lhs = 0.0, rhs = 0.0;
+    for (size_t v = 0; v < g.size(); ++v) lhs += dose[v] * g[v];
+    for (size_t i = 0; i < grad.size(); ++i) rhs += f.weights[i] * (grad[i] - 0.5);
+    EXPECT_NEAR(lhs, rhs, 1e-4 * std::max(1.0, std::abs(lhs)));
 }
 
 TEST(CudaFluenceTest, ForwardAndAdjointMatchCpuWithAsymmetricKernels) {

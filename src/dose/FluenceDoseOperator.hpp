@@ -35,6 +35,9 @@ private:
     std::shared_ptr<const FluenceDoseModel> m_model;
     std::shared_ptr<const Stf> m_stf;
     std::vector<size_t> m_offsets;
+    std::vector<double> m_bixelScale;  // off-axis fluence of each bixel; empty = flat beam
+    std::vector<double> scaled(const std::vector<double>& weights) const;
+    void scaleGradient(std::vector<double>& grad, size_t begin) const;
     std::shared_ptr<CudaFluenceBackend::BixelLayout> m_cudaBixels;
     mutable std::once_flag m_maxOnce;
     mutable double m_maxValue = 0.0;

@@ -632,10 +632,12 @@ std::shared_ptr<ImportedPlan> DicomImporter::importRTPlan(const std::string& fil
 
         const auto fluence = sequenceItems(beamItem, DCM_PrimaryFluenceModeSequence);
         if (!fluence.empty() && readString(fluence.front(), DCM_FluenceMode) == "NON_STANDARD") {
-            beam.fff = true;
-            const std::string id = readString(fluence.front(), DCM_FluenceModeID);
-            plan->warnings.push_back("beam '" + beam.name + "' uses a non-standard fluence mode" +
-                                     (id.empty() ? std::string() : " (" + id + ")"));
+            // Only the "FFF" mode ID is unflattened; other non-standard modes (e.g. Varian "SRS") are not modelled.
+            const std::string modeId = readString(fluence.front(), DCM_FluenceModeID);
+            if (modeId == "FFF") beam.fff = true;
+            else
+                plan->warnings.push_back("beam '" + beam.name + "' uses non-standard fluence mode '" + modeId +
+                                         "', which has no machine model; it is treated as a flattened beam");
         }
 
         // Control points: absent attributes keep the value of the previous control point

@@ -99,6 +99,7 @@ private:
         std::vector<size_t> localIndices;    // Indices into BeamData arrays for voxels near this ray
         std::vector<double> isoLatX;         // Lateral X distance at isocenter plane
         std::vector<double> isoLatZ;         // Lateral Z distance at isocenter plane
+        double fluenceScale = 1.0;           // Relative primary fluence of this bixel (FFF profile)
     };
 
     RayVoxelData initRay(const Ray& ray, const Beam& beam, const BeamData& beamData);
@@ -119,6 +120,8 @@ private:
     double m_kernelCutOff = 179.5; // mm, full kernel extent (for convolution grid)
     double m_lateralCutOff = 50.0; // mm, effective lateral cutoff used in ray voxel filtering
     double m_bixelWidth;
+    /// Off-axis fluence profile and depth-dose correction of the machine (no-ops for flattened beams).
+    MachineData m_beamModel;
 
     // Kernel data from machine
     std::vector<double> m_kernelPos; // radial positions
