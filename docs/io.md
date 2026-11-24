@@ -105,6 +105,21 @@ DICOM Directory
 
 The `importAll()` convenience method executes the full pipeline and returns a complete `PatientData` object with HU→ED conversion already applied.
 
+The GUI Patient panel imports in background stages: **CT + RTDOSE**, then
+**structures** (including BODY generation and rasterization), then **RTPLAN**
+(including beam and delivery preparation). Each completed stage is published on
+the GUI thread, so images can be inspected while the remaining data loads.
+The import dialog closes when loading starts; stage bars and the current operation
+remain visible in the Patient panel. Planning tasks and repeat imports are blocked
+until loading finishes. A failed image import preserves the previous patient;
+failures in later stages keep the data already loaded and report the error.
+
+For staged callers, `importImages(dirPath, status)` returns CT/patient data and
+caches RTDOSE for `takeImportedDose()`. Next,
+`importPreparedStructures(ct, status)` returns the rasterized structure set, and
+`importRTPlan()` reads the optional plan. The optional status callbacks describe
+the current operation; stages without measurable progress use animated bars.
+
 #### Conditional Compilation
 
 When DCMTK is not available (`OPTIRAD_HAS_DCMTK` not defined), the importer provides stub implementations that log an error and return nullptr.

@@ -10,6 +10,8 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
+#include <chrono>
+#include <stdexcept>
 
 #ifndef OPTIRAD_DATA_DIR
 #define OPTIRAD_DATA_DIR "."
@@ -29,7 +31,13 @@ PatientPanel::PatientPanel(GuiAppState& state, unsigned int eyeOpenTexture,
     m_state.exportDir = m_exportPath;
 }
 
+PatientPanel::~PatientPanel() {
+    if (m_importFuture.valid()) m_importFuture.wait();
+    if (m_isImporting) m_state.taskRunning = false;
+}
+
 void PatientPanel::render() {
+    update();
     if (!m_visible) return;
 
     m_state.exportDir = m_exportPath;
@@ -56,7 +64,7 @@ void PatientPanel::render() {
 
         if (sideBySide) ImGui::SameLine();
 
-        if (!hasDose) ImGui::BeginDisabled();
+        ImGui::BeginDisabled(!hasDose || m_isImporting);
         if (ImGui::Button(exportLabel, ImVec2(btnW, 0))) {
             const std::string outDir =
                 (m_exportPath[0] != '\0') ? m_exportPath : (OPTIRAD_DATA_DIR "/export");
@@ -77,10 +85,11 @@ void PatientPanel::render() {
                                        outDir, selEntry->name, planSOPInstanceUID);
             }
         }
-        if (!hasDose) ImGui::EndDisabled();
+        ImGui::EndDisabled();
     }
 
     ImGui::Separator();
+    renderImportProgress();
     
     // Show patient info if loaded
     if (m_state.patientData) {
@@ -130,20 +139,38 @@ void PatientPanel::renderImportDialog() {
         ImGui::Separator();
         ImGui::Spacing();
         
-        if (m_isImporting) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Importing...");
-            ImGui::ProgressBar(-1.0f * ImGui::GetTime());
-        } else {
-            if (ImGui::Button("Import", ImVec2(120, 0))) {
-                importDicom(m_dicomPath);
-            }
-            layout::sameLineIfFits(120.0f);
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                m_showImportDialog = false;
-            }
+        ImGui::BeginDisabled(m_state.taskRunning);
+        if (ImGui::Button("Import", ImVec2(120, 0))) {
+            importDicom(m_dicomPath);
+            if (m_isImporting) ImGui::CloseCurrentPopup();
         }
-        
+        ImGui::EndDisabled();
+        layout::sameLineIfFits(120.0f);
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            m_showImportDialog = false;
+        }
+
         ImGui::EndPopup();
+    }
+}
+
+void PatientPanel::renderImportProgress() {
+    if (m_isImporting) {
+        ImGui::TextWrapped("%s", m_state.taskStatus.c_str());
+        const char* stages[] = {"CT + dose", "Structures", "RTPLAN"};
+        const int active = static_cast<int>(m_importStage);
+        for (int i = 0; i < 3; ++i) {
+            ImGui::Text("%s", stages[i]);
+            const float progress = i < active ? 1.0f :
+                (i == active ? -static_cast<float>(ImGui::GetTime()) : 0.0f);
+            ImGui::ProgressBar(progress, ImVec2(-1, 0),
+                               i < active ? "Loaded" : (i == active ? "Loading..." : "Waiting"));
+        }
+        ImGui::Separator();
+    }
+    if (!m_importError.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Import error:");
+        ImGui::TextWrapped("%s", m_importError.c_str());
     }
 }
 
@@ -362,9 +389,11 @@ void PatientPanel::renderDoseList() {
         return;
     }
 
+    ImGui::BeginDisabled(m_isImporting);
     if (ImGui::Button("Export All Stats (CSV)")) {
         exportAllStatsCSV();
     }
+    ImGui::EndDisabled();
     ImGui::Spacing();
 
     if (ImGui::BeginTable("DoseList", 5,
@@ -510,44 +539,70 @@ void PatientPanel::importDicom(const std::string& path) {
         return;
     }
     
-    if (!fs::exists(path)) {
-        Logger::error("Path does not exist: " + path);
+    std::error_code ec;
+    if (!fs::is_directory(path, ec)) {
+        m_importError = "Invalid DICOM directory: " + path;
+        if (ec) m_importError += " (" + ec.message() + ")";
+        Logger::error(m_importError);
         return;
     }
     
+    m_importPath = path;
+    m_importError.clear();
     m_isImporting = true;
+    m_state.taskRunning = true;
+    m_importStage = ImportStage::Images;
+    m_importedDoseId = -1;
+    m_showImportDialog = false;
     Logger::info("Importing DICOM from: " + path);
-    
-    // Import in main thread (for now - TODO: move to background thread)
-    auto patientData = m_importer.importAll(path);
-    
-    if (patientData) {
-        m_state.resetAllDoses();
-        m_state.resetPlan();
-        m_state.resetLeafSequence();
-        m_state.patientData = std::move(patientData);
-        m_editingDoseIdx = -1;
-
-        Logger::info("DICOM import successful");
-        m_showImportDialog = false;
-
-        // Capture DICOM context (UIDs for RT Plan export)
-        m_state.dicomContext = m_importer.getContext();
-
-        // Add imported RT Dose to DoseStore if present
-        auto [doseMatrix, doseGrid] = m_importer.takeImportedDose();
-        const int importedDoseId = doseMatrix ? m_state.doseStore.addDose("Imported (DICOM)", doseMatrix, doseGrid) : -1;
-        if (m_state.patientData->hasImportedPlan()) {
-            // The imported RTPLAN becomes the current plan, linked to the imported RTDOSE it delivers
-            ImportedPlanDoseView::installImported(m_state, importedDoseId);
-        } else {
-            m_state.syncSelectedDose();
-        }
-    } else {
-        Logger::error("DICOM import failed");
+    try {
+        startImportStage();
+    } catch (const std::exception& e) {
+        m_importError = "DICOM import failed: " + std::string(e.what());
+        Logger::error(m_importError);
+        m_isImporting = false;
+        m_state.taskRunning = false;
+        m_state.taskStatus = m_importError;
     }
-    
-    m_isImporting = false;
+}
+
+void PatientPanel::setImportStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(m_importMutex);
+    m_importStatus = status;
+}
+
+void PatientPanel::startImportStage() {
+    const auto stage = m_importStage;
+    setImportStatus(stage == ImportStage::Images ? "Scanning DICOM directory" :
+                    (stage == ImportStage::Structures ? "Parsing RTSTRUCT contours" : "Loading RTPLAN"));
+    const auto patient = m_state.patientData;
+    m_importFuture = std::async(std::launch::async, [this, stage, patient]() {
+        ImportResult result;
+        auto status = [this](const std::string& text) { setImportStatus(text); };
+        if (stage == ImportStage::Images) {
+            result.patient = m_importer.importImages(m_importPath, status);
+            if (!result.patient || !result.patient->hasValidCT())
+                throw std::runtime_error("Failed to load a valid CT from " + m_importPath);
+        } else if (stage == ImportStage::Structures) {
+            result.structures = m_importer.importPreparedStructures(patient->getCTVolume(), status);
+        } else if (stage == ImportStage::Plan) {
+            result.plan = m_importer.importRTPlan();
+            if (result.plan) {
+                for (const auto& warning : result.plan->warnings) Logger::warn("RTPLAN: " + warning);
+                status("Building RTPLAN beams and delivery");
+                try {
+                    result.preparedPlan = ImportedPlanDoseView::prepareImported(patient, *result.plan);
+                } catch (const std::exception& e) {
+                    result.planError = "RTPLAN plan could not be built: " + std::string(e.what());
+                    Logger::error(result.planError);
+                }
+            }
+        }
+        return result;
+    });
+    m_state.taskProgress = static_cast<float>(stage) / 3.0f;
+    std::lock_guard<std::mutex> lock(m_importMutex);
+    m_state.taskStatus = m_importStatus;
 }
 
 void PatientPanel::exportAllStatsCSV() {
@@ -599,7 +654,52 @@ void PatientPanel::exportAllStatsCSV() {
 }
 
 void PatientPanel::update() {
-    // No per-frame update needed
+    if (!m_isImporting) return;
+    {
+        std::lock_guard<std::mutex> lock(m_importMutex);
+        m_state.taskStatus = m_importStatus;
+    }
+    if (!m_importFuture.valid() ||
+        m_importFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+
+    try {
+        auto result = m_importFuture.get();
+        if (m_importStage == ImportStage::Images) {
+            m_state.resetAllDoses();
+            m_state.resetPlan();
+            m_state.resetLeafSequence();
+            m_state.patientData = std::move(result.patient);
+            m_editingDoseIdx = -1;
+            m_state.dicomContext = m_importer.getContext();
+            auto [dose, grid] = m_importer.takeImportedDose();
+            if (dose) m_importedDoseId = m_state.doseStore.addDose("Imported (DICOM)", dose, grid);
+            m_state.syncSelectedDose();
+            m_importStage = ImportStage::Structures;
+        } else if (m_importStage == ImportStage::Structures) {
+            m_state.patientData->setStructureSet(std::move(result.structures));
+            m_state.statsCache.clear();
+            m_state.dicomContext = m_importer.getContext();
+            m_importStage = ImportStage::Plan;
+        } else {
+            m_state.patientData->setImportedPlan(std::move(result.plan));
+            if (result.preparedPlan.built.plan)
+                ImportedPlanDoseView::installPrepared(m_state, m_importedDoseId, std::move(result.preparedPlan));
+            m_importError = std::move(result.planError);
+            m_importStage = ImportStage::Complete;
+            m_isImporting = false;
+            m_state.taskRunning = false;
+            m_state.taskProgress = 1.0f;
+            m_state.taskStatus = m_importError.empty() ? "DICOM import complete" : m_importError;
+            Logger::info(m_importError.empty() ? "DICOM import successful" : "DICOM images and structures imported; RTPLAN build failed");
+        }
+        if (m_isImporting) startImportStage();
+    } catch (const std::exception& e) {
+        m_importError = "DICOM import failed: " + std::string(e.what());
+        Logger::error(m_importError);
+        m_isImporting = false;
+        m_state.taskRunning = false;
+        m_state.taskStatus = m_importError;
+    }
 }
 
 } // namespace optirad

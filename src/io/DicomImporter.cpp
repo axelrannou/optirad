@@ -57,6 +57,28 @@ bool DicomImporter::canImport(const std::string& path) const {
 }
 
 std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath) {
+    auto patientData = importImages(dirPath);
+    if (!patientData) return nullptr;
+    patientData->setStructureSet(importPreparedStructures(patientData->getCTVolume()));
+
+    // A missing or unreadable plan never blocks the rest of the import.
+    if (!m_rtPlanFile.empty()) {
+        if (auto rtPlan = importRTPlan()) {
+            for (const auto& w : rtPlan->warnings) Logger::warn("RTPLAN: " + w);
+            Logger::info("RT Plan imported: '" + rtPlan->label + "', " + std::to_string(rtPlan->beams.size()) +
+                         " treatment beam(s), " + std::to_string(rtPlan->numFractions) + " fraction(s)");
+            patientData->setImportedPlan(std::move(rtPlan));
+        }
+    }
+    return patientData;
+}
+
+std::unique_ptr<PatientData> DicomImporter::importImages(
+        const std::string& dirPath, const StatusCallback& status) {
+    m_importedDoseMatrix.reset();
+    m_importedDoseGrid.reset();
+    m_context = {};
+    if (status) status("Scanning DICOM directory");
     if (!loadDirectory(dirPath)) {
         Logger::error("Failed to load DICOM directory: " + dirPath);
         return nullptr;
@@ -68,36 +90,52 @@ std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath
     patientData->setPatient(importPatient(dirPath));
     
     // Import CT volume
+    if (status) status("Loading CT slices");
     auto ctVolume = importCTVolume();
     if (ctVolume) {
         Logger::info("CT volume loaded: " + std::to_string(ctVolume->size()) + " voxels");
         patientData->setCTVolume(std::move(ctVolume));
         
         // Convert to electron density
+        if (status) status("Converting CT to electron density");
         patientData->convertHUtoED();
         Logger::info("Converted HU to electron density");
     }
     
-    // Import structures with contours
+    if (status) status("Loading RTDOSE");
+    auto [doseMatrix, doseGrid] = importRTDose();
+    if (doseMatrix) {
+        m_importedDoseMatrix = doseMatrix;
+        m_importedDoseGrid   = doseGrid;
+        Logger::info("RT Dose imported: max=" + std::to_string(doseMatrix->getMax()) + " Gy");
+        const auto sp = doseGrid->getSpacing();
+        patientData->setImportedDoseGridResolution({sp[1], sp[0], sp[2]});
+    }
+    return patientData;
+}
+
+std::unique_ptr<StructureSet> DicomImporter::importPreparedStructures(
+        const Volume<int16_t>* ct, const StatusCallback& status) {
+    if (status) status("Parsing RTSTRUCT contours");
     auto structures = importStructuresWithContours();
     if (structures) {
         Logger::info("Loaded " + std::to_string(structures->getCount()) + " structures");
         
         // Auto-generate BODY contour if no EXTERNAL structure exists
-        if (!structures->hasStructureOfType("EXTERNAL") && patientData->getCTVolume()) {
+        if (!structures->hasStructureOfType("EXTERNAL") && ct) {
+            if (status) status("Generating BODY contour from CT");
             Logger::info("No BODY/EXTERNAL structure found, auto-generating from CT threshold");
-            auto bodyStructure = BodyContourGenerator::generate(*patientData->getCTVolume());
+            auto bodyStructure = BodyContourGenerator::generate(*ct);
             if (bodyStructure) {
                 structures->addStructure(std::move(bodyStructure));
             }
         }
         
         // Rasterize contours to voxel indices
-        if (patientData->getCTVolume()) {
-            structures->rasterizeContours(patientData->getCTVolume()->getGrid());
+        if (ct) {
+            if (status) status("Rasterizing structures onto CT");
+            structures->rasterizeContours(ct->getGrid());
         }
-        
-        patientData->setStructureSet(std::move(structures));
     }
 
     // Capture RT Struct SOPInstanceUID for the DICOM context (used during export)
@@ -113,28 +151,7 @@ std::unique_ptr<PatientData> DicomImporter::importAll(const std::string& dirPath
     }
 #endif
 
-    // Import RT Dose if available — cache it for the caller to take via takeImportedDose()
-    auto [doseMatrix, doseGrid] = importRTDose();
-    if (doseMatrix) {
-        m_importedDoseMatrix = doseMatrix;
-        m_importedDoseGrid   = doseGrid;
-        Logger::info("RT Dose imported: max=" + std::to_string(doseMatrix->getMax()) + " Gy");
-        // Grid spacing is stored as (row, column, slice) = (y, x, z)
-        const auto sp = doseGrid->getSpacing();
-        patientData->setImportedDoseGridResolution({sp[1], sp[0], sp[2]});
-    }
-
-    // Import RT Plan if available. A plan that cannot be read never blocks the rest of the import.
-    if (!m_rtPlanFile.empty()) {
-        if (auto rtPlan = importRTPlan()) {
-            for (const auto& w : rtPlan->warnings) Logger::warn("RTPLAN: " + w);
-            Logger::info("RT Plan imported: '" + rtPlan->label + "', " + std::to_string(rtPlan->beams.size()) +
-                         " treatment beam(s), " + std::to_string(rtPlan->numFractions) + " fraction(s)");
-            patientData->setImportedPlan(std::move(rtPlan));
-        }
-    }
-    
-    return patientData;
+    return structures;
 }
 
 std::unique_ptr<Volume<int16_t>> DicomImporter::importCTVolume() {

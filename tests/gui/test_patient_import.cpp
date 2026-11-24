@@ -2,10 +2,13 @@
 #include "gui/panels/PatientPanel.hpp"
 #include "gui/panels/DoseStatsPanel.hpp"
 #include "gui/panels/DVHPanel.hpp"
+#include "io/DicomExporter.hpp"
 #include <dcmtk/dcmdata/dctk.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
+#include <chrono>
+#include <thread>
 
 namespace optirad::tests {
 
@@ -90,14 +93,24 @@ protected:
         EXPECT_FLOAT_EQ(curves.front().volumes.front(), 100.0f);
         EXPECT_FLOAT_EQ(curves.front().volumes.back(), 25.0f);
     }
+
+    bool waitForImport(PatientPanel& panel) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (panel.isImporting() && std::chrono::steady_clock::now() < deadline) {
+            panel.update();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return !panel.isImporting();
+    }
 };
 
-TEST_F(PatientImportGuiTest, ImportedDoseIsAnalysedInTheImportFrameWithoutAPlan) {
+TEST_F(PatientImportGuiTest, ImportedDoseIsAnalysedAfterBackgroundImportWithoutAPlan) {
     PatientPanel patient(state);
     DoseStatsPanel stats(state);
     DVHPanel dvh(state);
     ImGui::NewFrame();
     patient.importDicom(dir.string());
+    ASSERT_TRUE(waitForImport(patient));
     ASSERT_TRUE(state.dicomLoaded());
     EXPECT_EQ(patient.getPatientData(), state.patientData.get());
     ASSERT_TRUE(state.doseAvailable());
@@ -119,6 +132,7 @@ TEST_F(PatientImportGuiTest, ReimportRefreshesBothPanelsForTheNewDose) {
     DoseStatsPanel stats(state);
     DVHPanel dvh(state);
     patient.importDicom(dir.string());
+    ASSERT_TRUE(waitForImport(patient));
     ASSERT_TRUE(state.patientData);
     ImGui::NewFrame();
     stats.render();
@@ -129,6 +143,7 @@ TEST_F(PatientImportGuiTest, ReimportRefreshesBothPanelsForTheNewDose) {
     writeImage("dose.dcm", UID_RTDoseStorage, {2000, 4000, 6000, 8000});
     ImGui::NewFrame();
     patient.importDicom(dir.string());
+    ASSERT_TRUE(waitForImport(patient));
     EXPECT_EQ(state.doseStore.count(), 1);
     stats.render();
     expectStats(2.0);
@@ -141,6 +156,7 @@ TEST_F(PatientImportGuiTest, ReimportRefreshesBothPanelsForTheNewDose) {
 TEST_F(PatientImportGuiTest, ReplacementWithoutDoseClearsOldPatientResults) {
     PatientPanel patient(state);
     patient.importDicom(dir.string());
+    ASSERT_TRUE(waitForImport(patient));
     ASSERT_TRUE(state.patientData);
     auto oldPatient = state.patientData;
     state.plan = std::make_shared<Plan>();
@@ -150,6 +166,7 @@ TEST_F(PatientImportGuiTest, ReplacementWithoutDoseClearsOldPatientResults) {
     ASSERT_TRUE(std::filesystem::remove(dir / "dose.dcm"));
 
     patient.importDicom(dir.string());
+    ASSERT_TRUE(waitForImport(patient));
     ASSERT_TRUE(patient.hasData());
     EXPECT_NE(state.patientData, oldPatient);
     EXPECT_FALSE(state.planCreated());
@@ -164,6 +181,7 @@ TEST_F(PatientImportGuiTest, ReplacementWithoutDoseClearsOldPatientResults) {
 TEST_F(PatientImportGuiTest, FailedImportPreservesTheCurrentPatientAndDose) {
     PatientPanel patient(state);
     patient.importDicom(dir.string());
+    ASSERT_TRUE(waitForImport(patient));
     ASSERT_TRUE(state.patientData);
     const auto oldPatient = state.patientData;
     const auto oldDose = state.doseResult;
@@ -171,6 +189,9 @@ TEST_F(PatientImportGuiTest, FailedImportPreservesTheCurrentPatientAndDose) {
 
     ASSERT_TRUE(std::filesystem::create_directory(dir / "empty"));
     patient.importDicom((dir / "empty").string());
+    ASSERT_TRUE(waitForImport(patient));
+    EXPECT_FALSE(state.taskRunning);
+    EXPECT_NE(state.taskStatus.find("failed"), std::string::npos);
     EXPECT_EQ(state.patientData, oldPatient);
     EXPECT_EQ(state.doseResult, oldDose);
     EXPECT_EQ(state.doseStore.version(), version);
@@ -187,6 +208,7 @@ TEST_F(PatientImportGuiTest, ImportCannotReplacePatientWhileATaskIsRunning) {
 TEST_F(PatientImportGuiTest, StructureVisibilityButtonsToggleIndividualAndAllStructures) {
     PatientPanel patient(state, 1, 2);
     patient.importDicom(dir.string());
+    ASSERT_TRUE(waitForImport(patient));
     ASSERT_TRUE(state.patientData);
     auto* structures = state.patientData->getStructureSet();
     ASSERT_NE(structures, nullptr);
@@ -259,6 +281,121 @@ TEST_F(PatientImportGuiTest, StructureVisibilityButtonsToggleIndividualAndAllStr
     click(allButton);
     EXPECT_TRUE(structures->getStructure(0)->isVisible());
     EXPECT_TRUE(structures->getStructure(1)->isVisible());
+}
+
+TEST_F(PatientImportGuiTest, PublishesImagesThenStructuresThenPlanAndRefreshesEarlyStats) {
+    Plan plan;
+    Machine machine;
+    MachineMeta meta;
+    meta.SAD = 1000.0;
+    machine.setMeta(meta);
+    plan.setMachine(machine);
+    plan.setNumOfFractions(30);
+    Stf stf;
+    Beam beam;
+    beam.setSAD(1000.0);
+    beam.setIsocenter({0.0, 0.0, 0.0});
+    stf.addBeam(beam);
+    LeafSequenceResult sequence;
+    sequence.leafPairBoundariesZ = {-5.0, 5.0};
+    Aperture segment;
+    segment.bankA = {-10.0};
+    segment.bankB = {10.0};
+    segment.weight = 10.0;
+    sequence.segments.push_back(segment);
+    sequence.totalMU = 10.0;
+    ASSERT_TRUE(DicomExporter().exportRTPlan(plan, stf, {sequence}, DicomContext{}, dir.string()));
+
+    PatientPanel patient(state);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowSize(ImVec2(800, 700), ImGuiCond_Always);
+    patient.render();
+    ImGui::Render();
+    patient.importDicom(dir.string());
+    ASSERT_TRUE(patient.isImporting());
+    ASSERT_TRUE(state.taskRunning);
+    EXPECT_FALSE(state.patientData); // worker results are only published by update()
+    EXPECT_FALSE(state.taskStatus.empty());
+    patient.importDicom((dir / "empty").string()); // a second import cannot change the active one
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    bool sawImages = false;
+    bool sawStructures = false;
+    while (patient.isImporting() && std::chrono::steady_clock::now() < deadline) {
+        ImGui::NewFrame();
+        patient.render();
+        ImGui::Render();
+        EXPECT_GT(ImGui::GetDrawData()->TotalVtxCount, 0);
+        if (state.patientData && !state.patientData->hasStructures()) {
+            sawImages = true;
+            ASSERT_TRUE(state.doseAvailable());
+            EXPECT_TRUE(state.patientData->hasValidCT());
+            EXPECT_FALSE(state.patientData->hasImportedPlan());
+            EXPECT_TRUE(state.taskRunning);
+            EXPECT_TRUE(state.getOrComputeStats(0, *state.patientData).empty());
+        }
+        if (state.patientData && state.patientData->hasStructures() && !state.patientData->hasImportedPlan()) {
+            sawStructures = true;
+            EXPECT_TRUE(sawImages);
+            EXPECT_TRUE(state.taskRunning);
+            state.getOrComputeStats(0, *state.patientData);
+            expectStats();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_FALSE(patient.isImporting());
+    EXPECT_TRUE(sawImages);
+    EXPECT_TRUE(sawStructures);
+    EXPECT_FALSE(state.taskRunning);
+    ASSERT_TRUE(state.patientData->hasImportedPlan());
+    ASSERT_TRUE(state.importedPlan);
+    EXPECT_EQ(state.plan, state.importedPlan);
+    EXPECT_EQ(state.dosePlans.at(state.doseStore.getSelected()->id), state.importedPlan);
+    EXPECT_FLOAT_EQ(state.taskProgress, 1.0f);
+}
+
+TEST_F(PatientImportGuiTest, HiddenPanelStillFinishesImportAndReleasesTaskGuard) {
+    PatientPanel patient(state);
+    patient.setVisible(false);
+    patient.importDicom(dir.string());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (patient.isImporting() && std::chrono::steady_clock::now() < deadline) {
+        ImGui::NewFrame();
+        patient.render();
+        ImGui::Render();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_FALSE(patient.isImporting());
+    EXPECT_FALSE(state.taskRunning);
+    ASSERT_TRUE(state.patientData);
+    EXPECT_TRUE(state.patientData->hasStructures());
+}
+
+TEST_F(PatientImportGuiTest, DestroyingAnImportingPanelJoinsItsWorkerAndReleasesTaskGuard) {
+    {
+        PatientPanel patient(state);
+        patient.importDicom(dir.string());
+        ASSERT_TRUE(patient.isImporting());
+        ASSERT_TRUE(state.taskRunning);
+    }
+    EXPECT_FALSE(state.taskRunning);
+}
+
+TEST_F(PatientImportGuiTest, SynchronousImporterRetainsCompleteImportAndClearsDoseOnReuse) {
+    DicomImporter importer;
+    auto data = importer.importAll(dir.string());
+    ASSERT_TRUE(data);
+    EXPECT_TRUE(data->hasValidCT());
+    EXPECT_TRUE(data->hasStructures());
+    EXPECT_TRUE(data->getImportedDoseGridResolution().has_value());
+    ASSERT_TRUE(std::filesystem::remove(dir / "dose.dcm"));
+    data = importer.importAll(dir.string());
+    ASSERT_TRUE(data);
+    EXPECT_TRUE(data->hasStructures());
+    EXPECT_FALSE(data->getImportedDoseGridResolution().has_value());
+    const auto [dose, grid] = importer.takeImportedDose();
+    EXPECT_FALSE(dose);
+    EXPECT_FALSE(grid);
 }
 
 } // namespace optirad::tests

@@ -19,56 +19,72 @@ ImportedPlanDoseView::~ImportedPlanDoseView() {
 void ImportedPlanDoseView::installImported(GuiAppState& state, int importedDoseId) {
     const ImportedPlan* imported = state.patientData ? state.patientData->getImportedPlan() : nullptr;
     if (!imported || imported->beams.empty()) return;
-    const auto start = std::chrono::steady_clock::now();
     try {
-        PlanConfig config;
-        ImportedPlanConverter::applyToPlanConfig(*imported, config);
-        if (const auto& rtDoseGrid = state.patientData->getImportedDoseGridResolution())
-            config.doseGridResolution = *rtDoseGrid;
-        auto built = PlanBuilder::build(config, state.patientData);
-        for (const auto& w : ImportedPlanConverter::validate(*imported, built.plan->getMachine()))
-            Logger::warn("RTPLAN: " + w);
-
-        std::shared_ptr<ArcPipelineResult> delivery;
-        std::vector<LeafSequenceResult> segments;
-        if (imported->hasArcs()) {
-            const auto mismatches = ImportedPlanConverter::arcPlanMismatches(*imported, *built.plan);
-            if (!mismatches.empty()) throw std::runtime_error(mismatches.front());
-            delivery = std::make_shared<ArcPipelineResult>(ArcPipeline::prepareSequence(
-                ImportedPlanConverter::toArcSequence(*imported, *built.plan), *built.plan, *state.patientData));
-        } else {
-            segments = ImportedPlanConverter::toLeafSequences(*imported, *built.plan);
-            const size_t beams = built.stf ? built.stf->getCount() : 0;
-            if (segments.size() != beams) {
-                Logger::warn("RTPLAN: " + std::to_string(segments.size()) + " static beam(s) but " +
-                             std::to_string(beams) + " plan beam(s); delivery not shown");
-                segments.clear();
-            }
-        }
-
-        state.switchToPlan(nullptr);
-        state.plan = built.plan;
-        state.stfProps = built.stfProps;
-        state.stf = built.stf;
-        state.workingPlan = built.plan;
-        state.importedPlan = built.plan;
-        state.importedDelivery = delivery;
-        state.importedSequences = segments;
-        if (const DoseEntry* entry = state.doseStore.getEntry(state.doseStore.getSelectedIdx());
-            entry && entry->id == importedDoseId) {
-            if (delivery) {
-                auto withDose = std::make_shared<ArcPipelineResult>(*delivery);
-                withDose->dose = entry->dose;
-                state.arcCache[importedDoseId] = {withDose, -1};
-            }
-            if (!segments.empty()) state.seqCache[importedDoseId].sequences = segments;
-            state.dosePlans[importedDoseId] = built.plan;
-        }
-        const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        Logger::info("RTPLAN '" + imported->label + "' installed as the current plan in " +
-                     std::to_string(s).substr(0, 5) + " s");
+        installPrepared(state, importedDoseId, prepareImported(state.patientData, *imported));
     } catch (const std::exception& e) {
         Logger::error("RTPLAN plan could not be built: " + std::string(e.what()));
+    }
+    state.syncSelectedDose();
+}
+
+ImportedPlanDoseView::PreparedPlan ImportedPlanDoseView::prepareImported(std::shared_ptr<PatientData> patient,
+                                                                         const ImportedPlan& imported) {
+    const auto start = std::chrono::steady_clock::now();
+    PreparedPlan prepared;
+    PlanConfig config;
+    ImportedPlanConverter::applyToPlanConfig(imported, config);
+    if (const auto& rtDoseGrid = patient->getImportedDoseGridResolution())
+        config.doseGridResolution = *rtDoseGrid;
+    auto& built = prepared.built;
+    built = PlanBuilder::build(config, patient);
+    for (const auto& w : ImportedPlanConverter::validate(imported, built.plan->getMachine()))
+        Logger::warn("RTPLAN: " + w);
+
+    auto& delivery = prepared.delivery;
+    auto& segments = prepared.segments;
+    if (imported.hasArcs()) {
+        const auto mismatches = ImportedPlanConverter::arcPlanMismatches(imported, *built.plan);
+        if (!mismatches.empty())
+            throw std::runtime_error(mismatches.front());
+        delivery = std::make_shared<ArcPipelineResult>(ArcPipeline::prepareSequence(
+            ImportedPlanConverter::toArcSequence(imported, *built.plan), *built.plan, *patient));
+    } else {
+        segments = ImportedPlanConverter::toLeafSequences(imported, *built.plan);
+        const size_t beams = built.stf ? built.stf->getCount() : 0;
+        if (segments.size() != beams) {
+            Logger::warn("RTPLAN: " + std::to_string(segments.size()) + " static beam(s) but " +
+                         std::to_string(beams) + " plan beam(s); delivery not shown");
+            segments.clear();
+        }
+    }
+
+    const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    Logger::info("RTPLAN '" + imported.label + "' prepared in " + std::to_string(s).substr(0, 5) + " s");
+    return prepared;
+}
+
+void ImportedPlanDoseView::installPrepared(GuiAppState& state, int importedDoseId, PreparedPlan prepared) {
+    auto& built = prepared.built;
+    auto& delivery = prepared.delivery;
+    auto& segments = prepared.segments;
+    state.switchToPlan(nullptr);
+    state.plan = built.plan;
+    state.stfProps = built.stfProps;
+    state.stf = built.stf;
+    state.workingPlan = built.plan;
+    state.importedPlan = built.plan;
+    state.importedDelivery = delivery;
+    state.importedSequences = segments;
+    if (const DoseEntry* entry = state.doseStore.getEntry(state.doseStore.getSelectedIdx());
+        entry && entry->id == importedDoseId) {
+        if (delivery) {
+            auto withDose = std::make_shared<ArcPipelineResult>(*delivery);
+            withDose->dose = entry->dose;
+            state.arcCache[importedDoseId] = {withDose, -1};
+        }
+        if (!segments.empty())
+            state.seqCache[importedDoseId].sequences = segments;
+        state.dosePlans[importedDoseId] = built.plan;
     }
     state.syncSelectedDose();
 }

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <utility>
+#include <functional>
 
 namespace optirad {
 
@@ -23,6 +24,14 @@ public:
     
     // Full import - returns complete PatientData
     std::unique_ptr<PatientData> importAll(const std::string& dirPath);
+
+    using StatusCallback = std::function<void(const std::string&)>;
+    /// First stage: scan, patient metadata, CT/HU-to-ED and cached RTDOSE.
+    std::unique_ptr<PatientData> importImages(const std::string& dirPath,
+                                            const StatusCallback& status = {});
+    /// Second stage: parse, generate BODY if needed and rasterize against the loaded CT.
+    std::unique_ptr<StructureSet> importPreparedStructures(
+        const Volume<int16_t>* ct, const StatusCallback& status = {});
     
     // DICOM-specific methods
     bool loadDirectory(const std::string& dirPath);

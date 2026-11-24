@@ -2,6 +2,7 @@
 
 #include "../AppState.hpp"
 #include "core/workflow/ArcPipeline.hpp"
+#include "core/workflow/PlanBuilder.hpp"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -24,6 +25,15 @@ public:
     /// leaves and MU and makes it the current plan; `importedDoseId` (the imported RTDOSE, or -1) is linked to
     /// it. Does nothing without an imported RTPLAN; errors are logged and leave no plan.
     static void installImported(GuiAppState& state, int importedDoseId);
+
+    struct PreparedPlan {
+        PlanBuilder::Result built;
+        std::shared_ptr<ArcPipelineResult> delivery;
+        std::vector<LeafSequenceResult> segments;
+    };
+    /// Prepare without mutating GUI state; may run on a worker and throws on build errors.
+    static PreparedPlan prepareImported(std::shared_ptr<PatientData> patient, const ImportedPlan& imported);
+    static void installPrepared(GuiAppState& state, int importedDoseId, PreparedPlan prepared);
 
     /// Summary and "Compute dose from RTPLAN leaves". `dose` holds the dose grid and engine settings.
     void render(const GuiAppState::DaoDoseSettings& dose);
