@@ -75,11 +75,57 @@ void SliceView::setPatientData(PatientData* data) {
         }
         
         m_currentSlice = m_maxSlice / 2;
+        m_isocenterApplied = false;
         m_needsUpdate = true;
     }
 }
 
+bool SliceView::applyIsocenterSlice() {
+    if (!m_patientData || !m_patientData->getCTVolume()) return false;
+
+    const auto& grid = m_patientData->getCTVolume()->getGrid();
+    const auto dims = grid.getDimensions();
+    if (dims[0] == 0 || dims[1] == 0 || dims[2] == 0) return false;
+
+    // Imported RTPLAN isocenter when present, else the target centroid (cached in PatientData).
+    const auto iso = m_patientData->getIsocenter();
+    if (!iso) return false;
+
+    // Convert the isocenter (patient LPS) to CT voxel indices, then to this view's slice index.
+    // Note: Grid::patientToVoxel returns (i, j, k) where i runs along the column direction
+    // and j along the row direction, but the volume data (and thus the texture slice
+    // indices below) use the swapped convention (see updateDoseTexture). Hence vox[1]
+    // addresses the sagittal slice and vox[0] the coronal one.
+    Vec3 vox;
+    try {
+        vox = grid.patientToVoxel({(*iso)[0], (*iso)[1], (*iso)[2]});
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    long slice = 0;
+    switch (m_orientation) {
+        case SliceOrientation::Axial:    // slice index is the k index
+            slice = std::lround(vox[2]);
+            break;
+        case SliceOrientation::Sagittal: // slice index is the data i index (= vox[1])
+            slice = std::lround(vox[1]);
+            break;
+        case SliceOrientation::Coronal:  // slice index runs reversed along the data j index (= vox[0])
+            slice = static_cast<long>(dims[1]) - 1 - std::lround(vox[0]);
+            break;
+    }
+    slice = std::clamp(slice, 0L, static_cast<long>(m_maxSlice));
+
+    m_currentSlice = static_cast<size_t>(slice);
+    m_needsUpdate = true;
+    m_doseNeedsUpdate = true;
+    return true;
+}
+
 void SliceView::setSliceIndex(size_t index) {
+    // A manual slice change cancels the pending automatic isocenter centering.
+    m_isocenterApplied = true;
     if (index <= m_maxSlice) {
         m_currentSlice = index;
         m_needsUpdate = true;
@@ -99,6 +145,11 @@ void SliceView::render() {
         return;
     }
     
+    // Center on the isocenter once it becomes known (RTPLAN import or rasterized targets).
+    if (!m_isocenterApplied && applyIsocenterSlice()) {
+        m_isocenterApplied = true;
+    }
+
     renderControls();
     
     if (m_needsUpdate) {

@@ -37,6 +37,8 @@ public:
 private:
     void updateTexture();
     void updateDoseTexture();
+    /// Center the slice on the isocenter (imported RTPLAN, else target centroid). True when applied.
+    bool applyIsocenterSlice();
     void renderControls();
     void renderSlice();
     void renderContours();
@@ -52,6 +54,7 @@ private:
     
     size_t m_currentSlice = 0;
     size_t m_maxSlice = 0;
+    bool m_isocenterApplied = false;
     
     // Window/Level for CT display
     int m_windowCenter = 40;   // HU

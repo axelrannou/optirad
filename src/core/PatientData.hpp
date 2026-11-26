@@ -26,7 +26,7 @@ public:
     const Patient* getPatient() const { return m_patient.get(); }
     
     // CT volume (HU values stored as int16_t)
-    void setCTVolume(std::unique_ptr<Volume<int16_t>> ct) { m_ctVolume = std::move(ct); }
+    void setCTVolume(std::unique_ptr<Volume<int16_t>> ct) { m_ctVolume = std::move(ct); m_isocenterCache.reset(); }
     Volume<int16_t>* getCTVolume() { return m_ctVolume.get(); }
     const Volume<int16_t>* getCTVolume() const { return m_ctVolume.get(); }
     
@@ -36,14 +36,22 @@ public:
     const Volume<double>* getEDVolume() const { return m_edVolume.get(); }
     
     // Structures
-    void setStructureSet(std::unique_ptr<StructureSet> structures) { m_structures = std::move(structures); }
+    void setStructureSet(std::unique_ptr<StructureSet> structures) { m_structures = std::move(structures); m_isocenterCache.reset(); }
     StructureSet* getStructureSet() { return m_structures.get(); }
     const StructureSet* getStructureSet() const { return m_structures.get(); }
     
     // Plan imported from a DICOM RTPLAN (nullptr when the patient has none)
-    void setImportedPlan(std::shared_ptr<const ImportedPlan> plan) { m_importedPlan = std::move(plan); }
+    void setImportedPlan(std::shared_ptr<const ImportedPlan> plan) { m_importedPlan = std::move(plan); m_isocenterCache.reset(); }
     const ImportedPlan* getImportedPlan() const { return m_importedPlan.get(); }
     bool hasImportedPlan() const { return m_importedPlan != nullptr && !m_importedPlan->beams.empty(); }
+
+    /// Isocenter in patient LPS mm: the imported RTPLAN's when present, else the centroid of the
+    /// rasterized target (PTV/GTV/CTV) voxels. nullopt when neither source is available yet.
+    /// The target-centroid result is cached and invalidated when structures or CT change.
+    std::optional<std::array<double, 3>> getIsocenter() const;
+
+    /// Centroid of the rasterized target (PTV/GTV/CTV) voxels (deduplicated across structures).
+    std::optional<std::array<double, 3>> computeTargetIsocenter() const;
 
     // Voxel spacing (x, y, z mm) of the imported RTDOSE grid, used as the default dose-grid resolution
     void setImportedDoseGridResolution(const std::array<double, 3>& res) { m_importedDoseResolution = res; }
@@ -67,6 +75,7 @@ private:
     std::unique_ptr<StructureSet> m_structures;
     std::shared_ptr<const ImportedPlan> m_importedPlan;
     std::optional<std::array<double, 3>> m_importedDoseResolution;
+    mutable std::optional<std::array<double, 3>> m_isocenterCache;
     Grid m_emptyGrid;
 };
 
