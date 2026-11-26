@@ -46,6 +46,11 @@ private:
     // Shaders
     GLuint m_accumProgram     = 0;  // replaces m_shaderProgram
     GLuint m_compositeProgram = 0;
+    GLuint m_solidProgram     = 0;  // opaque, depth-writing shaded pass
+
+    GLint m_uSolidModel, m_uSolidView, m_uSolidProj, m_uSolidViewPos;
+    GLint m_uSolidNormalMatrix, m_uSolidLightDir1, m_uSolidLightDir2;
+    GLint m_uSolidColor, m_uSolidOpacity;
 
     // Full-screen quad
     GLuint m_quadVao = 0;

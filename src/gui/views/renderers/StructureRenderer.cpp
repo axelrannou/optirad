@@ -4,6 +4,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <unordered_map>
 #include <functional>
@@ -100,8 +101,7 @@ void StructureRenderer::init() {
             vec3 rimColor  = rim * 0.2 * structureColor;
 
             vec3 color  = min(ambient + diffuse + specular + rimColor, vec3(1.0));
-            float depthFade = clamp(1.0 - gl_FragCoord.z, 0.2, 1.0);
-            float alpha = opacity * depthFade;
+            float alpha = opacity;
 
             // ── WBOIT weight function ──────────────────────────────────────
             // McGuire & Bavoil (2013) weight: balances near/far fragments.
@@ -148,13 +148,13 @@ void StructureRenderer::init() {
                 discard;
             }
 
-            // Reconstruct weighted-average color, then blend with background
-            // using the revealage (accumulated transmittance).
-            vec3 avgColor  = accum.rgb / accum.a;
-            float transmit = clamp(1.0 - reveal, 0.0, 1.0);
+            // The reveal texture holds the accumulated transmittance
+            // (product of (1 - alpha), cleared to 1). Coverage is 1 - reveal.
+            vec3 avgColor = accum.rgb / accum.a;
+            float coverage = clamp(1.0 - reveal, 0.0, 1.0);
 
-            // Final over-compositing: color * (1 - transmittance) already baked in
-            FragColor = vec4(avgColor, 1.0 - transmit);
+            // Final over-compositing onto the scene behind
+            FragColor = vec4(avgColor, coverage);
         }
     )";
 
@@ -211,6 +211,78 @@ void StructureRenderer::init() {
         glUniform1i(glGetUniformLocation(m_compositeProgram, "accumTexture"),  0);
         glUniform1i(glGetUniformLocation(m_compositeProgram, "revealTexture"), 1);
         glUseProgram(0);
+    }
+
+    // ── Solid pass shader (opaque, depth-writing, Blinn-Phong) ──────────────
+    // Gives structures the solid shaded look of 3D Slicer's 3D models.
+    const char* solidFragSrc = R"(
+        #version 330 core
+        in vec3 FragPos;
+        in vec3 Normal;
+        in vec3 ViewDir;
+
+        out vec4 FragColor;
+
+        uniform vec3  structureColor;
+        uniform float opacity;      // <1 renders with blending, still depth-writes
+        uniform vec3  lightDir1;
+        uniform vec3  lightDir2;
+
+        void main() {
+            vec3 norm = normalize(Normal);
+            vec3 V    = normalize(ViewDir);
+
+            if (dot(norm, V) < 0.0) norm = -norm;
+
+            vec3 ambient = 0.45 * structureColor;
+
+            vec3 L1     = normalize(lightDir1);
+            float diff1 = max(dot(norm, L1), 0.0);
+            vec3 H1     = normalize(L1 + V);
+            float spec1 = pow(max(dot(norm, H1), 0.0), 48.0);
+
+            vec3 L2     = normalize(lightDir2);
+            float diff2 = max(dot(norm, L2), 0.0);
+
+            vec3 diffuse  = (0.55 * diff1 + 0.25 * diff2) * structureColor;
+            vec3 specular = (0.25 * spec1) * vec3(1.0);
+
+            float rim = 1.0 - max(dot(V, norm), 0.0);
+            rim = smoothstep(0.4, 1.0, rim);
+            vec3 rimColor = rim * 0.15 * structureColor;
+
+            vec3 color = min(ambient + diffuse + specular + rimColor, vec3(1.0));
+
+            // 3D Slicer-style contour stripes along the three world axes.
+            // FragPos is in metres (mm x 0.001); ~2.5 mm stripe spacing.
+            vec3 sc = FragPos * 400.0;
+            vec3 sf = abs(fract(sc - 0.5) - 0.5) / max(abs(normalize(Normal)), vec3(1e-4));
+            float sd = min(min(sf.x, sf.y), sf.z) / 400.0;
+            float stripe = smoothstep(0.0008, 0.0016, sd);
+            color = mix(color * 0.78, color, stripe);
+
+            FragColor = vec4(color, opacity);
+        }
+    )";
+    {
+        GLuint vs = compileShader(GL_VERTEX_SHADER,   accumVertSrc);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, solidFragSrc);
+        m_solidProgram = glCreateProgram();
+        glAttachShader(m_solidProgram, vs);
+        glAttachShader(m_solidProgram, fs);
+        glLinkProgram(m_solidProgram);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+
+        m_uSolidModel        = glGetUniformLocation(m_solidProgram, "model");
+        m_uSolidView         = glGetUniformLocation(m_solidProgram, "view");
+        m_uSolidProj         = glGetUniformLocation(m_solidProgram, "projection");
+        m_uSolidViewPos      = glGetUniformLocation(m_solidProgram, "viewPos");
+        m_uSolidNormalMatrix = glGetUniformLocation(m_solidProgram, "normalMatrix");
+        m_uSolidLightDir1    = glGetUniformLocation(m_solidProgram, "lightDir1");
+        m_uSolidLightDir2    = glGetUniformLocation(m_solidProgram, "lightDir2");
+        m_uSolidColor        = glGetUniformLocation(m_solidProgram, "structureColor");
+        m_uSolidOpacity      = glGetUniformLocation(m_solidProgram, "opacity");
     }
 
     // Full-screen quad VBO (NDC, two triangles)
@@ -355,10 +427,10 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
     minX -= margin; minY -= margin; minZ -= margin;
     maxX += margin; maxY += margin; maxZ += margin;
 
-    // 2. Voxel size — adaptive
+    // 2. Voxel size — adaptive (finer grid = smoother meshes once shaded)
     float rangeX = maxX-minX, rangeY = maxY-minY, rangeZ = maxZ-minZ;
     float maxRange = std::max({rangeX, rangeY, rangeZ});
-    float voxelSize = maxRange / 100.0f;
+    float voxelSize = maxRange / 200.0f;
     if (voxelSize < 0.5f) voxelSize = 0.5f;
 
     int nx = std::max(2,(int)std::ceil(rangeX/voxelSize)+1);
@@ -387,17 +459,56 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
         return (size_t)z*ny*nx + (size_t)y*nx + x;
     };
 
-    for (auto& [iz, cIndices] : sliceContours) {
-        if (iz < 0 || iz >= nz) continue;
-        for (int iy = 0; iy < ny; ++iy) {
-            float py = minY + iy*voxelSize;
-            for (int ix = 0; ix < nx; ++ix) {
-                float px = minX + ix*voxelSize;
-                for (size_t ci : cIndices) {
-                    if (contours[ci].points.size() < 3) continue;
-                    if (pointInPolygon2D(px, py, contours[ci].points, 0, 1)) {
-                        volume[idx(ix,iy,iz)] = 1.0f;
-                        break;
+    // One slice per thread; each slice only touches its own iz plane.
+    // Slices are also culled to the 2D bounding box of their contours.
+    {
+        std::vector<std::pair<int, std::vector<size_t>>> slices;
+        slices.reserve(sliceContours.size());
+        for (auto& [iz, cIndices] : sliceContours)
+            if (iz >= 0 && iz < nz) slices.emplace_back(iz, cIndices);
+
+        #pragma omp parallel for schedule(dynamic)
+        for (long long si = 0; si < (long long)slices.size(); ++si) {
+            int iz = slices[si].first;
+            const auto& cIndices = slices[si].second;
+            // 2D bbox of this slice's contours (in mm)
+            float sx0 = 1e30f, sx1 = -1e30f, sy0 = 1e30f, sy1 = -1e30f;
+            for (size_t ci : cIndices) {
+                for (const auto& pt : contours[ci].points) {
+                    sx0 = std::min(sx0,(float)pt[0]); sx1 = std::max(sx1,(float)pt[0]);
+                    sy0 = std::min(sy0,(float)pt[1]); sy1 = std::max(sy1,(float)pt[1]);
+                }
+            }
+            if (sx0 > sx1) continue;
+            int ix0 = std::max(0, (int)std::floor((sx0 - minX) / voxelSize));
+            int ix1 = std::min(nx-1, (int)std::ceil ((sx1 - minX) / voxelSize));
+            int iy0 = std::max(0, (int)std::floor((sy0 - minY) / voxelSize));
+            int iy1 = std::min(ny-1, (int)std::ceil ((sy1 - minY) / voxelSize));
+
+            // Scanline fill per contour (union across contours, matching the
+            // original point-in-polygon semantics — overlapping contours must
+            // NOT cancel out, so parity is computed per contour, not combined).
+            std::vector<float> xs;
+            for (size_t ci : cIndices) {
+                const auto& pts = contours[ci].points;
+                size_t n = pts.size();
+                if (n < 3) continue;
+                for (int iy = iy0; iy <= iy1; ++iy) {
+                    float py = minY + iy*voxelSize;
+                    xs.clear();
+                    for (size_t p = 0, q = n - 1; p < n; q = p++) {
+                        float ya = (float)pts[q][1], yb = (float)pts[p][1];
+                        if ((ya > py) == (yb > py)) continue; // no crossing
+                        float xa = (float)pts[q][0], xb = (float)pts[p][0];
+                        xs.push_back(xa + (py - ya) * (xb - xa) / (yb - ya));
+                    }
+                    if (xs.size() < 2) continue;
+                    std::sort(xs.begin(), xs.end());
+                    // Even-odd parity within this contour: fill between crossings
+                    for (size_t k = 0; k + 1 < xs.size(); k += 2) {
+                        int a = std::max(ix0, (int)std::ceil ((xs[k]   - minX) / voxelSize));
+                        int b = std::min(ix1, (int)std::floor((xs[k+1] - minX) / voxelSize));
+                        for (int ix = a; ix <= b; ++ix) volume[idx(ix,iy,iz)] = 1.0f;
                     }
                 }
             }
@@ -413,6 +524,7 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
     for (size_t si = 0; si+1 < sortedZ.size(); ++si) {
         int z0 = sortedZ[si], z1 = sortedZ[si+1];
         if (z1-z0 <= 1) continue;
+        #pragma omp parallel for schedule(dynamic)
         for (int iz = z0+1; iz < z1; ++iz)
             for (int iy = 0; iy < ny; ++iy)
                 for (int ix = 0; ix < nx; ++ix)
@@ -423,6 +535,7 @@ void StructureRenderer::tessellateStructure(size_t structureIndex) {
     // 5. Gaussian blur
     {
         std::vector<float> blurred(nx*ny*nz, 0.0f);
+        #pragma omp parallel for schedule(dynamic)
         for (int iz = 1; iz < nz-1; ++iz)
             for (int iy = 1; iy < ny-1; ++iy)
                 for (int ix = 1; ix < nx-1; ++ix) {
@@ -750,9 +863,71 @@ void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projectio
     glm::vec3 lightDir1 = glm::normalize(glm::vec3( 0.5f,  0.8f, 0.6f));
     glm::vec3 lightDir2 = glm::normalize(glm::vec3(-0.4f, -0.3f, 0.8f));
 
+    // Structure classification (mixed Slicer-style rendering):
+    //  - BODY / external contour (and French/abbrev. synonyms) → translucent skin
+    //  - GTV / CTV / PTV targets → always visible on top (see Pass 1)
+    //  - everything else (OARs, implants...) → opaque shaded meshes
+    auto upper = [](std::string s) {
+        for (auto& c : s) c = (char)std::toupper((unsigned char)c);
+        return s;
+    };
+    auto isTranslucent = [&](const Structure& s) {
+        if (s.isExternal()) return true;          // RT-STRUCT type EXTERNAL
+        std::string u = upper(s.getName());
+        // Strip non-letters so "Contr_Ext", "CONTOUR EXTERNE", "C. Externe"... all match.
+        std::string w;
+        for (char c : u) if (c >= 'A' && c <= 'Z') w += c;
+        return w.find("BODY") != std::string::npos ||
+               w.find("CORPS") != std::string::npos ||
+               w.find("CONTR") != std::string::npos ||   // CONTOUR / CONTR / CTUREXT
+               w.find("EXT") != std::string::npos ||    // EXTERNAL / EXTERNE / EXT
+               w.find("SKIN") != std::string::npos ||
+               w.find("OUTLINE") != std::string::npos ||
+               w.find("PATIENT") != std::string::npos;
+    };
+    auto isTarget = [&](const Structure& s) {
+        std::string u = upper(s.getName());
+        return u.find("GTV") != std::string::npos ||
+               u.find("CTV") != std::string::npos ||
+               u.find("PTV") != std::string::npos;
+    };
+
+    // ── Pass 0: solid shaded meshes (opaque, depth-writing) ─────────────────
+    {
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE); // two-sided lighting handled in shader
+
+        glUseProgram(m_solidProgram);
+        glUniformMatrix4fv(m_uSolidModel,        1, GL_FALSE, glm::value_ptr(model));
+        glUniformMatrix4fv(m_uSolidView,         1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(m_uSolidProj,         1, GL_FALSE, glm::value_ptr(projection));
+        glUniform3fv      (m_uSolidViewPos,      1, glm::value_ptr(viewPos));
+        glUniformMatrix3fv(m_uSolidNormalMatrix, 1, GL_FALSE, glm::value_ptr(normalMatrix));
+        glUniform3fv      (m_uSolidLightDir1,    1, glm::value_ptr(lightDir1));
+        glUniform3fv      (m_uSolidLightDir2,    1, glm::value_ptr(lightDir2));
+        glUniform1f       (m_uSolidOpacity,      1.0f);
+
+        for (size_t i = 0; i < m_store->meshes.size(); ++i) {
+            const auto& mesh = m_store->meshes[i];
+            if (mesh.indexCount == 0) continue;
+            const auto* structure = structures->getStructure(i);
+            if (!structure || !structure->isVisible()) continue;
+            if (isTranslucent(*structure) || isTarget(*structure))
+                continue; // handled by the translucent / target passes
+
+            glUniform3fv(m_uSolidColor, 1, glm::value_ptr(mesh.color));
+            glBindVertexArray(mesh.vao);
+            glDrawElements(GL_TRIANGLES, (GLsizei)mesh.indexCount, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+        glUseProgram(0);
+    }
+
     // ── Copy opaque depth into the WBOIT FBO ──────────────────────────────
     // Blit the current depth buffer so that structures are correctly occluded
-    // by opaque geometry rendered before this call.
+    // by opaque geometry rendered before this call (incl. the solid pass).
     glBindFramebuffer(GL_READ_FRAMEBUFFER, readFBO);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_wboitFBO);
     glBlitFramebuffer(0,0,vpW,vpH, 0,0,vpW,vpH, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
@@ -789,27 +964,32 @@ void StructureRenderer::render(const glm::mat4& view, const glm::mat4& projectio
     glUniform3fv      (m_uLightDir1,    1, glm::value_ptr(lightDir1));
     glUniform3fv      (m_uLightDir2,    1, glm::value_ptr(lightDir2));
 
-    // Draw all visible meshes — no sorting needed with WBOIT
+    // Draw translucent shells (BODY/external contour) and the targets.
+    // Targets (GTV/CTV/PTV) use a higher opacity so they stay visible
+    // through the skin; solid OARs were already drawn opaque in Pass 0.
     for (size_t i = 0; i < m_store->meshes.size(); ++i) {
         const auto& mesh = m_store->meshes[i];
         if (mesh.indexCount == 0) continue;
         const auto* structure = structures->getStructure(i);
-        float opacity = 0.03f;
+        if (!structure || !structure->isVisible()) continue;
+        bool target = isTarget(*structure);
+        if (!target && !isTranslucent(*structure))
+            continue; // already drawn as an opaque shaded mesh
 
-        if (structure->getName().find("GTV") != std::string::npos)
-            opacity = 0.30f; // target
-        else if (structure->getName().find("CTV") != std::string::npos)
-            opacity = 0.20f; // clinical target
-        else if (structure->getName().find("PTV") != std::string::npos)
-            opacity = 0.15; // high-risk
-        else if (structure->getName().find("BODY") != std::string::npos)
-            opacity = 0.01f; // outer shell
-        else
-                opacity = 0.03f; // default for other structures
+        float opacity;
+        if (target) {
+            std::string u = upper(structure->getName());
+            opacity = u.find("GTV") != std::string::npos ? 0.50f :
+                      u.find("CTV") != std::string::npos ? 0.40f : 0.35f; // PTV
+        } else {
+            opacity = 0.1f; // outer shell — faint but clearly visible (Slicer skin)
+        }
+
+        // Targets ignore depth so they stay visible through opaque meshes.
+        if (target) glDisable(GL_DEPTH_TEST);
+        else        glEnable(GL_DEPTH_TEST);
 
         glUniform1f(m_uOpacity, opacity);
-        if (!structure || !structure->isVisible()) continue;
-
         glUniform3fv(m_uColor, 1, glm::value_ptr(mesh.color));
         glBindVertexArray(mesh.vao);
         glDrawElements(GL_TRIANGLES, (GLsizei)mesh.indexCount, GL_UNSIGNED_INT, 0);
@@ -869,6 +1049,7 @@ void StructureRenderer::cleanup() {
 
     if (m_accumProgram)     { glDeleteProgram(m_accumProgram);     m_accumProgram=0;     }
     if (m_compositeProgram) { glDeleteProgram(m_compositeProgram); m_compositeProgram=0; }
+    if (m_solidProgram)     { glDeleteProgram(m_solidProgram);     m_solidProgram=0;     }
 }
 
 } // namespace optirad
